@@ -120,7 +120,7 @@ func (s *Supervisor) rotateAll() {
 			svc.logMu.Lock()
 			defer svc.logMu.Unlock()
 			if err := s.copyTruncateLog(s.logPath(svc)); err != nil {
-				log.Printf("services: %s: rotate log: %v", svc.def.Name, err)
+				log.Printf("services: %s: rotate log: %v", svc.def.GetName(), err)
 			}
 		}()
 	}

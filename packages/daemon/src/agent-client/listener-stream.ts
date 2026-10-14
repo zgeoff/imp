@@ -1,10 +1,10 @@
-import type * as z from 'zod';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
-import { ConnectionSchema, ListenResponseSchema } from './agent-protocol';
-import type { AgentRequestSchemas } from './agent-protocol';
-import { readFrameWithin, requireNoAgentError } from './agent-requests';
+import { ConnectionSchema, ListeningSchema } from './agent-protocol';
+import { readFrameWithin, requireNoAgentError, sendRequestFrame } from './agent-requests';
+import type { AgentRequest } from './agent-requests';
+import { decodeAgentMessage } from './decode-agent-message';
 import { openRelayStream } from './dial-stream';
 import type { DialStream } from './dial-stream';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
@@ -38,11 +38,7 @@ export interface GuestListener {
 }
 
 // agent.listen, or a listen for a socket or a port
-type AgentListenRequest = z.input<
-  typeof AgentRequestSchemas.bare | typeof AgentRequestSchemas.relay
->;
-
-function buildListenRequest(spec: ListenSpec): AgentListenRequest {
+function buildListenRequest(spec: ListenSpec): AgentRequest {
   if (spec.network === 'ssh-agent') {
     return { op: 'agent.listen' };
   }
@@ -61,7 +57,7 @@ export async function openListener(vsockPath: string, spec: ListenSpec): Promise
   const connection = await openAgentConnection(vsockPath);
 
   try {
-    connection.sendJson(FRAME_TYPES.request, buildListenRequest(spec));
+    sendRequestFrame(connection, buildListenRequest(spec));
 
     const answer = await readFrameWithin(connection, ANSWER_TIMEOUT_MS);
 
@@ -71,7 +67,7 @@ export async function openListener(vsockPath: string, spec: ListenSpec): Promise
 
     requireNoAgentError(answer);
 
-    const listening = ListenResponseSchema.parse(decodeJsonPayload(answer));
+    const listening = decodeAgentMessage(ListeningSchema, decodeJsonPayload(answer));
 
     return {
       path: listening.path ?? null,
@@ -113,7 +109,7 @@ async function* readConnections(
     }
 
     if (frame.type === FRAME_TYPES.connection) {
-      yield ConnectionSchema.parse(decodeJsonPayload(frame)).id;
+      yield decodeAgentMessage(ConnectionSchema, decodeJsonPayload(frame)).id;
     }
   }
 }

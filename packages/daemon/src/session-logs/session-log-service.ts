@@ -2,7 +2,7 @@ import type { PreviousGeneration, ResumeFrom, SessionLog, SessionLogRead } from 
 import { PreviousGenerationSchema } from '@imp/api';
 import * as z from 'zod';
 import { isAgentLogIdentity } from '../agent-client/agent-ids';
-import type { AgentSession } from '../agent-client/agent-protocol';
+import type { SessionInfo } from '../agent-client/agent-protocol';
 import { openTapStream } from '../agent-client/exec-stream';
 import type { ExecStream } from '../agent-client/exec-stream';
 import { isAgentError } from '../agent-client/is-agent-error';
@@ -56,7 +56,7 @@ export interface SessionLogImp {
   readonly sessionLogsDir: string;
 }
 
-type TappedSession = Pick<AgentSession, 'name' | 'execution_generation' | 'boot_id'>;
+type TappedSession = Pick<SessionInfo, 'name' | 'executionGeneration' | 'bootId'>;
 
 // what a delete names: without a generation every one of the session, and
 // without a session every log of the imp
@@ -68,7 +68,7 @@ export interface SessionLogTarget {
 export interface SessionLogs {
   // a running imp's sessions as impd just listed them: taps each logged one
   // that is untapped, and ends the logs of generations that are gone
-  readonly observe: (imp: SessionLogImp, sessions: readonly AgentSession[]) => void;
+  readonly observe: (imp: SessionLogImp, sessions: readonly SessionInfo[]) => void;
 
   // a session just started with log: tapped now, not at the next look
   readonly tapNow: (imp: SessionLogImp, session: Readonly<TappedSession>) => void;
@@ -684,10 +684,11 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     life: number,
     emitReached: () => void,
   ): Promise<void> => {
-    const generation = session.execution_generation;
-    const bootId = session.boot_id;
+    const generation = session.executionGeneration;
+    const bootId = session.bootId;
 
-    if (generation === undefined || bootId === undefined) {
+    // an agent from before output offsets names no generation
+    if (generation === '') {
       return;
     }
 
@@ -834,7 +835,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
           return;
         }
 
-        const listed = new Set(sessions.map((session) => session.execution_generation));
+        const listed = new Set(sessions.map((session) => session.executionGeneration));
 
         // a deleted generation that is gone can never be tapped again
         for (const generation of listTombstones(imp.sessionLogsDir)) {

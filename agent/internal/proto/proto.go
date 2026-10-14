@@ -6,11 +6,13 @@ package proto
 import (
 	"bufio"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // Type is a frame type. The numbers are part of the wire format.
@@ -115,11 +117,30 @@ func (w *Writer) Write(t Type, payload []byte) error {
 	}
 }
 
-// WriteJSON marshals v and sends it as one frame.
-func (w *Writer) WriteJSON(t Type, v any) error {
-	b, err := json.Marshal(v)
+// WriteMessage marshals m and sends it as one frame.
+func (w *Writer) WriteMessage(t Type, m protoreflect.ProtoMessage) error {
+	b, err := Marshal(m)
 	if err != nil {
 		return err
 	}
 	return w.Write(t, b)
+}
+
+// A payload is the proto3 JSON form of a message under its proto field
+// names. The agent writes every field without presence, zero or not, which an
+// older impd requires, and skips an optional field or a message left unset.
+var (
+	marshalOptions   = protojson.MarshalOptions{UseProtoNames: true, EmitDefaultValues: true}
+	unmarshalOptions = protojson.UnmarshalOptions{DiscardUnknown: true}
+)
+
+// Marshal is the JSON payload of m.
+func Marshal(m protoreflect.ProtoMessage) ([]byte, error) {
+	return marshalOptions.Marshal(m)
+}
+
+// Unmarshal reads a JSON payload into m. A field m lacks is ignored, so a
+// newer impd's request still reaches an older agent.
+func Unmarshal(b []byte, m protoreflect.ProtoMessage) error {
+	return unmarshalOptions.Unmarshal(b, m)
 }

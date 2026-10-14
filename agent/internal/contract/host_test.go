@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"gotest.tools/v3/assert"
 
 	"github.com/zgeoff/imp/agent/internal/cmdline"
@@ -28,7 +29,7 @@ func TestTheAgentDecodesEveryHostRequestWithNoFieldLeftOver(t *testing.T) {
 		t.Run(entry.Name(), func(t *testing.T) {
 			var req proto.Request
 
-			err := decodeStrict(t, filepath.Join("testdata", "host", "requests", entry.Name()), &req)
+			err := decodeMessage(t, filepath.Join("testdata", "host", "requests", entry.Name()), &req)
 
 			assert.NilError(t, err)
 			assert.Equal(t, req.Op, strings.TrimSuffix(entry.Name(), ".json"))
@@ -57,25 +58,25 @@ func TestHostRequestsSetEveryFieldOfARequest(t *testing.T) {
 	assert.NilError(t, err)
 	c := coverage{}
 	for _, entry := range entries {
-		var req proto.Request
-		assert.NilError(t, decodeStrict(t, filepath.Join("testdata", "host", "requests", entry.Name()), &req))
+		req := &proto.Request{}
+		assert.NilError(t, decodeMessage(t, filepath.Join("testdata", "host", "requests", entry.Name()), req))
 		c.add(req)
 	}
 
 	// the agent marks where a service came from; impd never says
-	assert.DeepEqual(t, c.unset("ServiceDef.Source"), []string(nil))
+	assert.DeepEqual(t, c.unset("ServiceDef.source"), []string(nil))
 }
 
 func TestTheAgentDecodesTheHostFramesWithNoFieldLeftOver(t *testing.T) {
 	for _, tc := range []struct {
 		file  string
-		value any
+		value protoreflect.ProtoMessage
 	}{
 		{file: "resize.json", value: &proto.Resize{}},
 		{file: "signal.json", value: &proto.Signal{}},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
-			err := decodeStrict(t, filepath.Join("testdata", "host", tc.file), tc.value)
+			err := decodeMessage(t, filepath.Join("testdata", "host", tc.file), tc.value)
 
 			assert.NilError(t, err)
 			c := coverage{}
@@ -154,7 +155,7 @@ func TestTheTarToolTakesEachArgvTheHostSends(t *testing.T) {
 
 func TestTheAgentReadsAnImagesServicesFile(t *testing.T) {
 	path := filepath.Join("testdata", "host", "services-d.json")
-	assert.NilError(t, decodeStrict(t, path, &proto.ServiceDef{}))
+	assert.NilError(t, decodeMessage(t, path, &proto.ServiceDef{}))
 
 	def, err := services.ReadDef(fsroot.Host, path)
 
@@ -162,5 +163,5 @@ func TestTheAgentReadsAnImagesServicesFile(t *testing.T) {
 	c := coverage{}
 	c.add(def)
 	assert.DeepEqual(t, c.unset(), []string(nil))
-	assert.Equal(t, def.Source, "image")
+	assert.Equal(t, def.GetSource(), "image")
 }

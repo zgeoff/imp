@@ -1,7 +1,6 @@
 package boot
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -32,10 +31,10 @@ var errNotParked = &proto.Error{
 // claim is applied, then closes the listener, so the server can take the port.
 // It opens no inet socket: the template's snapshot holds no TCP state.
 // docs/architecture/lifecycle/boot-templates.md#restore has the order of the steps.
-func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) error) (proto.Claim, error) {
+func parkForClaim(listen func() (net.Listener, error), apply func(*proto.Claim) error) (*proto.Claim, error) {
 	l, err := listen()
 	if err != nil {
-		return proto.Claim{}, err
+		return nil, err
 	}
 	// a failed listen again leaves l nil, with nothing to close
 	defer func() {
@@ -51,7 +50,7 @@ func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) e
 			l.Close()
 			time.Sleep(10 * time.Millisecond)
 			if l, err = listen(); err != nil {
-				return proto.Claim{}, err
+				return nil, err
 			}
 			continue
 		}
@@ -63,55 +62,55 @@ func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) e
 }
 
 // serveParked answers one connection; done is true once a claim applied.
-func serveParked(c net.Conn, apply func(proto.Claim) error) (proto.Claim, bool) {
+func serveParked(c net.Conn, apply func(*proto.Claim) error) (*proto.Claim, bool) {
 	defer c.Close()
 	r, w := proto.NewReader(c), proto.NewWriter(c)
 	_ = c.SetReadDeadline(time.Now().Add(claimRequestTimeout))
 	f, err := r.Next()
 	if err != nil || f.Type != proto.TypeRequest {
-		return proto.Claim{}, false
+		return nil, false
 	}
-	var req proto.Request
-	if err := json.Unmarshal(f.Payload, &req); err != nil {
-		w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrBadRequest, Message: err.Error()}})
-		return proto.Claim{}, false
+	req := &proto.Request{}
+	if err := proto.Unmarshal(f.Payload, req); err != nil {
+		w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrBadRequest, Message: err.Error()}})
+		return nil, false
 	}
 	switch req.Op {
 	case proto.OpPing:
 		ping := server.BuildPing(unix.ClockGettime)
-		ping.Stage = proto.StageTemplate
-		w.WriteJSON(proto.TypeResponse, ping)
-		return proto.Claim{}, false
+		ping.Stage = new(proto.StageTemplate)
+		w.WriteMessage(proto.TypeResponse, ping)
+		return nil, false
 	case proto.OpClaim:
-		if req.Claim == nil || req.Claim.Hostname == "" || req.Claim.IP == "" {
-			w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrBadRequest, Message: "claim needs a hostname and an ip"}})
-			return proto.Claim{}, false
+		if req.Claim == nil || req.Claim.Hostname == "" || req.Claim.Ip == "" {
+			w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrBadRequest, Message: "claim needs a hostname and an ip"}})
+			return nil, false
 		}
-		if err := apply(*req.Claim); err != nil {
+		if err := apply(req.Claim); err != nil {
 			log.Printf("boot: claim: %v", err)
-			w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrInternal, Message: err.Error()}})
-			return proto.Claim{}, false
+			w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrInternal, Message: err.Error()}})
+			return nil, false
 		}
-		w.WriteJSON(proto.TypeResponse, proto.OK{OK: true})
-		return *req.Claim, true
+		w.WriteMessage(proto.TypeResponse, &proto.OK{Ok: true})
+		return req.Claim, true
 	default:
-		w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: errNotParked})
-		return proto.Claim{}, false
+		w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: errNotParked})
+		return nil, false
 	}
 }
 
 // claimParams is what the boot goes on with after a claim: the claim's values, never
 // the template's cmdline.
-func claimParams(c proto.Claim) cmdline.Params {
+func claimParams(c *proto.Claim) cmdline.Params {
 	return cmdline.Params{
 		Hostname:      c.Hostname,
-		IP:            c.IP,
-		GW:            c.GW,
-		IP6:           c.IP6,
-		GW6:           c.GW6,
-		DNS:           c.DNS,
-		ResetIdentity: c.ResetIdentity,
-		Raw:           map[string]string{"id": c.ID},
+		IP:            c.Ip,
+		GW:            c.Gw,
+		IP6:           c.GetIp6(),
+		GW6:           c.GetGw6(),
+		DNS:           c.Dns,
+		ResetIdentity: c.GetResetIdentity(),
+		Raw:           map[string]string{"id": c.Id},
 	}
 }
 
@@ -119,10 +118,10 @@ func claimParams(c proto.Claim) cmdline.Params {
 // (so nothing below stamps the template's time), the entropy pool and a
 // CRNG reseed, eth0's MAC, and the user disk's cached state, which the
 // template never read but whose size changed under it.
-func applyClaim(c proto.Claim) error {
+func applyClaim(c *proto.Claim) error {
 	var errs []error
 	if c.UnixMs > 0 {
-		ts := unix.NsecToTimespec(c.UnixMs * int64(time.Millisecond))
+		ts := unix.NsecToTimespec(int64(c.UnixMs) * int64(time.Millisecond))
 		if err := unix.ClockSettime(unix.CLOCK_REALTIME, &ts); err != nil {
 			errs = append(errs, fmt.Errorf("clock: %w", err))
 		}
@@ -132,13 +131,13 @@ func applyClaim(c proto.Claim) error {
 	} else {
 		log.Printf("boot: claim: crng reseeded from a %d-byte seed", len(c.Seed))
 	}
-	if err := setMAC("eth0", c.MAC); err != nil {
+	if err := setMAC("eth0", c.Mac); err != nil {
 		errs = append(errs, fmt.Errorf("mac: %w", err))
 	}
 	// a disk still at the placeholder's size would fail its mount;
 	// an error now lets the host boot the kernel at once
 	readSize := func() (uint64, error) { return readDiskBytes(userDisk) }
-	if err := waitForDiskSize(readSize, c.DiskBytes, diskSizeTimeout); err != nil {
+	if err := waitForDiskSize(readSize, int64(c.GetDiskBytes()), diskSizeTimeout); err != nil {
 		errs = append(errs, fmt.Errorf("%s: %w", userDisk, err))
 	}
 	if err := flushDisk(userDisk); err != nil {

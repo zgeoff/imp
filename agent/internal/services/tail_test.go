@@ -1,7 +1,6 @@
 package services
 
 import (
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -240,7 +240,7 @@ func TestLogsFollowsTheLogThroughATruncateAndARename(t *testing.T) {
 func TestLogsFollowsARunningServicesOutput(t *testing.T) {
 	s := newManagedSupervisor(t)
 	release := filepath.Join(t.TempDir(), "release")
-	s.startAt(Def{Name: "web", Argv: []string{"sh", "-c", "echo started; while [ ! -e " + release + " ]; do sleep 0.01; done; echo later; exec sleep 30"}, Restart: "always"}, "")
+	s.startAt(&Def{Name: new("web"), Argv: []string{"sh", "-c", "echo started; while [ ! -e " + release + " ]; do sleep 0.01; done; echo later; exec sleep 30"}, Restart: new("always")}, "")
 	waitRunning(t, s, "web", 0)
 	ls := startLogs(t, s, "web", 10, true, nil)
 	ls.waitResponse(t)
@@ -276,24 +276,25 @@ func TestLogsFollowsTheRotatorsCopytruncate(t *testing.T) {
 	})
 }
 
-func inodeOfPath(t *testing.T, path string) uint64 {
+// inodeOfPath is the file's inode as a cursor carries it.
+func inodeOfPath(t *testing.T, path string) float64 {
 	t.Helper()
 	fi, err := os.Stat(path)
 	assert.NilError(t, err)
-	return inodeOf(fi)
+	return float64(inodeOf(fi))
 }
 
 // collect runs a stream without follow and returns its text and last cursor.
-func collect(t *testing.T, ls *logStream) (string, proto.LogCursor) {
+func collect(t *testing.T, ls *logStream) (string, *proto.LogCursor) {
 	t.Helper()
 	text := ""
-	var last proto.LogCursor
+	last := &proto.LogCursor{}
 	for f := range ls.frames {
 		switch f.Type {
 		case proto.TypeStdout:
 			text += string(f.Payload)
 		case proto.TypeCursor:
-			assert.NilError(t, json.Unmarshal(f.Payload, &last))
+			assert.NilError(t, proto.Unmarshal(f.Payload, last))
 		}
 	}
 	assert.NilError(t, <-ls.result)
@@ -308,7 +309,7 @@ func TestLogsSendsACursorAfterEachChunk(t *testing.T) {
 	text, last := collect(t, startLogs(t, s, "web", 10, false, nil))
 
 	assert.Check(t, cmp.Equal(text, "1\n2\n3\n"))
-	assert.Check(t, cmp.Equal(last, proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 6}))
+	assert.Check(t, cmp.DeepEqual(last, &proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 6}, protocmp.Transform()))
 }
 
 func TestLogsResumesFromACursorInTheSameFileWithNoLineTwice(t *testing.T) {
@@ -337,7 +338,7 @@ func TestLogsResumesFromACursorInTheRotatedFile(t *testing.T) {
 	text, last := collect(t, startLogs(t, s, "web", 10, false, &proto.LogCursor{Inode: ino, Offset: 4}))
 
 	assert.Check(t, cmp.Equal(text, "3\n4\n"))
-	assert.Check(t, cmp.Equal(last, proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 2}))
+	assert.Check(t, cmp.DeepEqual(last, &proto.LogCursor{Inode: inodeOfPath(t, path), Offset: 2}, protocmp.Transform()))
 }
 
 // A cursor in neither file: the current one goes whole.

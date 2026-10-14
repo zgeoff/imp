@@ -1,8 +1,13 @@
 import { existsSync, rmSync } from 'node:fs';
+import { toJson } from '@bufbuild/protobuf';
+import type { JsonValue } from '@bufbuild/protobuf';
 import * as z from 'zod';
-import { ServicesListSchema } from '../agent-client/agent-protocol';
+import { ServicesListSchema, SessionInfoSchema } from '../agent-client/agent-protocol';
+import type { ServicesList } from '../agent-client/agent-protocol';
+import { decodeAgentMessage } from '../agent-client/decode-agent-message';
+import { hasAgentNameForms } from '../agent-client/has-agent-name-forms';
 import { writeFileDurably, writeRenamed } from '../process/write-file-durably';
-import { SeenSessionSchema } from '../sessions/session-cache';
+import type { SeenSession } from '../sessions/session-cache';
 import type { ImpPaths } from '../storage/data-layout';
 import { readRegularFile } from '../vmm/vm-files';
 import { findCpuChange } from './cpu-identity';
@@ -32,6 +37,42 @@ const SnapshotIdentitySchema = z.object({
   cpuFlags: z.string().optional(),
 });
 
+// Sessions and services keep the agent's JSON form, every field the agent
+// sends included, as every impd writes them. A session whose names lack their
+// agent's form fails the whole record, as a forged one.
+const AGENT_RECORD_JSON = { useProtoFieldName: true, alwaysEmitImplicit: true } as const;
+
+const SeenSessionJsonSchema = z.json().transform((json, ctx): SeenSession => {
+  try {
+    if (typeof json !== 'object' || json === null || Array.isArray(json)) {
+      throw new Error('a session is a JSON object');
+    }
+
+    const { observed_unix_ms: observed, ...rest } = json;
+    const session = decodeAgentMessage(SessionInfoSchema, rest);
+
+    if (!hasAgentNameForms(session)) {
+      throw new Error('a session whose names lack their agent’s form');
+    }
+
+    return typeof observed === 'number' ? { ...session, observedUnixMs: observed } : session;
+  } catch (error) {
+    ctx.addIssue({ code: 'custom', message: String(error) });
+
+    return z.NEVER;
+  }
+});
+
+const ServicesListJsonSchema = z.json().transform((json, ctx): ServicesList => {
+  try {
+    return decodeAgentMessage(ServicesListSchema, json);
+  } catch (error) {
+    ctx.addIssue({ code: 'custom', message: String(error) });
+
+    return z.NEVER;
+  }
+});
+
 export const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
   createdAt: z.int(),
   memoryMib: z.int(),
@@ -45,16 +86,16 @@ export const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
 
   // the guest's sessions as it went to sleep, so listing them does not wake
   // it; left out by an older impd
-  sessions: z.array(SeenSessionSchema).readonly().optional(),
+  sessions: z.array(SeenSessionJsonSchema).readonly().optional(),
 
   // and its services, for services.list; left out when the agent did not
   // answer in time, or by an older impd
-  services: ServicesListSchema.optional(),
+  services: ServicesListJsonSchema.optional(),
 });
 
 export type SnapshotIdentity = z.infer<typeof SnapshotIdentitySchema>;
 
-export type SnapshotMeta = z.infer<typeof SnapshotMetaSchema>;
+export type SnapshotMeta = z.output<typeof SnapshotMetaSchema>;
 
 // What a sleep records: the VM's identity. A VM booted before impd kept one
 // gets the host's Firecracker and no drive, so it boots cold once.
@@ -92,7 +133,34 @@ export function writeSnapshotMeta(
   paths: Pick<ImpPaths, 'snapshotMeta'>,
   meta: Readonly<SnapshotMeta>,
 ): void {
-  writeFileDurably(paths.snapshotMeta, `${JSON.stringify(meta, null, 2)}\n`);
+  const { sessions, services, ...identity } = meta;
+
+  const json = {
+    ...identity,
+    ...(sessions !== undefined && {
+      sessions: sessions.map((session) => encodeSeenSession(session)),
+    }),
+    ...(services !== undefined && {
+      services: toJson(ServicesListSchema, services, AGENT_RECORD_JSON),
+    }),
+  };
+
+  writeFileDurably(paths.snapshotMeta, `${JSON.stringify(json, null, 2)}\n`);
+}
+
+function encodeSeenSession(session: SeenSession): JsonValue {
+  const json = toJson(SessionInfoSchema, session, AGENT_RECORD_JSON);
+
+  if (
+    session.observedUnixMs === undefined ||
+    typeof json !== 'object' ||
+    json === null ||
+    Array.isArray(json)
+  ) {
+    return json;
+  }
+
+  return { ...json, observed_unix_ms: session.observedUnixMs };
 }
 
 // Without its record the snapshot does not load. A sleep drops it before it

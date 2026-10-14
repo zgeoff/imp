@@ -151,7 +151,7 @@ test('it never sends the requirement to the agent', async () => {
 
   stream.close();
 
-  const [sent] = agent.readExecs();
+  const [sent] = agent.readExecPayloads();
 
   invariant(sent);
 

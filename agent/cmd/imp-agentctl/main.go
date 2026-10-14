@@ -11,7 +11,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -51,9 +50,9 @@ func main() {
 	case "exec":
 		code, err = execCmd(*sock, args)
 	case proto.OpResumed:
-		err = unary(*sock, proto.Request{Op: op, UnixMs: time.Now().UnixMilli()})
+		err = unary(*sock, &proto.Request{Op: op, UnixMs: new(float64(time.Now().UnixMilli()))})
 	default:
-		err = unary(*sock, proto.Request{Op: op})
+		err = unary(*sock, &proto.Request{Op: op})
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "imp-agentctl:", err)
@@ -87,13 +86,13 @@ func dial(sock string) (net.Conn, *bufio.Reader, error) {
 }
 
 // roundTrip sends one unary request and returns the RESPONSE payload.
-func roundTrip(sock string, req proto.Request) (json.RawMessage, error) {
+func roundTrip(sock string, req *proto.Request) ([]byte, error) {
 	c, br, err := dial(sock)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
-	if err := proto.NewWriter(c).WriteJSON(proto.TypeRequest, req); err != nil {
+	if err := proto.NewWriter(c).WriteMessage(proto.TypeRequest, req); err != nil {
 		return nil, err
 	}
 	f, err := proto.NewReader(br).Next()
@@ -104,13 +103,13 @@ func roundTrip(sock string, req proto.Request) (json.RawMessage, error) {
 		return nil, fmt.Errorf("unexpected %s frame", f.Type)
 	}
 	var e proto.ErrorResponse
-	if json.Unmarshal(f.Payload, &e) == nil && e.Error != nil {
+	if proto.Unmarshal(f.Payload, &e) == nil && e.Error != nil {
 		return nil, e.Error
 	}
 	return f.Payload, nil
 }
 
-func unary(sock string, req proto.Request) error {
+func unary(sock string, req *proto.Request) error {
 	resp, err := roundTrip(sock, req)
 	if err != nil {
 		return err
@@ -128,7 +127,7 @@ func ping(sock string, args []string) error {
 
 	start := time.Now()
 	for {
-		resp, err := roundTrip(sock, proto.Request{Op: proto.OpPing})
+		resp, err := roundTrip(sock, &proto.Request{Op: proto.OpPing})
 		if err == nil {
 			fmt.Printf("%s waited_ms=%d\n", resp, time.Since(start).Milliseconds())
 			return nil
@@ -151,11 +150,11 @@ func execCmd(sock string, args []string) (int, error) {
 		return 2, errors.New("exec: missing command")
 	}
 
-	req := proto.Request{Op: proto.OpExec, Argv: fs.Args(), TTY: *tty, User: *user, Cwd: *cwd}
+	req := &proto.Request{Op: proto.OpExec, Argv: fs.Args(), Tty: tty, User: user, Cwd: cwd}
 	stdinFd := int(os.Stdin.Fd())
 	if *tty && term.IsTerminal(stdinFd) {
 		if cols, rows, err := term.GetSize(stdinFd); err == nil {
-			req.Cols, req.Rows = uint16(cols), uint16(rows)
+			req.Cols, req.Rows = new(uint32(cols)), new(uint32(rows))
 		}
 		if t := os.Getenv("TERM"); t != "" {
 			req.Env = append(req.Env, "TERM="+t)
@@ -173,7 +172,7 @@ func execCmd(sock string, args []string) (int, error) {
 	}
 	defer c.Close()
 	w, r := proto.NewWriter(c), proto.NewReader(br)
-	if err := w.WriteJSON(proto.TypeRequest, req); err != nil {
+	if err := w.WriteMessage(proto.TypeRequest, req); err != nil {
 		return 1, err
 	}
 
@@ -197,13 +196,13 @@ func execCmd(sock string, args []string) (int, error) {
 			os.Stderr.Write(f.Payload)
 		case proto.TypeExit:
 			var e proto.Exit
-			if err := json.Unmarshal(f.Payload, &e); err != nil {
+			if err := proto.Unmarshal(f.Payload, &e); err != nil {
 				return 1, err
 			}
-			return e.Code, nil
+			return int(e.Code), nil
 		case proto.TypeResponse:
 			var e proto.ErrorResponse
-			if json.Unmarshal(f.Payload, &e) == nil && e.Error != nil {
+			if proto.Unmarshal(f.Payload, &e) == nil && e.Error != nil {
 				return 1, e.Error
 			}
 			return 1, fmt.Errorf("unexpected response: %s", f.Payload)
@@ -233,7 +232,7 @@ func forwardResize(w *proto.Writer, fd int) {
 	signal.Notify(ch, syscall.SIGWINCH)
 	for range ch {
 		if cols, rows, err := term.GetSize(fd); err == nil {
-			w.WriteJSON(proto.TypeResize, proto.Resize{Cols: uint16(cols), Rows: uint16(rows)})
+			w.WriteMessage(proto.TypeResize, &proto.Resize{Cols: uint32(cols), Rows: uint32(rows)})
 		}
 	}
 }
@@ -243,6 +242,6 @@ func forwardSignals(w *proto.Writer) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	for s := range ch {
-		w.WriteJSON(proto.TypeSignal, proto.Signal{Signal: int(s.(syscall.Signal))})
+		w.WriteMessage(proto.TypeSignal, &proto.Signal{Signal: int32(s.(syscall.Signal))})
 	}
 }

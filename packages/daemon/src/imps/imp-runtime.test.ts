@@ -808,7 +808,7 @@ test('it shows the inner container of an awake imp as its agent last reported it
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
   await startStubInnerAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
-    inner: { up: false, restarts: 3, last_error: 'start inner init: exit status 1' },
+    inner: { up: false, restarts: 3, lastError: 'start inner init: exit status 1' },
     stack: ctx.stack,
   });
 

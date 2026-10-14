@@ -3,7 +3,6 @@
 package server
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
@@ -112,15 +112,15 @@ func (s *Server) handle(c net.Conn) {
 		replyErr(w, proto.ErrBadRequest, "first frame must be REQUEST, got "+f.Type.String())
 		return
 	}
-	var req proto.Request
-	if err := json.Unmarshal(f.Payload, &req); err != nil {
+	req := &proto.Request{}
+	if err := proto.Unmarshal(f.Payload, req); err != nil {
 		replyErr(w, proto.ErrBadRequest, err.Error())
 		return
 	}
 
-	if req.Op == proto.OpSessionAttach || req.Op == proto.OpSessionTap || (req.Op == proto.OpExec && req.Session != "") {
+	if req.Op == proto.OpSessionAttach || req.Op == proto.OpSessionTap || (req.Op == proto.OpExec && req.GetSession() != "") {
 		if err := s.Sessions.Serve(req, c, r, w); err != nil {
-			log.Printf("session %s: %v", req.Session, err)
+			log.Printf("session %s: %v", req.GetSession(), err)
 		}
 		return
 	}
@@ -138,7 +138,7 @@ func (s *Server) handle(c net.Conn) {
 	}
 	if req.Op == proto.OpDial {
 		if err := s.Dial.Serve(req, r, w); err != nil {
-			log.Printf("dial %s %s: %v", req.Network, req.Address, err)
+			log.Printf("dial %s %s: %v", req.GetNetwork(), req.GetAddress(), err)
 		}
 		return
 	}
@@ -152,7 +152,7 @@ func (s *Server) handle(c net.Conn) {
 	}
 	if req.Op == proto.OpListen {
 		if err := s.Listen.Serve(req, r, w); err != nil {
-			log.Printf("listen %s %s: %v", req.Network, req.Address, err)
+			log.Printf("listen %s %s: %v", req.GetNetwork(), req.GetAddress(), err)
 		}
 		return
 	}
@@ -172,10 +172,10 @@ func (s *Server) handle(c net.Conn) {
 		if !errors.As(err, &pe) {
 			pe = &proto.Error{Code: proto.ErrInternal, Message: err.Error()}
 		}
-		w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: pe})
+		w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: pe})
 		return
 	}
-	w.WriteJSON(proto.TypeResponse, resp)
+	w.WriteMessage(proto.TypeResponse, resp)
 	if req.Op == proto.OpShutdown {
 		c.Close()
 		s.Shutdown()
@@ -183,19 +183,23 @@ func (s *Server) handle(c net.Conn) {
 }
 
 // safeUnary runs unary and turns a panic into an INTERNAL reply.
-func (s *Server) safeUnary(req proto.Request) (resp any, err error) {
+func (s *Server) safeUnary(req *proto.Request) (resp protoreflect.ProtoMessage, err error) {
 	defer safe.Recover("request "+req.Op, func() {
 		resp, err = nil, &proto.Error{Code: proto.ErrInternal, Message: "agent panic in " + req.Op}
 	})
 	return s.unary(req)
 }
 
-func (s *Server) unary(req proto.Request) (any, error) {
+func (s *Server) unary(req *proto.Request) (protoreflect.ProtoMessage, error) {
 	switch req.Op {
 	case proto.OpPing:
 		ping := BuildPing(unix.ClockGettime)
-		ping.IdentityReset = s.IdentityReset
-		ping.BootID = s.BootID
+		if s.IdentityReset != "" {
+			ping.IdentityReset = new(s.IdentityReset)
+		}
+		if s.BootID != "" {
+			ping.BootId = new(s.BootID)
+		}
 		if s.Inner != nil {
 			ping.Inner = s.Inner()
 		}
@@ -203,35 +207,35 @@ func (s *Server) unary(req proto.Request) (any, error) {
 	case proto.OpActivity:
 		return s.activity()
 	case proto.OpFreeze:
-		return proto.OK{OK: true}, s.freeze(time.Duration(req.TimeoutMs) * time.Millisecond)
+		return &proto.OK{Ok: true}, s.freeze(time.Duration(req.GetTimeoutMs()) * time.Millisecond)
 	case proto.OpThaw:
-		return proto.OK{OK: true}, s.thaw()
+		return &proto.OK{Ok: true}, s.thaw()
 	case proto.OpResumed:
-		if req.UnixMs <= 0 {
+		if req.GetUnixMs() <= 0 {
 			return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "unix_ms is required"}
 		}
-		ts := unix.NsecToTimespec(req.UnixMs * int64(time.Millisecond))
-		return proto.OK{OK: true}, unix.ClockSettime(unix.CLOCK_REALTIME, &ts)
+		ts := unix.NsecToTimespec(int64(req.GetUnixMs()) * int64(time.Millisecond))
+		return &proto.OK{Ok: true}, unix.ClockSettime(unix.CLOCK_REALTIME, &ts)
 	case proto.OpGrow:
-		if req.DiskBytes <= 0 {
+		if req.GetDiskBytes() <= 0 {
 			return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "disk_bytes is required"}
 		}
-		return proto.OK{OK: true}, s.grow(req.DiskBytes)
+		return &proto.OK{Ok: true}, s.grow(int64(req.GetDiskBytes()))
 	case proto.OpServicesList:
-		return proto.ServicesList{Services: s.Services.List(), ImageUser: s.Services.ImageUser()}, nil
+		return &proto.ServicesList{Services: s.Services.List(), ImageUser: s.Services.ImageUser()}, nil
 	case proto.OpServicesAdd:
 		if req.Def == nil {
 			return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "def is required"}
 		}
-		return proto.OK{OK: true}, s.Services.Add(*req.Def, req.Replace)
+		return &proto.OK{Ok: true}, s.Services.Add(req.Def, req.GetReplace())
 	case proto.OpServicesRemove:
-		return proto.OK{OK: true}, s.Services.Remove(req.Service)
+		return &proto.OK{Ok: true}, s.Services.Remove(req.GetService())
 	case proto.OpServicesRestart:
-		return proto.OK{OK: true}, s.Services.Restart(req.Service)
+		return &proto.OK{Ok: true}, s.Services.Restart(req.GetService())
 	case proto.OpSessionKill:
-		return proto.OK{OK: true}, s.Sessions.Kill(req.Session)
+		return &proto.OK{Ok: true}, s.Sessions.Kill(req.GetSession())
 	case proto.OpShutdown:
-		return proto.OK{OK: true}, nil
+		return &proto.OK{Ok: true}, nil
 	default:
 		return nil, &proto.Error{Code: proto.ErrUnknownOp, Message: "unknown op " + req.Op}
 	}
@@ -239,14 +243,14 @@ func (s *Server) unary(req proto.Request) (any, error) {
 
 // serveOuter runs an outer exec. It runs as root, and has no session: the
 // agent's world has no accounts, and a session would outlive the caller.
-func (s *Server) serveOuter(req proto.Request, r *proto.Reader, w *proto.Writer) error {
-	if req.Session != "" {
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
+func (s *Server) serveOuter(req *proto.Request, r *proto.Reader, w *proto.Writer) error {
+	if req.GetSession() != "" {
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{
 			Error: &proto.Error{Code: proto.ErrBadRequest, Message: "an outer exec takes no session"},
 		})
 	}
-	if req.User != "" && req.User != "root" && req.User != "0" {
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
+	if req.GetUser() != "" && req.GetUser() != "root" && req.GetUser() != "0" {
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{
 			Error: &proto.Error{Code: proto.ErrBadRequest, Message: "an outer exec runs as root"},
 		})
 	}
@@ -255,7 +259,7 @@ func (s *Server) serveOuter(req proto.Request, r *proto.Reader, w *proto.Writer)
 
 // serveLogs streams a service's log until it ends or the host closes the
 // connection, which the host does to stop a follow.
-func (s *Server) serveLogs(req proto.Request, r *proto.Reader, w *proto.Writer) {
+func (s *Server) serveLogs(req *proto.Request, r *proto.Reader, w *proto.Writer) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -265,28 +269,27 @@ func (s *Server) serveLogs(req proto.Request, r *proto.Reader, w *proto.Writer) 
 			}
 		}
 	}()
-	logReq := services.LogRequest{Lines: req.Lines, Follow: req.Follow, Cursor: req.Cursor}
-	err := s.Services.Logs(req.Service, logReq, w, done)
+	logReq := services.LogRequest{Lines: int(req.GetLines()), Follow: req.GetFollow(), Cursor: req.Cursor}
+	err := s.Services.Logs(req.GetService(), logReq, w, done)
 	var pe *proto.Error
 	if errors.As(err, &pe) {
-		w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: pe})
+		w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: pe})
 	} else if err != nil {
-		log.Printf("services.logs %s: %v", req.Service, err)
+		log.Printf("services.logs %s: %v", req.GetService(), err)
 	}
 }
 
 func replyErr(w *proto.Writer, code, msg string) {
-	w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{Code: code, Message: msg}})
+	w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: &proto.Error{Code: code, Message: msg}})
 }
 
 // BuildPing reports the uptime from CLOCK_BOOTTIME, or none when the clock
 // read fails: a 0 would make impd wait out a guest that is not young.
-func BuildPing(clockGettime func(int32, *unix.Timespec) error) proto.Ping {
-	ping := proto.Ping{OK: true, Version: proto.Version}
+func BuildPing(clockGettime func(int32, *unix.Timespec) error) *proto.Ping {
+	ping := &proto.Ping{Ok: true, Version: proto.Version}
 	var ts unix.Timespec
 	if clockGettime(unix.CLOCK_BOOTTIME, &ts) == nil {
-		ms := ts.Nano() / int64(time.Millisecond)
-		ping.UptimeMs = &ms
+		ping.UptimeMs = new(float64(ts.Nano() / int64(time.Millisecond)))
 	}
 	return ping
 }

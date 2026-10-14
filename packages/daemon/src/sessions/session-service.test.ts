@@ -321,7 +321,7 @@ test('it records a sleeping imp’s sessions as detached in its snapshot', async
   expect(attached.attached).toBeTrue();
 
   expect(meta?.sessions).toStrictEqual([
-    { ...attached, attached: false, observed_unix_ms: expect.toBeNumber() },
+    { ...attached, attached: false, observedUnixMs: expect.toBeNumber() },
   ]);
 });
 

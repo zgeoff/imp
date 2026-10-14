@@ -2,7 +2,14 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
 import { waitFor } from '@imp/test-utils/wait-for';
+import {
+  LogCursorSchema,
+  RequestSchema,
+  ServiceStatusSchema,
+  ServicesListSchema,
+} from '../agent-client/agent-protocol';
 import { sendAgentRequest } from '../agent-client/agent-requests';
 import {
   openServiceLogStream,
@@ -29,19 +36,21 @@ test('it lists an added service with its definition, its pid and the image user'
 
   const listed = await sendServicesList(ctx.vsockPath);
 
-  expect(listed).toStrictEqual({
-    services: [
-      {
-        name: 'web',
-        state: 'running',
-        pid: 40,
-        restarts: 0,
-        def: { name: 'web', argv: ['httpd'], env: ['A=1'], restart: 'always', source: 'api' },
-        root: false,
-      },
-    ],
-    image_user: 'dev',
-  });
+  expect(listed).toStrictEqual(
+    create(ServicesListSchema, {
+      services: [
+        {
+          name: 'web',
+          state: 'running',
+          pid: 40,
+          restarts: 0,
+          def: { name: 'web', argv: ['httpd'], env: ['A=1'], restart: 'always', source: 'api' },
+          root: false,
+        },
+      ],
+      imageUser: 'dev',
+    }),
+  );
 
   expect(agent.requests.map((request) => request.op)).toStrictEqual([
     'services.add',
@@ -164,17 +173,21 @@ test('it restarts a service without the last exit of its old process', async () 
   const ctx = await setupTest();
   const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: true });
 
-  agent.services.push({
-    name: 'web',
-    state: 'backoff',
-    pid: 0,
-    restarts: 2,
-    last_exit: { code: 1, signal: 0 },
-  });
+  agent.services.push(
+    create(ServiceStatusSchema, {
+      name: 'web',
+      state: 'backoff',
+      pid: 0,
+      restarts: 2,
+      lastExit: { code: 1, signal: 0 },
+    }),
+  );
 
   await sendServicesRestart(ctx.vsockPath, 'web');
 
-  expect(agent.services).toStrictEqual([{ name: 'web', state: 'running', pid: 40, restarts: 0 }]);
+  expect(agent.services).toStrictEqual([
+    create(ServiceStatusSchema, { name: 'web', state: 'running', pid: 40, restarts: 0 }),
+  ]);
 });
 
 test('it refuses a restart of a service that left only its log as NO_SERVICE', async () => {
@@ -215,11 +228,13 @@ test('it lists without definitions or an image user as an agent from before the 
   const ctx = await setupTest();
   const agent = await startStubServiceAgent(ctx.vsockPath, { knowsServices: false });
 
-  agent.services.push({ name: 'dockerd', state: 'running', pid: 212, restarts: 0 });
+  agent.services.push(
+    create(ServiceStatusSchema, { name: 'dockerd', state: 'running', pid: 212, restarts: 0 }),
+  );
 
-  const listed = await sendServicesList(ctx.vsockPath);
+  const response = await sendAgentRequest(ctx.vsockPath, { op: 'services.list' });
 
-  expect(listed).toStrictEqual({
+  expect(response).toStrictEqual({
     services: [{ name: 'dockerd', state: 'running', pid: 212, restarts: 0 }],
   });
 });
@@ -254,14 +269,14 @@ test('it sends a log from the cursor, then the cursor at its end, and ends', asy
     service: 'web',
     lines: 100,
     follow: false,
-    cursor: { inode: 7, offset: 4 },
+    cursor: create(LogCursorSchema, { inode: 7, offset: 4 }),
   });
 
   const chunks = await Array.fromAsync(stream.chunks());
 
   expect(chunks).toStrictEqual([
     { kind: 'data', data: new TextEncoder().encode('two\n') },
-    { kind: 'cursor', cursor: { inode: 7, offset: 8 } },
+    { kind: 'cursor', cursor: create(LogCursorSchema, { inode: 7, offset: 8 }) },
   ]);
 });
 
@@ -281,7 +296,7 @@ test('it sends the last lines a log call asks for without a cursor', async () =>
 
   expect(chunks).toStrictEqual([
     { kind: 'data', data: new TextEncoder().encode('two\nthree\n') },
-    { kind: 'cursor', cursor: { inode: 7, offset: 14 } },
+    { kind: 'cursor', cursor: create(LogCursorSchema, { inode: 7, offset: 14 }) },
   ]);
 });
 
@@ -301,7 +316,7 @@ test('it counts a last line without a newline as a line', async () => {
 
   expect(chunks).toStrictEqual([
     { kind: 'data', data: new TextEncoder().encode('two\nthr') },
-    { kind: 'cursor', cursor: { inode: 7, offset: 11 } },
+    { kind: 'cursor', cursor: create(LogCursorSchema, { inode: 7, offset: 11 }) },
   ]);
 });
 
@@ -321,7 +336,7 @@ test('it sends the whole log when it holds fewer lines than asked', async () => 
 
   expect(chunks).toStrictEqual([
     { kind: 'data', data: new TextEncoder().encode('one\ntwo\n') },
-    { kind: 'cursor', cursor: { inode: 7, offset: 8 } },
+    { kind: 'cursor', cursor: create(LogCursorSchema, { inode: 7, offset: 8 }) },
   ]);
 });
 
@@ -352,14 +367,14 @@ test('it sends the whole log from a cursor past its end, as after a truncate', a
     service: 'web',
     lines: 100,
     follow: false,
-    cursor: { inode: 7, offset: 50 },
+    cursor: create(LogCursorSchema, { inode: 7, offset: 50 }),
   });
 
   const chunks = await Array.fromAsync(stream.chunks());
 
   expect(chunks).toStrictEqual([
     { kind: 'data', data: new TextEncoder().encode('one\n') },
-    { kind: 'cursor', cursor: { inode: 7, offset: 4 } },
+    { kind: 'cursor', cursor: create(LogCursorSchema, { inode: 7, offset: 4 }) },
   ]);
 });
 
@@ -404,7 +419,7 @@ test('it sends the log a removed service left', async () => {
 
   expect(chunks).toStrictEqual([
     { kind: 'data', data: new TextEncoder().encode('one\n') },
-    { kind: 'cursor', cursor: { inode: 7, offset: 4 } },
+    { kind: 'cursor', cursor: create(LogCursorSchema, { inode: 7, offset: 4 }) },
   ]);
 });
 
@@ -415,7 +430,11 @@ test('it records each request as impd sends it', async () => {
   await sendServicesAdd(ctx.vsockPath, { name: 'web', argv: ['httpd', '-f'] }, true);
 
   expect(agent.requests).toStrictEqual([
-    { op: 'services.add', def: { name: 'web', argv: ['httpd', '-f'] }, replace: true },
+    create(RequestSchema, {
+      op: 'services.add',
+      def: { name: 'web', argv: ['httpd', '-f'] },
+      replace: true,
+    }),
   ]);
 });
 
@@ -452,7 +471,12 @@ test('it sends what a write adds to an open follow', async () => {
   const second = await chunks.next();
 
   expect(first.value).toStrictEqual({ kind: 'data', data: new TextEncoder().encode('one\n') });
-  expect(firstCursor.value).toStrictEqual({ kind: 'cursor', cursor: { inode: 7, offset: 4 } });
+
+  expect(firstCursor.value).toStrictEqual({
+    kind: 'cursor',
+    cursor: create(LogCursorSchema, { inode: 7, offset: 4 }),
+  });
+
   expect(second.value).toStrictEqual({ kind: 'data', data: new TextEncoder().encode('two\n') });
 });
 

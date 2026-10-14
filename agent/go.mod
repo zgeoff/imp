@@ -11,6 +11,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
+	google.golang.org/protobuf v1.36.12
 	gotest.tools/v3 v3.5.2
 )
 
@@ -39,4 +40,7 @@ require (
 	gotest.tools/gotestsum v1.13.0 // indirect
 )
 
-tool gotest.tools/gotestsum
+tool (
+	google.golang.org/protobuf/cmd/protoc-gen-go
+	gotest.tools/gotestsum
+)

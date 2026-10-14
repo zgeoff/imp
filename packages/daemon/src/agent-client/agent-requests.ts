@@ -1,16 +1,15 @@
+import type { JsonObject, JsonValue, MessageInitShape } from '@bufbuild/protobuf';
 import { requireWithin } from '../process/require-within';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
-import {
-  ActivityResponseSchema,
-  AgentErrorResponseSchema,
-  OkResponseSchema,
-  PingResponseSchema,
-} from './agent-protocol';
-import type { AgentActivity, AgentPing, AgentRequest } from './agent-protocol';
+import { ErrorResponseSchema, OKSchema, PingSchema, RequestSchema } from './agent-protocol';
+import type { Activity, ErrorResponse, Ping } from './agent-protocol';
+import { decodeAgentMessage } from './decode-agent-message';
+import { encodeAgentMessage } from './encode-agent-message';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 import type { AgentFrame } from './frame-codec';
+import { parseAgentActivity } from './parse-agent-activity';
 
 // a claim flushes the disk and reseeds the CRNG: well under a second
 const CLAIM_TIMEOUT_MS = 5000;
@@ -18,31 +17,60 @@ const CLAIM_TIMEOUT_MS = 5000;
 // the agent's own 10 s wait for the new size, and the resize after it
 const GROW_TIMEOUT_MS = 20_000;
 
+// A REQUEST frame's message: every request names its op.
+export type AgentRequest = MessageInitShape<typeof RequestSchema> & { readonly op: string };
+
 // throws AgentError when the frame is a RESPONSE carrying an `error`
 export function requireNoAgentError(frame: AgentFrame): void {
   if (frame.type !== FRAME_TYPES.response) {
     return;
   }
 
-  const parsed = AgentErrorResponseSchema.safeParse(decodeJsonPayload(frame));
+  const payload = decodeJsonPayload(frame);
 
-  if (parsed.success) {
-    const error = parsed.data.error;
+  if (!isJsonObject(payload) || !('error' in payload)) {
+    return;
+  }
 
+  const error = decodeErrorResponse(payload).error;
+
+  if (error !== undefined) {
     throw new AgentError(error.code, error.message, error.data);
   }
+}
+
+// An error whose data impd cannot read keeps its code and message without
+// the data, so the caller still sees the agent's error.
+function decodeErrorResponse(payload: JsonObject): ErrorResponse {
+  try {
+    return decodeAgentMessage(ErrorResponseSchema, payload);
+  } catch {
+    const error = payload['error'];
+    const bare = isJsonObject(error) ? { ...error, data: null } : error;
+
+    return decodeAgentMessage(ErrorResponseSchema, { ...payload, error: bare ?? null });
+  }
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// sends the REQUEST frame that opens every connection
+export function sendRequestFrame(connection: AgentConnection, request: AgentRequest): void {
+  connection.sendJson(FRAME_TYPES.request, encodeAgentMessage(RequestSchema, request));
 }
 
 // One unary request: REQUEST out, one RESPONSE back, then the agent closes.
 export async function sendAgentRequest(
   vsockPath: string,
-  request: Readonly<AgentRequest>,
+  request: AgentRequest,
   timeoutMs = 5000,
-): Promise<unknown> {
+): Promise<JsonValue> {
   const connection = await openAgentConnection(vsockPath, timeoutMs);
 
   try {
-    connection.sendJson(FRAME_TYPES.request, request);
+    sendRequestFrame(connection, request);
 
     const frame = await readFrameWithin(connection, timeoutMs);
 
@@ -58,10 +86,10 @@ export async function sendAgentRequest(
   }
 }
 
-export async function sendPing(vsockPath: string, timeoutMs = 2000): Promise<AgentPing> {
+export async function sendPing(vsockPath: string, timeoutMs = 2000): Promise<Ping> {
   const response = await sendAgentRequest(vsockPath, { op: 'ping' }, timeoutMs);
 
-  return PingResponseSchema.parse(response);
+  return decodeAgentMessage(PingSchema, response);
 }
 
 // What a guest restored from a boot template needs to become one imp
@@ -97,31 +125,31 @@ export async function sendClaim(vsockPath: string, claim: Readonly<Claim>): Prom
         gw: claim.gw,
         ...(claim.ip6 !== null && { ip6: claim.ip6 }),
         ...(claim.gw6 !== null && { gw6: claim.gw6 }),
-        dns: claim.dns,
+        dns: [...claim.dns],
         mac: claim.mac,
-        disk_bytes: claim.diskBytes,
-        unix_ms: claim.unixMs,
-        seed: Buffer.from(claim.seed).toString('base64'),
-        reset_identity: claim.isIdentityReset,
+        diskBytes: claim.diskBytes,
+        unixMs: claim.unixMs,
+        seed: claim.seed,
+        resetIdentity: claim.isIdentityReset,
       },
     },
     CLAIM_TIMEOUT_MS,
   );
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 // The agent replies, then powers the guest off; Firecracker exits after.
 export async function sendShutdown(vsockPath: string): Promise<void> {
   const response = await sendAgentRequest(vsockPath, { op: 'shutdown' });
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
-export async function sendActivity(vsockPath: string, timeoutMs = 1000): Promise<AgentActivity> {
+export async function sendActivity(vsockPath: string, timeoutMs = 1000): Promise<Activity> {
   const response = await sendAgentRequest(vsockPath, { op: 'activity' }, timeoutMs);
 
-  return ActivityResponseSchema.parse(response);
+  return parseAgentActivity(response);
 }
 
 // Throws AgentError NO_SESSION when the imp has no session of that name,
@@ -131,27 +159,23 @@ export async function sendSessionKill(vsockPath: string, session: string): Promi
     handleUnknownOp('sessions'),
   );
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 // After a wake: the guest clock stopped while the VM slept.
 export async function sendResumed(vsockPath: string, unixMs: number): Promise<void> {
-  const response = await sendAgentRequest(vsockPath, { op: 'resumed', unix_ms: unixMs });
+  const response = await sendAgentRequest(vsockPath, { op: 'resumed', unixMs });
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 // sync + FIFREEZE on the guest root; the agent thaws by itself after
 // `timeoutMs` if no thaw arrives. The answer can take a while: sync flushes
 // the guest page cache first.
 export async function sendFreeze(vsockPath: string, timeoutMs: number): Promise<void> {
-  const response = await sendAgentRequest(
-    vsockPath,
-    { op: 'freeze', timeout_ms: timeoutMs },
-    timeoutMs,
-  );
+  const response = await sendAgentRequest(vsockPath, { op: 'freeze', timeoutMs }, timeoutMs);
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 // After the host grew the disk: the agent waits up to 10 s for the guest to
@@ -160,17 +184,17 @@ export async function sendFreeze(vsockPath: string, timeoutMs: number): Promise<
 export async function sendGrow(vsockPath: string, diskBytes: number): Promise<void> {
   const response = await sendAgentRequest(
     vsockPath,
-    { op: 'grow', disk_bytes: diskBytes },
+    { op: 'grow', diskBytes },
     GROW_TIMEOUT_MS,
   ).catch(handleUnknownOp('grow'));
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 export async function sendThaw(vsockPath: string): Promise<void> {
   const response = await sendAgentRequest(vsockPath, { op: 'thaw' });
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 // the next frame, or a rejection after `timeoutMs`

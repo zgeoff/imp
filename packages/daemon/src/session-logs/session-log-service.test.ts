@@ -85,14 +85,14 @@ test('it taps a logged session from the start of its ring', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
     buildMockAgentSession({
       name: 'other',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'b'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
     }),
   ]);
 
@@ -142,8 +142,8 @@ test('it ends the log with the final end and exit code when its session exits', 
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -219,8 +219,8 @@ test('it reads the logged bytes from the offset asked for', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -287,8 +287,8 @@ test('it rejects a read past the end of the log', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -376,8 +376,8 @@ test('it taps a dropped tap again from the end of its log', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -409,8 +409,8 @@ test('it taps a dropped tap again from the end of its log', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -464,8 +464,8 @@ test('it leaves a hole for the bytes the ring lost before a tap again', async ()
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -498,8 +498,8 @@ test('it leaves a hole for the bytes the ring lost before a tap again', async ()
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -568,8 +568,8 @@ test('it ends the log without a final end when its session is no longer listed',
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -640,8 +640,8 @@ test('it ends the log with the final end the agent kept when the session is gone
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -670,8 +670,8 @@ test('it ends the log with the final end the agent kept when the session is gone
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -729,8 +729,8 @@ test('it ends the old log and logs the next generation from its first offset whe
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -763,8 +763,8 @@ test('it ends the old log and logs the next generation from its first offset whe
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -834,8 +834,8 @@ test('it closes the tap and removes the log when a live log is deleted', async (
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -896,8 +896,8 @@ test('it never taps a deleted live log again', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -911,8 +911,8 @@ test('it never taps a deleted live log again', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1047,8 +1047,8 @@ test('it ends the live logs of a stopped imp when it sweeps', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1303,8 +1303,8 @@ test.each([
     logs.observe(imp, [
       buildMockAgentSession({
         name: 'main',
-        execution_generation: olderGeneration,
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: olderGeneration,
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ]);
@@ -1339,8 +1339,8 @@ test.each([
     logs.observe(imp, [
       buildMockAgentSession({
         name: 'main',
-        execution_generation: newerGeneration,
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: newerGeneration,
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ]);
@@ -1375,8 +1375,8 @@ test.each([
     logs.observe(imp, [
       buildMockAgentSession({
         name: 'main',
-        execution_generation: 'b'.repeat(32),
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: 'b'.repeat(32),
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ]);
@@ -1444,8 +1444,8 @@ test('it stops the log for a full disk and closes its tap', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1503,8 +1503,8 @@ test('it never taps a log that stopped for a full disk again', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1522,8 +1522,8 @@ test('it never taps a log that stopped for a full disk again', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1574,8 +1574,8 @@ test('it taps a live log on from its end after impd restarts', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1632,8 +1632,8 @@ test('it taps a live log on from its end after impd restarts', async () => {
   restarted.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1687,8 +1687,8 @@ test('it keeps the bytes from before an impd restart in the log it goes on with'
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1743,8 +1743,8 @@ test('it keeps the bytes from before an impd restart in the log it goes on with'
   restarted.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -1893,8 +1893,8 @@ test('it touches neither the disk nor the agent for a session with a hostile gen
   const sessions = generations.map((generation) =>
     buildMockAgentSession({
       name: 'main',
-      execution_generation: generation,
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: generation,
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   );
@@ -1976,8 +1976,8 @@ test('it touches neither the disk nor the agent for a session with a hostile boo
   const sessions = bootIds.map((bootId) =>
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: bootId,
+      executionGeneration: 'a'.repeat(32),
+      bootId,
       log: true,
     }),
   );
@@ -2058,8 +2058,8 @@ test('it touches neither the disk nor the agent for a session with a hostile nam
   const sessions = names.map((name) =>
     buildMockAgentSession({
       name,
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   );
@@ -2207,8 +2207,8 @@ test.each([
     logs.observe(imp, [
       buildMockAgentSession({
         name: 'main',
-        execution_generation: 'a'.repeat(32),
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: 'a'.repeat(32),
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ]);
@@ -2252,8 +2252,8 @@ test.each([
     logs.observe(imp, [
       buildMockAgentSession({
         name: 'main',
-        execution_generation: 'a'.repeat(32),
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: 'a'.repeat(32),
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ]);
@@ -2414,8 +2414,8 @@ test('it logs at most its cap of generations for a forged agent that lists many'
     generations.map((generation) =>
       buildMockAgentSession({
         name: 'main',
-        execution_generation: generation,
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: generation,
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ),
@@ -2475,8 +2475,8 @@ test('it keeps the imp under its limit while its logs roll past their first segm
     generations.map((generation) =>
       buildMockAgentSession({
         name: 'main',
-        execution_generation: generation,
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: generation,
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ),
@@ -2551,8 +2551,8 @@ test('it keeps the imp under its limit while a log grows within one segment', as
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2583,8 +2583,8 @@ test('it keeps the imp under its limit while a log grows within one segment', as
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'b'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2661,8 +2661,8 @@ test('it stops the newest live log once only live logs keep the imp past its lim
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2682,14 +2682,14 @@ test('it stops the newest live log once only live logs keep the imp past its lim
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
     buildMockAgentSession({
       name: 'other',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'b'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2768,8 +2768,8 @@ test('it never taps a log that stopped at the imp limit again', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2787,14 +2787,14 @@ test('it never taps a log that stopped at the imp limit again', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
     buildMockAgentSession({
       name: 'other',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'b'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2812,14 +2812,14 @@ test('it never taps a log that stopped at the imp limit again', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
     buildMockAgentSession({
       name: 'other',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'b'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2869,8 +2869,8 @@ test('it leaves no directory behind for a log being made when the imp is destroy
 
   logs.tapNow(imp, {
     name: 'main',
-    execution_generation: 'a'.repeat(32),
-    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    executionGeneration: 'a'.repeat(32),
+    bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
   });
 
   // the destroy: forget, then remove the imp's directory
@@ -2925,8 +2925,8 @@ test('it writes nothing for work from before a destroy once the imp is moved hom
   // a tap on its way when the imp is destroyed, then moved home at once
   logs.tapNow(imp, {
     name: 'main',
-    execution_generation: 'a'.repeat(32),
-    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    executionGeneration: 'a'.repeat(32),
+    bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
   });
 
   logs.forgetImp(imp.id);
@@ -2936,8 +2936,8 @@ test('it writes nothing for work from before a destroy once the imp is moved hom
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'b'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -2978,8 +2978,8 @@ test('it logs again for an imp moved home under its id after a destroy', async (
 
   logs.tapNow(imp, {
     name: 'main',
-    execution_generation: 'a'.repeat(32),
-    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    executionGeneration: 'a'.repeat(32),
+    bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
   });
 
   logs.forgetImp(imp.id);
@@ -3006,8 +3006,8 @@ test('it logs again for an imp moved home under its id after a destroy', async (
 
   logs.tapNow(imp, {
     name: 'main',
-    execution_generation: 'b'.repeat(32),
-    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    executionGeneration: 'b'.repeat(32),
+    bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
   });
 
   tap.write('home');
@@ -3061,8 +3061,8 @@ test.each([
     logs.observe(imp, [
       buildMockAgentSession({
         name: 'main',
-        execution_generation: 'a'.repeat(32),
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: 'a'.repeat(32),
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ]);
@@ -3093,8 +3093,8 @@ test.each([
     logs.observe(imp, [
       buildMockAgentSession({
         name: 'main',
-        execution_generation: 'a'.repeat(32),
-        boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+        executionGeneration: 'a'.repeat(32),
+        bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
         log: true,
       }),
     ]);
@@ -3176,8 +3176,8 @@ test('it opens no second tap when a tap from before a destroy fails once the imp
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3207,8 +3207,8 @@ test('it opens no second tap when a tap from before a destroy fails once the imp
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3232,8 +3232,8 @@ test('it opens no second tap when a tap from before a destroy fails once the imp
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3284,8 +3284,8 @@ test("it still ends the new life's log once its session is gone after a tap from
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3315,8 +3315,8 @@ test("it still ends the new life's log once its session is gone after a tap from
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3383,8 +3383,8 @@ test("it frees no slot of the imp's next life for a log made across a destroy an
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3413,8 +3413,8 @@ test("it frees no slot of the imp's next life for a log made across a destroy an
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3434,8 +3434,8 @@ test("it frees no slot of the imp's next life for a log made across a destroy an
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3508,8 +3508,8 @@ test("it stops no log of the imp's next life for a limit check held across a des
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3540,8 +3540,8 @@ test("it stops no log of the imp's next life for a limit check held across a des
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3562,8 +3562,8 @@ test("it stops no log of the imp's next life for a limit check held across a des
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3636,8 +3636,8 @@ test("it removes none of the imp's next life's logs for a limit check from befor
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3730,8 +3730,8 @@ test('it closes the tap of a next generation whose log cannot be made', async ()
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3766,8 +3766,8 @@ test('it closes the tap of a next generation whose log cannot be made', async ()
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3822,8 +3822,8 @@ test('it taps a next generation again at the next look once its log can be made'
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3857,8 +3857,8 @@ test('it taps a next generation again at the next look once its log can be made'
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3885,8 +3885,8 @@ test('it taps a next generation again at the next look once its log can be made'
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'b'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'b'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3941,8 +3941,8 @@ test('it never taps a deleted live log again after impd restarts', async () => {
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -3971,8 +3971,8 @@ test('it never taps a deleted live log again after impd restarts', async () => {
   restarted.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);
@@ -4024,8 +4024,8 @@ test('it removes the tombstone of a deleted generation once the agent no longer 
   logs.observe(imp, [
     buildMockAgentSession({
       name: 'main',
-      execution_generation: 'a'.repeat(32),
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      executionGeneration: 'a'.repeat(32),
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
     }),
   ]);

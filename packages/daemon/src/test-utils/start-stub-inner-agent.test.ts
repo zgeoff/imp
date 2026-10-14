@@ -2,6 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
+import { ActivitySchema, PingSchema } from '../agent-client/agent-protocol';
 import { sendActivity, sendAgentRequest, sendPing } from '../agent-client/agent-requests';
 import { startStubInnerAgent } from './start-stub-inner-agent';
 
@@ -25,16 +27,34 @@ test('it reports the inner container it was given in its ping', async () => {
   const path = join(ctx.dir, 'v.sock');
 
   await startStubInnerAgent(path, {
-    inner: { up: false, restarts: 2, last_error: 'exit status 1' },
+    inner: { up: false, restarts: 2, lastError: 'exit status 1' },
     stack: ctx.stack,
   });
 
   const ping = await sendPing(path);
 
-  expect(ping).toStrictEqual({
+  expect(ping).toStrictEqual(
+    create(PingSchema, {
+      ok: true,
+      version: '0.18.0',
+      inner: { up: false, restarts: 2, lastError: 'exit status 1' },
+    }),
+  );
+});
+
+test('it writes an inner container’s zero fields, as the agent does', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  await startStubInnerAgent(path, { inner: { up: false, restarts: 0 }, stack: ctx.stack });
+
+  const response = await sendAgentRequest(path, { op: 'ping' });
+
+  expect(response).toStrictEqual({
     ok: true,
     version: '0.18.0',
-    inner: { up: false, restarts: 2, last_error: 'exit status 1' },
+    inner: { up: false, restarts: 0 },
   });
 });
 
@@ -47,12 +67,9 @@ test('it answers the activity with no connections and no sessions', async () => 
 
   const activity = await sendActivity(path);
 
-  expect(activity).toStrictEqual({
-    tcp_established: 0,
-    exec_sessions: 0,
-    load1: 0,
-    sessions: [],
-  });
+  expect(activity).toStrictEqual(
+    create(ActivitySchema, { tcpEstablished: 0, execSessions: 0, load1: 0, sessions: [] }),
+  );
 });
 
 test('it answers any other op UNKNOWN_OP', async () => {

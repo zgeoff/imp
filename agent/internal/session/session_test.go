@@ -12,7 +12,7 @@ import (
 // Once a viewer got the EXIT, nothing is left to attach to, and the refused
 // viewer gets no frame.
 func TestAttachRefusesASessionWhoseExitAViewerGot(t *testing.T) {
-	s := newSession("job", proto.Request{}, run{})
+	s := newSession("job", &proto.Request{}, run{})
 	s.markDelivered()
 	v := newViewer(nil, nil)
 

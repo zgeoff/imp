@@ -2,12 +2,20 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
 import type { ImpContract } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import {
+  ExitSchema,
+  LogCursorSchema,
+  RequestSchema,
+  ServiceDefSchema,
+  ServiceStatusSchema,
+} from '../agent-client/agent-protocol';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
@@ -177,7 +185,11 @@ test('it sends the agent the service an add names, its env values included', asy
     .map((request) => request.def);
 
   expect(added).toStrictEqual([
-    { name: 'web', argv: ['node', 'server.js'], env: ['PORT=3000', 'TOKEN=s3cret'] },
+    create(ServiceDefSchema, {
+      name: 'web',
+      argv: ['node', 'server.js'],
+      env: ['PORT=3000', 'TOKEN=s3cret'],
+    }),
   ]);
 });
 
@@ -203,7 +215,7 @@ test('it lists an added service with its command, its source, and only its env k
 
   invariant(web);
 
-  agent.services[0] = { ...web, last_exit: { code: 137, signal: 9 } };
+  agent.services[0] = { ...web, lastExit: create(ExitSchema, { code: 137, signal: 9 }) };
 
   const listed = await ctx.client.services.list({ name: 'dev' });
 
@@ -610,7 +622,9 @@ test('it lists the image’s services as root on an agent from before the servic
     stack: ctx.stack,
   });
 
-  agent.services.push({ name: 'dockerd', state: 'running', pid: 212, restarts: 0 });
+  agent.services.push(
+    create(ServiceStatusSchema, { name: 'dockerd', state: 'running', pid: 212, restarts: 0 }),
+  );
 
   const listed = await ctx.client.services.list({ name: 'dev' });
 
@@ -657,12 +671,9 @@ test('it sends one service’s log, 100 lines by default', async () => {
     { type: 'log', service: 'web', text: 'GET /\nGET /favicon.ico\n' },
   ]);
 
-  expect(agent.requests.at(-1)).toStrictEqual({
-    op: 'services.logs',
-    service: 'web',
-    lines: 100,
-    follow: false,
-  });
+  expect(agent.requests.at(-1)).toStrictEqual(
+    create(RequestSchema, { op: 'services.logs', service: 'web', lines: 100, follow: false }),
+  );
 });
 
 test('it shares 10 000 lines among every service’s log', async () => {
@@ -783,7 +794,7 @@ test('it waits out a sleep in a follow without a wake, and goes on from its curs
   expect(asleep.state).toBe('sleeping');
   expect(asleep.lastActiveAt).toStrictEqual(before.lastActiveAt);
   expect(ctx.vmm.wakes).toHaveLength(1);
-  expect(resumed?.cursor).toStrictEqual({ inode: 7, offset: 4 });
+  expect(resumed?.cursor).toStrictEqual(create(LogCursorSchema, { inode: 7, offset: 4 }));
 });
 
 test('it leaves a sleeping imp asleep through a follow', async () => {
@@ -1143,7 +1154,9 @@ test('it lets a list wait out a step that holds a running imp', async () => {
     stack: ctx.stack,
   });
 
-  agent.services.push({ name: 'web', state: 'running', pid: 40, restarts: 0 });
+  agent.services.push(
+    create(ServiceStatusSchema, { name: 'web', state: 'running', pid: 40, restarts: 0 }),
+  );
 
   const timers = buildStubClock();
 

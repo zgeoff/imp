@@ -2,8 +2,10 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
 import { readAgentFixture } from '@imp/test-utils/read-agent-fixture';
 import * as z from 'zod';
+import { PingSchema } from '../agent-client/agent-protocol';
 import { sendPing } from '../agent-client/agent-requests';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
@@ -270,7 +272,7 @@ test('#readGuestUptimeMs asks the agent with a 250 ms deadline', async () => {
   const paths = ctx.createImpDir('vm');
 
   const ping = mock(() =>
-    Promise.resolve({ ok: true as const, version: '0.1.0', uptime_ms: 1350 }),
+    Promise.resolve(create(PingSchema, { ok: true, version: '0.1.0', uptimeMs: 1350 })),
   );
 
   const uptime = await createVmRunner(buildStubJails().jails, null, ping).readGuestUptimeMs(paths);

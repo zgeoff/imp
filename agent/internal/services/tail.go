@@ -49,12 +49,12 @@ func (s *Supervisor) Logs(name string, req LogRequest, w *proto.Writer, done <-c
 	if err != nil {
 		return err
 	}
-	if err := w.WriteJSON(proto.TypeResponse, proto.OK{OK: true}); err != nil {
+	if err := w.WriteMessage(proto.TypeResponse, &proto.OK{Ok: true}); err != nil {
 		cur.close()
 		return err
 	}
 	if req.Cursor != nil {
-		err = sendFromCursor(s.fsys, path, cur, size, *req.Cursor, w)
+		err = sendFromCursor(s.fsys, path, cur, size, req.Cursor, w)
 	} else {
 		err = sendTail(s.fsys, path, cur, size, req.Lines, w)
 	}
@@ -115,7 +115,7 @@ func (lf *logFile) send(end int64, w *proto.Writer) error {
 				return err
 			}
 			lf.offset += int64(k)
-			if err := w.WriteJSON(proto.TypeCursor, proto.LogCursor{Inode: lf.ino, Offset: lf.offset}); err != nil {
+			if err := w.WriteMessage(proto.TypeCursor, &proto.LogCursor{Inode: float64(lf.ino), Offset: float64(lf.offset)}); err != nil {
 				return err
 			}
 		}
@@ -161,10 +161,11 @@ func sendTail(fsys fsroot.FS, path string, cur *logFile, size int64, n int, w *p
 // The cursor names <path> itself, or <path>.1 once a start rotated it
 // there; a file that shrank below it (a copytruncate) starts again from 0.
 // A cursor in neither file is a log rotated past it: <path> goes whole.
-func sendFromCursor(fsys fsroot.FS, path string, cur *logFile, size int64, c proto.LogCursor, w *proto.Writer) error {
-	if cur != nil && cur.ino == c.Inode {
-		if c.Offset <= size {
-			cur.offset = c.Offset
+func sendFromCursor(fsys fsroot.FS, path string, cur *logFile, size int64, c *proto.LogCursor, w *proto.Writer) error {
+	ino, offset := uint64(c.GetInode()), int64(c.GetOffset())
+	if cur != nil && cur.ino == ino {
+		if offset >= 0 && offset <= size {
+			cur.offset = offset
 		}
 		return cur.send(size, w)
 	}
@@ -172,9 +173,9 @@ func sendFromCursor(fsys fsroot.FS, path string, cur *logFile, size int64, c pro
 	if err != nil {
 		return err
 	}
-	if old != nil && old.ino == c.Inode {
-		if c.Offset <= oldSize {
-			old.offset = c.Offset
+	if old != nil && old.ino == ino {
+		if offset >= 0 && offset <= oldSize {
+			old.offset = offset
 		}
 		err = old.send(oldSize, w)
 	}

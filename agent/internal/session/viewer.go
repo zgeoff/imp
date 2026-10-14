@@ -1,11 +1,12 @@
 package session
 
 import (
-	"encoding/json"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
@@ -75,10 +76,10 @@ func (v *viewer) push(f frame) bool {
 	return true
 }
 
-// pushJSON queues a JSON frame. It panics on a value that cannot marshal,
+// pushMessage queues a message frame. It panics on a value that cannot marshal,
 // which is a bug in the caller.
-func (v *viewer) pushJSON(typ proto.Type, value any) bool {
-	return v.push(frame{typ: typ, payload: mustJSON(value)})
+func (v *viewer) pushMessage(typ proto.Type, m protoreflect.ProtoMessage) bool {
+	return v.push(frame{typ: typ, payload: mustMarshal(m)})
 }
 
 // stop ends the viewer once the queue is out. last, if not nil, is the final
@@ -183,8 +184,8 @@ func (v *viewer) finish(last *frame) {
 	_ = v.conn.SetReadDeadline(time.Now().Add(exitLinger))
 }
 
-func mustJSON(value any) []byte {
-	b, err := json.Marshal(value)
+func mustMarshal(m protoreflect.ProtoMessage) []byte {
+	b, err := proto.Marshal(m)
 	if err != nil {
 		panic(err)
 	}

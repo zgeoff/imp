@@ -1,6 +1,11 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreDependencies": ["@stylistic/eslint-plugin", "@zgeoff/oxlint-config"],
+  // protoc-gen-es is a plugin buf.gen.yaml runs
+  "ignoreDependencies": [
+    "@stylistic/eslint-plugin",
+    "@zgeoff/oxlint-config",
+    "@bufbuild/protoc-gen-es"
+  ],
   // POSIX tools the tests run through Bun's shell, and the Go toolchain's
   // gofmt, which the go:fmt-vet pre-push job runs
   "ignoreBinaries": ["mkfifo", "gofmt"],
@@ -8,7 +13,13 @@
     ".": {
       // run-related-tests.ts is a synced CLI that test:related reaches through
       // run-branch-tests.ts; its other exports serve the tests in zgeoff/tools
-      "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts", "scripts/ci/run-related-tests.ts"],
+      "entry": [
+        "test/e2e/main.ts",
+        "test/e2e/suites/*.e2e.ts",
+        "scripts/ci/run-related-tests.ts",
+        // a protoc plugin buf.gen.yaml runs
+        "scripts/proto/protoc-gen-protocol-reference.ts"
+      ],
       "project": [
         "test/**/*.ts",
         "scripts/**/*.ts",
@@ -27,8 +38,12 @@
       // test runs in a child Bun
       "entry": ["src/docker-proxy/main.ts", "src/**/*.pebble.ts", "src/test-utils/run-*.ts"],
       "project": ["src/**/*.ts"],
-      // kysely-codegen writes a type for every table, used or not
-      "ignoreIssues": { "src/db/schema.ts": ["types"] }
+      // kysely-codegen and protoc-gen-es write every table and message,
+      // used or not
+      "ignoreIssues": {
+        "src/db/schema.ts": ["types"],
+        "src/agent-client/gen/**": ["exports", "types"]
+      }
     },
     "packages/dashboard": {
       "entry": ["augment-bun-test.ts", "e2e/*.e2e.ts"],

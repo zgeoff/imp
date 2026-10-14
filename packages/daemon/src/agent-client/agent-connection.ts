@@ -1,10 +1,9 @@
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
-import type * as z from 'zod';
+import type { JsonValue } from '@bufbuild/protobuf';
 import { requireSocket } from '../vmm/vm-files';
-import type { AgentRequest, AgentResizeSchema, AgentSignalSchema } from './agent-protocol';
 import { createFrameDecoder, encodeFrame, encodeJsonFrame } from './frame-codec';
-import type { AgentFrame, FRAME_TYPES, FrameType } from './frame-codec';
+import type { AgentFrame, FrameType } from './frame-codec';
 
 const AGENT_PORT = 1024;
 
@@ -18,12 +17,8 @@ const RESUME_FRAMES = 16;
 export interface AgentConnection {
   readonly send: (type: FrameType, payload?: Uint8Array) => void;
 
-  // the JSON frames the host sends, each with its payload's type
-  readonly sendJson: {
-    (type: typeof FRAME_TYPES.request, value: Readonly<AgentRequest>): void;
-    (type: typeof FRAME_TYPES.resize, value: Readonly<z.input<typeof AgentResizeSchema>>): void;
-    (type: typeof FRAME_TYPES.signal, value: Readonly<z.input<typeof AgentSignalSchema>>): void;
-  };
+  // a JSON frame: a message encodeAgentMessage made, of the frame's type
+  readonly sendJson: (type: FrameType, value: JsonValue) => void;
 
   // resolves once what was sent fits under the socket's buffer limit again,
   // or the socket closed: a sender that waits for it never buffers without
@@ -213,7 +208,7 @@ function buildConnection(socket: Socket, leftover: Uint8Array): AgentConnection 
         socket.write(encodeFrame(type, payload));
       }
     },
-    sendJson: (type: FrameType, value: unknown) => {
+    sendJson: (type, value) => {
       if (!socket.destroyed) {
         socket.write(encodeJsonFrame(type, value));
       }

@@ -2,6 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
+import { PingSchema } from '../agent-client/agent-protocol';
 import { sendClaim, sendPing } from '../agent-client/agent-requests';
 import { startStubParkedAgent } from './start-stub-parked-agent';
 
@@ -20,7 +22,9 @@ test('it answers a ping as a parked template guest a minute old', async () => {
 
   const ping = await sendPing(join(ctx.dir, 'v.sock'));
 
-  expect(ping).toStrictEqual({ ok: true, version: '0.1.0', uptime_ms: 60_000, stage: 'template' });
+  expect(ping).toStrictEqual(
+    create(PingSchema, { ok: true, version: '0.1.0', uptimeMs: 60_000, stage: 'template' }),
+  );
 });
 
 test('it answers a ping as a booted imp once claimed', async () => {

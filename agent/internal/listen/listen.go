@@ -96,47 +96,47 @@ type listener struct {
 	inTmpfs bool
 
 	mu      sync.Mutex
-	next    uint64
-	pending map[uint64]net.Conn
+	next    uint32
+	pending map[uint32]net.Conn
 	closed  bool
 }
 
 // ServeAgent serves an agent.listen connection: a socket for SSH_AUTH_SOCK
 // in a directory of its own.
 func (m *Manager) ServeAgent(r *proto.Reader, w *proto.Writer) error {
-	return m.serve(r, w, func(l *listener) (proto.Listening, error) {
+	return m.serve(r, w, func(l *listener) (*proto.Listening, error) {
 		return m.openOwn(l, m.agentRoot, agentSocket)
 	})
 }
 
 // Serve serves a listen connection: a unix socket at the path asked for, or
 // in a directory of its own for no path, or a port on 127.0.0.1.
-func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
+func (m *Manager) Serve(req *proto.Request, r *proto.Reader, w *proto.Writer) error {
 	switch {
-	case req.Network == "unix" && req.Address == "":
-		return m.serve(r, w, func(l *listener) (proto.Listening, error) {
+	case req.GetNetwork() == "unix" && req.GetAddress() == "":
+		return m.serve(r, w, func(l *listener) (*proto.Listening, error) {
 			return m.openOwn(l, m.forwardRoot, forwardSocket)
 		})
-	case req.Network == "unix" || req.Network == "tcp":
-		return m.serve(r, w, func(l *listener) (proto.Listening, error) {
-			return m.openBound(l, req.Network, req.Address)
+	case req.GetNetwork() == "unix" || req.GetNetwork() == "tcp":
+		return m.serve(r, w, func(l *listener) (*proto.Listening, error) {
+			return m.openBound(l, req.GetNetwork(), req.GetAddress())
 		})
 	default:
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: &proto.Error{
 			Code:    proto.ErrBadRequest,
-			Message: fmt.Sprintf("network must be tcp or unix, got %q", req.Network),
+			Message: fmt.Sprintf("network must be tcp or unix, got %q", req.GetNetwork()),
 		}})
 	}
 }
 
 // serve opens a listener, replies with where it listens, then announces each
 // client until the host closes the connection. What it made goes with it.
-func (m *Manager) serve(r *proto.Reader, w *proto.Writer, open func(*listener) (proto.Listening, error)) error {
+func (m *Manager) serve(r *proto.Reader, w *proto.Writer, open func(*listener) (*proto.Listening, error)) error {
 	id, err := randomID()
 	if err != nil {
 		return replyErr(w, err)
 	}
-	l := &listener{id: id, w: w, pending: map[uint64]net.Conn{}}
+	l := &listener{id: id, w: w, pending: map[uint32]net.Conn{}}
 	resp, err := open(l)
 	if err != nil {
 		return replyErr(w, err)
@@ -146,8 +146,8 @@ func (m *Manager) serve(r *proto.Reader, w *proto.Writer, open func(*listener) (
 	m.mu.Unlock()
 	defer m.close(l)
 
-	resp.OK, resp.Listener = true, id
-	if err := w.WriteJSON(proto.TypeResponse, resp); err != nil {
+	resp.Ok, resp.Listener = true, id
+	if err := w.WriteMessage(proto.TypeResponse, resp); err != nil {
 		return err
 	}
 
@@ -180,28 +180,28 @@ func replyErr(w *proto.Writer, err error) error {
 	if !errors.As(err, &pe) {
 		pe = &proto.Error{Code: proto.ErrInternal, Message: err.Error()}
 	}
-	return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: pe})
+	return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: pe})
 }
 
 // Accept serves an agent.accept connection: it takes the client the host
 // named and relays it. A client already closed or timed out is NO_CONNECTION.
-func (m *Manager) Accept(req proto.Request, r *proto.Reader, w *proto.Writer) error {
+func (m *Manager) Accept(req *proto.Request, r *proto.Reader, w *proto.Writer) error {
 	m.mu.Lock()
-	l := m.listeners[req.Listener]
+	l := m.listeners[req.GetListener()]
 	m.mu.Unlock()
 
 	var c net.Conn
 	if l != nil {
-		c = l.take(req.Connection)
+		c = l.take(req.GetConnection())
 	}
 	if c == nil {
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: &proto.Error{
 			Code:    proto.ErrNoConnection,
-			Message: fmt.Sprintf("no waiting connection %d on listener %q", req.Connection, req.Listener),
+			Message: fmt.Sprintf("no waiting connection %d on listener %q", req.GetConnection(), req.GetListener()),
 		}})
 	}
 	defer c.Close()
-	if err := w.WriteJSON(proto.TypeResponse, proto.OK{OK: true}); err != nil {
+	if err := w.WriteMessage(proto.TypeResponse, &proto.OK{Ok: true}); err != nil {
 		return err
 	}
 	return dial.Relay(c, r, w)
@@ -222,23 +222,23 @@ func (m *Manager) lookupUser() (uid, gid uint32, err error) {
 // root and handed to the user last, so nobody else can reach the socket in
 // between. Every path resolves in the user's root; the bind goes through
 // the directory's own fd, so a symlink planted on the way cannot move it.
-func (m *Manager) openOwn(l *listener, root, name string) (proto.Listening, error) {
+func (m *Manager) openOwn(l *listener, root, name string) (*proto.Listening, error) {
 	uid, gid, err := m.lookupUser()
 	if err != nil {
-		return proto.Listening{}, err
+		return nil, err
 	}
 	if err := m.fsys.MkdirAll(root, 0o755); err != nil {
-		return proto.Listening{}, err
+		return nil, err
 	}
 	dir := filepath.Join(root, l.id)
 	if err := m.fsys.MkdirAll(dir, 0o700); err != nil {
-		return proto.Listening{}, err
+		return nil, err
 	}
 	path := filepath.Join(dir, name)
 	ln, err := m.listenOwn(l, path, dir, name, uid, gid)
 	if err != nil {
 		_ = m.fsys.RemoveAll(dir)
-		return proto.Listening{}, err
+		return nil, err
 	}
 	l.ln, l.checkPeer, l.uid = ln, true, uid
 	// the directory goes as a whole when the listener closes; a container
@@ -248,7 +248,7 @@ func (m *Manager) openOwn(l *listener, root, name string) (proto.Listening, erro
 			log.Printf("listen: remove %s: %v", dir, err)
 		}
 	}
-	return proto.Listening{Path: path}, nil
+	return &proto.Listening{Path: new(path)}, nil
 }
 
 func (m *Manager) listenOwn(l *listener, path, dir, name string, uid, gid uint32) (net.Listener, error) {
@@ -310,22 +310,22 @@ func onTmpfs(fd int) bool {
 }
 
 // openBound binds network and address as the image's user.
-func (m *Manager) openBound(l *listener, network, address string) (proto.Listening, error) {
+func (m *Manager) openBound(l *listener, network, address string) (*proto.Listening, error) {
 	uid, _, err := m.lookupUser()
 	if err != nil {
-		return proto.Listening{}, err
+		return nil, err
 	}
 	b, err := m.binder.Listen(network, address)
 	if err != nil {
-		return proto.Listening{}, err
+		return nil, err
 	}
 	l.ln, l.checkPeer, l.uid = b.Listener, network == "unix", uid
 	l.inTmpfs = network == "unix" && onTmpfs(b.Dir)
 	l.cleanup = b.Close
 	if network == "tcp" {
-		return proto.Listening{Port: b.Port}, nil
+		return &proto.Listening{Port: new(uint32(b.Port))}, nil
 	}
-	return proto.Listening{Path: filepath.Clean(address)}, nil
+	return &proto.Listening{Path: new(filepath.Clean(address))}, nil
 }
 
 // close ends the listener, its waiting clients and what it made. Relayed
@@ -366,7 +366,7 @@ func (l *listener) serve() error {
 			c.Close()
 			continue
 		}
-		if err := l.w.WriteJSON(proto.TypeConnection, proto.Connection{ID: id}); err != nil {
+		if err := l.w.WriteMessage(proto.TypeConnection, &proto.Connection{Id: id}); err != nil {
 			return err
 		}
 	}
@@ -394,7 +394,7 @@ func (l *listener) allows(c net.Conn) bool {
 }
 
 // add parks a client for agent.accept, unless maxPending already wait.
-func (l *listener) add(c net.Conn) (uint64, bool) {
+func (l *listener) add(c net.Conn) (uint32, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed || len(l.pending) >= maxPending {
@@ -411,7 +411,7 @@ func (l *listener) add(c net.Conn) (uint64, bool) {
 	return id, true
 }
 
-func (l *listener) take(id uint64) net.Conn {
+func (l *listener) take(id uint32) net.Conn {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	c := l.pending[id]

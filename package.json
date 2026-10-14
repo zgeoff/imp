@@ -11,6 +11,7 @@
     "catalog": {
       "@ark-ui/react": "5.37.2",
       "@balena/dockerignore": "1.0.2",
+      "@bufbuild/protobuf": "2.16.0",
       "@commitlint/cli": "21.2.0",
       "@faker-js/faker": "10.6.0",
       "@msw/data": "1.1.8",
@@ -84,6 +85,7 @@
     "render:deploy": "bun scripts/render/render-imp-host.ts",
     "render:protocol": "bun scripts/render-protocol-schema.ts",
     "render:db-schema": "bun packages/daemon/src/db/render-schema.ts",
+    "gen:proto": "buf lint && buf generate && oxfmt docs/reference/agent-protocol.md",
     "lint:shell": "./scripts/ci/shellcheck.sh",
     "test": "bun test",
     "check": "bun run deadcode && bun run format:check && bun run lint:full && bun run lint:docs && bun run typecheck && bun test",
@@ -99,6 +101,9 @@
     "test:related": "bun scripts/ci/run-branch-tests.ts"
   },
   "devDependencies": {
+    "@bufbuild/buf": "1.73.0",
+    "@bufbuild/protobuf": "catalog:",
+    "@bufbuild/protoc-gen-es": "2.16.0",
     "@commitlint/cli": "catalog:",
     "@faker-js/faker": "catalog:",
     "@imp/test-utils": "workspace:*",

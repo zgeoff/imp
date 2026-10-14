@@ -61,6 +61,55 @@
           { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
           // the Kysely handle above under its schema-bound aliases
           { "from": "file", "name": ["ImpDatabase", "ImpQueries"] },
+          // protobuf-es descriptors, JSON values and messages, which its API
+          // types as mutable; the agent client only reads them
+          {
+            "from": "package",
+            "name": [
+              "DescMessage",
+              "DescFile",
+              "DescField",
+              "JsonObject",
+              "JsonValue",
+              "Message",
+              "MessageInit",
+              "MessageInitShape"
+            ],
+            "package": "@bufbuild/protobuf"
+          },
+          // the agent protocol's generated messages, mutable for the same reason
+          {
+            "from": "file",
+            "name": [
+              "Activity",
+              "ErrorData",
+              "InnerStatus",
+              "LogCursor",
+              "Ping",
+              "Previous",
+              "Request",
+              "Resume",
+              "ResumeFrom",
+              "ServiceDef",
+              "ServiceStatus",
+              "ServicesList",
+              "SessionInfo",
+              "Started"
+            ],
+            "path": "packages/daemon/src/agent-client/gen/imp/agent/v1/agent_pb.ts"
+          },
+          // a request to the agent, and a session impd saw: generated messages
+          // under the names impd gives them
+          {
+            "from": "file",
+            "name": "AgentRequest",
+            "path": "packages/daemon/src/agent-client/agent-requests.ts"
+          },
+          {
+            "from": "file",
+            "name": "SeenSession",
+            "path": "packages/daemon/src/sessions/session-cache.ts"
+          },
           // tar-stream's live pack and extract streams, which `imp cp` drives
           { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },
           // a live socket or listener; reading and writing it is the point
@@ -683,5 +732,12 @@
   ],
   // .claude/** holds the skill-gate hook, which repo-sync delivers from
   // zgeoff/tools: a fix lands upstream, never here
-  "ignorePatterns": [".claude/**", ".cache/**", "kernel/**", "agent/**"]
+  "ignorePatterns": [
+    ".claude/**",
+    ".cache/**",
+    "kernel/**",
+    "agent/**",
+    // protoc-gen-es output (bun run gen:proto)
+    "packages/daemon/src/agent-client/gen/**"
+  ]
 }

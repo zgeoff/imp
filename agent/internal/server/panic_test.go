@@ -24,7 +24,7 @@ func quietLog(t *testing.T) {
 func TestHandleRepliesInternalToAUnaryRequestThatPanics(t *testing.T) {
 	quietLog(t)
 
-	resp := roundTrip(t, &Server{}, proto.Request{Op: proto.OpServicesList})
+	resp := roundTrip(t, &Server{}, &proto.Request{Op: proto.OpServicesList})
 
 	assert.Equal(t, errorCode(t, resp), proto.ErrInternal)
 }
@@ -34,7 +34,7 @@ func TestHandleRepliesInternalToAUnaryRequestThatPanics(t *testing.T) {
 func TestHandleClosesTheConnectionOfAStreamRequestThatPanics(t *testing.T) {
 	quietLog(t)
 
-	resp := roundTrip(t, &Server{}, proto.Request{Op: proto.OpExec, Argv: []string{"true"}})
+	resp := roundTrip(t, &Server{}, &proto.Request{Op: proto.OpExec, Argv: []string{"true"}})
 
 	assert.Check(t, cmp.Nil(resp), "exec reply %s, want a closed connection", resp)
 }

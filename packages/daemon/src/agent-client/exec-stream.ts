@@ -1,3 +1,4 @@
+import { isMessage } from '@bufbuild/protobuf';
 import type {
   ExecRequirement,
   PreviousGeneration,
@@ -5,25 +6,24 @@ import type {
   ResumeResult,
   SessionOutput,
 } from '@imp/api';
-import type * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { buildAgentOutdatedError, handleUnknownOp } from './agent-outdated';
 import {
-  AgentExitSchema,
   DetachedSchema,
-  InvalidResumeDataSchema,
-  NoSessionDataSchema,
+  ErrorDataSchema,
+  ExitSchema,
+  ResizeSchema,
+  SignalSchema,
   StartedSchema,
 } from './agent-protocol';
-import type {
-  AgentPreviousSchema,
-  AgentRequestSchemas,
-  AgentResumeSchema,
-  AgentStarted,
-} from './agent-protocol';
-import { readFrameWithin, requireNoAgentError } from './agent-requests';
+import type { Previous, Resume, Started } from './agent-protocol';
+import { readFrameWithin, requireNoAgentError, sendRequestFrame } from './agent-requests';
+import type { AgentRequest } from './agent-requests';
+import { decodeAgentMessage } from './decode-agent-message';
+import { encodeAgentMessage } from './encode-agent-message';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
+import { hasAgentNameForms } from './has-agent-name-forms';
 
 export interface AgentExecRequest {
   readonly argv: readonly string[];
@@ -123,7 +123,7 @@ export async function openExecStream(
   request: Readonly<AgentExecRequest>,
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
-  const { killGraceMs, resumeFrom, outer, require: _checked, ...rest } = request;
+  const { argv, env, resumeFrom, outer, require: _checked, ...rest } = request;
   const op = outer === true ? 'exec.outer' : 'exec';
 
   const opening = openStream(
@@ -131,8 +131,9 @@ export async function openExecStream(
     {
       op,
       ...rest,
-      ...(killGraceMs !== undefined && { kill_grace_ms: killGraceMs }),
-      ...(resumeFrom !== undefined && { resume_from: toAgentResumeFrom(resumeFrom) }),
+      argv: [...argv],
+      ...(env !== undefined && { env: [...env] }),
+      ...(resumeFrom !== undefined && { resumeFrom }),
     },
     startTimeoutMs,
   );
@@ -163,7 +164,7 @@ export function openTapStream(
     {
       op: 'session.tap',
       session,
-      ...(resumeFrom !== undefined && { resume_from: toAgentResumeFrom(resumeFrom) }),
+      ...(resumeFrom !== undefined && { resumeFrom }),
     },
     startTimeoutMs,
   ).catch(handleUnknownOp('session-log'));
@@ -184,30 +185,24 @@ export function openAttachStream(
     {
       op: 'session.attach',
       ...rest,
-      ...(resumeFrom !== undefined && { resume_from: toAgentResumeFrom(resumeFrom) }),
+      ...(resumeFrom !== undefined && { resumeFrom }),
     },
     startTimeoutMs,
   ).catch(handleUnknownOp('sessions'));
 }
 
-// the requests that start an exec stream
-type AgentStreamRequest = z.input<
-  | typeof AgentRequestSchemas.exec
-  | typeof AgentRequestSchemas.tap
-  | typeof AgentRequestSchemas.attach
->;
-
 async function openStream(
   vsockPath: string,
-  request: Readonly<AgentStreamRequest>,
+  request: AgentRequest,
   startTimeoutMs: number,
 ): Promise<ExecStream> {
   const connection = await openAgentConnection(vsockPath);
 
-  let started: AgentStarted;
+  let started: Started;
+  let output: SessionOutput | null;
 
   try {
-    connection.sendJson(FRAME_TYPES.request, request);
+    sendRequestFrame(connection, request);
 
     const first = await readFrameWithin(connection, startTimeoutMs);
 
@@ -221,7 +216,15 @@ async function openStream(
       throw new Error(`agent exec: expected STARTED, got frame type ${String(first.type)}`);
     }
 
-    started = StartedSchema.parse(decodeJsonPayload(first));
+    started = decodeAgentMessage(StartedSchema, decodeJsonPayload(first));
+
+    if (!hasAgentNameForms(started)) {
+      throw new Error(
+        'agent exec: STARTED names a session, generation or boot the agent never makes',
+      );
+    }
+
+    output = toSessionOutput(started);
   } catch (error) {
     connection.close();
     throw toApiAgentError(error);
@@ -231,8 +234,8 @@ async function openStream(
     pid: started.pid,
     session: started.session ?? null,
     created: started.created ?? false,
-    groupKill: (started.kill_grace_ms ?? 0) > 0,
-    output: toSessionOutput(started),
+    groupKill: (started.killGraceMs ?? 0) > 0,
+    output,
     writeStdin: (data) => {
       connection.send(FRAME_TYPES.stdin, data);
     },
@@ -241,10 +244,10 @@ async function openStream(
       connection.send(FRAME_TYPES.stdinEof);
     },
     resize: (cols, rows) => {
-      connection.sendJson(FRAME_TYPES.resize, { cols, rows });
+      connection.sendJson(FRAME_TYPES.resize, encodeAgentMessage(ResizeSchema, { cols, rows }));
     },
     sendSignal: (signal) => {
-      connection.sendJson(FRAME_TYPES.signal, { signal });
+      connection.sendJson(FRAME_TYPES.signal, encodeAgentMessage(SignalSchema, { signal }));
     },
     events: () => readExecEvents(connection),
     close: connection.close,
@@ -266,13 +269,13 @@ async function* readExecEvents(
 
       yield { type, data: frame.payload };
     } else if (frame.type === FRAME_TYPES.exit) {
-      const exit = AgentExitSchema.parse(decodeJsonPayload(frame));
+      const exit = decodeAgentMessage(ExitSchema, decodeJsonPayload(frame));
 
       yield { type: 'exit', code: exit.code, signal: exit.signal };
 
       return;
     } else if (frame.type === FRAME_TYPES.detached) {
-      const detached = DetachedSchema.parse(decodeJsonPayload(frame));
+      const detached = decodeAgentMessage(DetachedSchema, decodeJsonPayload(frame));
 
       yield { type: 'detached', reason: detached.reason };
 
@@ -281,12 +284,8 @@ async function* readExecEvents(
   }
 }
 
-function toAgentResumeFrom(resumeFrom: Readonly<ResumeFrom>) {
-  return { execution_generation: resumeFrom.executionGeneration, offset: resumeFrom.offset };
-}
-
 // a session from an agent without offsets replays as before
-function toSessionOutput(started: AgentStarted): SessionOutput | null {
+function toSessionOutput(started: Started): SessionOutput | null {
   if (started.session === undefined) {
     return null;
   }
@@ -299,9 +298,9 @@ function toSessionOutput(started: AgentStarted): SessionOutput | null {
 
   return {
     continuity: 'offsets',
-    bootId: output.boot_id,
-    executionGeneration: output.execution_generation,
-    bufferStart: output.buffer_start,
+    bootId: output.bootId,
+    executionGeneration: output.executionGeneration,
+    bufferStart: output.bufferStart,
     end: output.end,
     offset: output.offset,
     prelude: output.prelude,
@@ -312,30 +311,46 @@ function toSessionOutput(started: AgentStarted): SessionOutput | null {
   };
 }
 
-function toResume(resume: z.infer<typeof AgentResumeSchema>): ResumeResult {
-  if (resume.kind === 'generation_changed') {
+// a kind this impd does not know, or one without its fields, throws: the
+// data that follows has no place it can name
+function toResume(resume: Resume): ResumeResult {
+  if (resume.kind === 'exact') {
+    return { kind: 'exact' };
+  }
+
+  if (resume.kind === 'gap' && resume.from !== undefined && resume.to !== undefined) {
+    return { kind: 'gap', from: resume.from, to: resume.to };
+  }
+
+  if (
+    resume.kind === 'generation_changed' &&
+    resume.executionGeneration !== undefined &&
+    resume.firstOffset !== undefined
+  ) {
     return {
       kind: 'generation_changed',
-      executionGeneration: resume.execution_generation,
-      firstOffset: resume.first_offset,
+      executionGeneration: resume.executionGeneration,
+      firstOffset: resume.firstOffset,
     };
   }
 
-  return resume;
+  throw new Error(`agent exec: a resume of kind ${JSON.stringify(resume.kind)} without its fields`);
 }
 
 // exitCode is null when a signal ended the process, as an API exit's code
-function toPrevious(previous: z.infer<typeof AgentPreviousSchema>): PreviousGeneration {
+function toPrevious(previous: Previous): PreviousGeneration {
+  const exit = previous.exit ?? { code: 0, signal: 0 };
+
   return {
-    executionGeneration: previous.execution_generation,
+    executionGeneration: previous.executionGeneration,
     end: previous.end,
-    exitCode: previous.exit.signal === 0 ? previous.exit.code : null,
+    exitCode: exit.signal === 0 ? exit.code : null,
   };
 }
 
 // The agent's error data in the API's shape: NO_SESSION's (coldBoots is
-// impd's to add) and INVALID_RESUME's. Data an older agent lacks, or that
-// does not parse, goes.
+// impd's to add) and INVALID_RESUME's. Data an older agent lacks, that lacks
+// its code's fields, or whose names lack their agent's form, goes.
 function toApiAgentError(error: unknown): unknown {
   if (!(error instanceof AgentError) || error.data === undefined) {
     return error;
@@ -345,28 +360,20 @@ function toApiAgentError(error: unknown): unknown {
 }
 
 function toApiErrorData(code: string, data: unknown): unknown {
-  if (code === 'NO_SESSION') {
-    const parsed = NoSessionDataSchema.safeParse(data);
+  if (!isMessage(data, ErrorDataSchema) || !hasAgentNameForms(data)) {
+    return undefined;
+  }
 
-    if (!parsed.success) {
-      return undefined;
-    }
-
-    const previous = parsed.data.previous;
-
+  if (code === 'NO_SESSION' && data.bootId !== undefined) {
     return {
-      bootId: parsed.data.boot_id,
+      bootId: data.bootId,
       coldBoots: [],
-      ...(previous !== undefined && { previous: toPrevious(previous) }),
+      ...(data.previous !== undefined && { previous: toPrevious(data.previous) }),
     };
   }
 
-  if (code === 'INVALID_RESUME') {
-    const parsed = InvalidResumeDataSchema.safeParse(data);
-
-    return parsed.success
-      ? { end: parsed.data.end, bufferStart: parsed.data.buffer_start }
-      : undefined;
+  if (code === 'INVALID_RESUME' && data.end !== undefined && data.bufferStart !== undefined) {
+    return { end: data.end, bufferStart: data.bufferStart };
   }
 
   return undefined;

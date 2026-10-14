@@ -17,13 +17,13 @@ import (
 func TestServicesOpsReplyWithTheSupervisorsErrorCode(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		req  proto.Request
+		req  *proto.Request
 		code string
 	}{
-		{name: "add without a definition", req: proto.Request{Op: proto.OpServicesAdd}, code: proto.ErrBadRequest},
-		{name: "remove of no service", req: proto.Request{Op: proto.OpServicesRemove, Service: "imp-test-none"}, code: proto.ErrNoService},
-		{name: "restart of no service", req: proto.Request{Op: proto.OpServicesRestart, Service: "imp-test-none"}, code: proto.ErrNoService},
-		{name: "logs of no service", req: proto.Request{Op: proto.OpServicesLogs, Service: "imp-test-none", Lines: 10}, code: proto.ErrNoService},
+		{name: "add without a definition", req: &proto.Request{Op: proto.OpServicesAdd}, code: proto.ErrBadRequest},
+		{name: "remove of no service", req: &proto.Request{Op: proto.OpServicesRemove, Service: new("imp-test-none")}, code: proto.ErrNoService},
+		{name: "restart of no service", req: &proto.Request{Op: proto.OpServicesRestart, Service: new("imp-test-none")}, code: proto.ErrNoService},
+		{name: "logs of no service", req: &proto.Request{Op: proto.OpServicesLogs, Service: new("imp-test-none"), Lines: new(uint32(10))}, code: proto.ErrNoService},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// the supervisor's paths resolve in a root of the test's own,

@@ -1,0 +1,8 @@
+# The agent protocol's schema (proto/imp/agent/v1/agent.proto); `bun run
+# gen:proto` lints it and writes the code and the reference from it.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD

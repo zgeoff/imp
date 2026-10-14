@@ -25,11 +25,11 @@ const MaxKillGrace = 60 * time.Second
 // killGrace is the request's kill grace, clamped to MaxKillGrace; 0 (off)
 // for a tty exec, whose group belongs to its terminal and is not the
 // host's to sweep.
-func killGrace(req proto.Request) time.Duration {
-	if req.TTY || req.KillGraceMs <= 0 {
+func killGrace(req *proto.Request) time.Duration {
+	if req.GetTty() || req.GetKillGraceMs() == 0 {
 		return 0
 	}
-	return min(time.Duration(req.KillGraceMs)*time.Millisecond, MaxKillGrace)
+	return min(time.Duration(req.GetKillGraceMs())*time.Millisecond, MaxKillGrace)
 }
 
 // isStopSignal reports whether a host signal asks the command to stop. Only

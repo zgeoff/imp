@@ -1,5 +1,5 @@
 import { readErrorMessage } from '../read-error-message';
-import type { AgentPing } from './agent-protocol';
+import type { Ping } from './agent-protocol';
 import { sendPing } from './agent-requests';
 
 export interface WaitOptions {
@@ -21,7 +21,7 @@ export interface WaitOptions {
 export async function waitForAgent(
   vsockPath: string,
   options: Readonly<WaitOptions>,
-): Promise<AgentPing> {
+): Promise<Ping> {
   const deadline = Date.now() + options.deadlineMs;
   const maxDelay = options.maxDelayMs ?? 100;
   let delay = options.firstDelayMs ?? 5;

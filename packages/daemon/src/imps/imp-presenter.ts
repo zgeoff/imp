@@ -168,7 +168,7 @@ export function createImpPresenter(
       api.inner = {
         up: inner.up,
         restarts: inner.restarts,
-        ...(inner.last_error !== undefined && { lastError: inner.last_error }),
+        ...(inner.lastError !== undefined && { lastError: inner.lastError }),
       };
     }
 

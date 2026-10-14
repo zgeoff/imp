@@ -3,8 +3,9 @@
 impd talks to each guest agent over vsock. Firecracker exposes the guest's vsock as a unix socket in
 the imp's directory, and impd reaches the agent by connecting to it and asking for the agent's port.
 The guest's network carries none of it, so a guest firewall, a broken network or an egress policy
-never cuts impd off from the agent. The Go side is `agent/internal/proto`, and the host side is the
-agent client in impd.
+never cuts impd off from the agent. One protobuf schema, `proto/imp/agent/v1/agent.proto`, defines
+every message, and both sides use the types generated from it: the Go side is
+`agent/internal/proto`, and the host side is the agent client in impd.
 
 ## One request per connection
 
@@ -25,20 +26,40 @@ has a size cap, and larger data goes as several frames. The kinds of request fal
   new connection that impd accepts.
 - **Readers**: a service's log, which resumes from a cursor, and a tap on a logged session.
 
-The protocol's reference is the code: the frame types and the request and error shapes are in the
-`proto` package and the agent client.
+## The schema
+
+Each message body is the proto3 JSON form of a message in the schema, under the schema's field
+names, so a frame stays readable in a dump. Protobuf covers only the bodies: the frame types, the
+length prefix and the size cap stay hand-written in each side's frame codec, and so do the op names
+and error codes, which the schema lists in its comments. `bun run gen:proto` lints the schema and
+writes the Go types, impd's TypeScript types and the
+[protocol reference](../../reference/agent-protocol.md), and CI fails when the committed output
+differs from what the schema generates.
+
+Two rules keep the JSON that every agent version sends and reads, so an older agent works with a
+newer impd. A 64-bit count, such as a byte offset, a disk size or a time in Unix milliseconds, is a
+`double`: proto3 JSON writes an `int64` as a string, which an older agent refuses in a request,
+while a `double` stays a JSON number and is exact up to 2^53, the most impd's JavaScript holds
+anyway. A field the sender leaves out when it has nothing to say is `optional`, so its presence
+carries meaning, such as the kill grace in `STARTED` that tells impd the agent kills a stopped
+command's group. The agent writes every other field even at its zero, and impd leaves a zero out,
+which an agent reads as zero.
+
+Each side reads past a field it does not know, because a newer peer may send one, and refuses a
+field of the wrong type.
 
 ## Contract tests
 
-Tests on both sides hold the protocol to JSON fixtures in the agent's `contract` package, so a field
-that one side adds alone fails a test before it reaches a guest. The agent's Go tests write one
-fixture for each message the agent sends, set every field of every type in at least one of them, and
-list the frame types, the error codes and the limits impd copies. impd's tests parse each of those
-fixtures with the schemas it reads them through, and fail when a schema drops a field or reads one
-that no fixture sets. In the other direction, the fixtures hold one request for each op, the kernel
-command line, the image config and the tar tool's arguments as impd builds them. impd's tests check
-that it builds each one, and the Go tests check that the agent decodes each one with no field left
-over and every field set.
+Tests on both sides hold the protocol to JSON fixtures in the agent's `contract` package, so a
+change in what one side writes fails a test before it reaches a guest. The agent's Go tests write
+one fixture for each message the agent sends, with the agent's own writer, set every field of every
+message in at least one of them, and list the frame types, the error codes and the limits impd
+copies. impd's tests decode each of those fixtures with the generated types, refusing a field the
+schema lacks, write it back to the same JSON, and fail when a field of the schema appears in no
+fixture. In the other direction, the fixtures hold one request for each op, the kernel command line,
+the image config and the tar tool's arguments as impd builds them. impd's tests check that its
+writer gives each request's JSON, and the Go tests check that the agent decodes each one with no
+field left over and every field set.
 
 `go test ./internal/contract -run GuestFixtures -write`, run from `agent/`, writes the agent's
 fixtures again; a change to impd's side edits its fixtures by hand.
@@ -73,6 +94,6 @@ operation gets the same answer. An imp moves to a new agent at its next cold boo
 
 The agent authenticates nothing: reaching the vsock socket on the host is the only gate, and only
 impd and the imp's own Firecracker can. In the other direction, impd does not trust the guest. Every
-name, generation and boot ID an agent reports is checked against the form the real agent gives it
-before impd uses it, so a guest that runs a forged agent can corrupt nothing on the host but its own
-records.
+name, generation and boot ID an agent reports is checked against the form the real agent gives it,
+and every count must be a whole number that JavaScript holds exactly, before impd uses it, so a
+guest that runs a forged agent can corrupt nothing on the host but its own records.

@@ -1,14 +1,13 @@
 package services
 
 import (
-	"encoding/json"
-	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -74,20 +73,27 @@ func TestReadDefTakesTheNameFromTheFileAndFillsTheDefaults(t *testing.T) {
 		name string
 		file string
 		body string
-		want Def
+		want *Def
 	}{
 		{
 			name: "defaults",
 			file: "web.json",
 			body: `{"argv":["httpd"]}`,
-			want: Def{Name: "web", Argv: []string{"httpd"}, Restart: "always", Source: "image"},
+			want: &Def{Name: new("web"), Argv: []string{"httpd"}, Restart: new("always"), Source: new("image")},
 		},
 		{
 			// the file name is the name; a name field cannot claim another
 			name: "a name field is ignored",
 			file: "x.json",
 			body: `{"name":"api","argv":["api"],"restart":"on-failure","source":"api"}`,
-			want: Def{Name: "x", Argv: []string{"api"}, Restart: "on-failure", Source: "api"},
+			want: &Def{Name: new("x"), Argv: []string{"api"}, Restart: new("on-failure"), Source: new("api")},
+		},
+		{
+			// a file from an image made for a newer agent still runs
+			name: "a field the agent does not know is ignored",
+			file: "web.json",
+			body: `{"argv":["httpd"],"health":{"path":"/"}}`,
+			want: &Def{Name: new("web"), Argv: []string{"httpd"}, Restart: new("always"), Source: new("image")},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,7 +103,7 @@ func TestReadDefTakesTheNameFromTheFileAndFillsTheDefaults(t *testing.T) {
 			got, err := ReadDef(fsroot.Host, p)
 
 			assert.NilError(t, err)
-			assert.DeepEqual(t, got, tc.want)
+			assert.DeepEqual(t, got, tc.want, protocmp.Transform())
 		})
 	}
 }
@@ -130,8 +136,8 @@ func TestReadDefRejectsAFileThatIsNotJSON(t *testing.T) {
 
 	_, err := ReadDef(fsroot.Host, p)
 
-	var syntax *json.SyntaxError
-	assert.Assert(t, errors.As(err, &syntax), "err = %v, want a JSON syntax error", err)
+	// protojson's errors carry no type, so its message names the cut-off JSON
+	assert.ErrorContains(t, err, "unexpected EOF")
 }
 
 func TestReadDefReportsAMissingFileAsNotExist(t *testing.T) {

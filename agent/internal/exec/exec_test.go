@@ -2,7 +2,6 @@ package exec
 
 import (
 	"bytes"
-	"encoding/json"
 	"net"
 	"os"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -61,7 +61,7 @@ type host struct {
 	served chan error
 }
 
-func startExec(t *testing.T, m *Manager, req proto.Request) *host {
+func startExec(t *testing.T, m *Manager, req *proto.Request) *host {
 	t.Helper()
 	guest, conn := net.Pipe()
 	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 64), served: make(chan error, 1)}
@@ -109,8 +109,8 @@ func (h *host) started(t *testing.T) int {
 	f := h.next(t, 5*time.Second)
 	assert.Equal(t, f.Type, proto.TypeStarted, "first frame %q", f.Payload)
 	var st proto.Started
-	assert.NilError(t, json.Unmarshal(f.Payload, &st))
-	return st.Pid
+	assert.NilError(t, proto.Unmarshal(f.Payload, &st))
+	return int(st.Pid)
 }
 
 func (h *host) next(t *testing.T, timeout time.Duration) proto.Frame {
@@ -126,7 +126,7 @@ func (h *host) next(t *testing.T, timeout time.Duration) proto.Frame {
 }
 
 // wait collects stdout and stderr until EXIT.
-func (h *host) wait(t *testing.T, timeout time.Duration) (string, proto.Exit) {
+func (h *host) wait(t *testing.T, timeout time.Duration) (string, *proto.Exit) {
 	t.Helper()
 	var out bytes.Buffer
 	deadline := time.Now().Add(timeout)
@@ -136,8 +136,8 @@ func (h *host) wait(t *testing.T, timeout time.Duration) (string, proto.Exit) {
 		case proto.TypeStdout, proto.TypeStderr:
 			out.Write(f.Payload)
 		case proto.TypeExit:
-			var e proto.Exit
-			assert.NilError(t, json.Unmarshal(f.Payload, &e))
+			e := &proto.Exit{}
+			assert.NilError(t, proto.Unmarshal(f.Payload, e))
 			return out.String(), e
 		default:
 			t.Fatalf("unexpected %s frame", f.Type)
@@ -170,16 +170,16 @@ func TestServeForwardsStdinAndReportsTheExit(t *testing.T) {
 		argv  []string
 		stdin []byte
 		out   string
-		exit  proto.Exit
+		exit  *proto.Exit
 	}{
-		{name: "exit code", argv: []string{"sh", "-c", "exit 3"}, out: "", exit: proto.Exit{Code: 3}},
-		{name: "signal", argv: []string{"sh", "-c", "kill -TERM $$"}, out: "", exit: proto.Exit{Code: 128 + 15, Signal: 15}},
-		{name: "stdin then eof", argv: []string{"cat"}, stdin: []byte("hello"), out: "hello", exit: proto.Exit{}},
+		{name: "exit code", argv: []string{"sh", "-c", "exit 3"}, out: "", exit: &proto.Exit{Code: 3}},
+		{name: "signal", argv: []string{"sh", "-c", "kill -TERM $$"}, out: "", exit: &proto.Exit{Code: 128 + 15, Signal: 15}},
+		{name: "stdin then eof", argv: []string{"cat"}, stdin: []byte("hello"), out: "hello", exit: &proto.Exit{}},
 		// More than a pipe buffer, so the writer blocks on the child.
-		{name: "large stdin", argv: []string{"wc", "-c"}, stdin: bytes.Repeat([]byte("x"), 300<<10), out: "307200", exit: proto.Exit{}},
+		{name: "large stdin", argv: []string{"wc", "-c"}, stdin: bytes.Repeat([]byte("x"), 300<<10), out: "307200", exit: &proto.Exit{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := startExec(t, newManager(), proto.Request{Argv: tc.argv})
+			h := startExec(t, newManager(), &proto.Request{Argv: tc.argv})
 			h.started(t)
 			written := make(chan error, 1)
 			go func() {
@@ -197,7 +197,7 @@ func TestServeForwardsStdinAndReportsTheExit(t *testing.T) {
 			served := h.hangUp(t, time.Second)
 
 			assert.Check(t, cmp.Equal(strings.TrimSpace(out), tc.out))
-			assert.Check(t, cmp.Equal(exit, tc.exit))
+			assert.Check(t, cmp.DeepEqual(exit, tc.exit, protocmp.Transform()))
 			assert.Check(t, writeErr, "host stdin write")
 			assert.Check(t, served, "Serve")
 		})
@@ -216,19 +216,19 @@ func TestServeDeliversASignalQueuedBehindStdinTheProcessNeverReads(t *testing.T)
 		{name: "many small frames", frames: 500, bytes: 8},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := startExec(t, newManager(), proto.Request{Argv: []string{"sleep", "30"}})
+			h := startExec(t, newManager(), &proto.Request{Argv: []string{"sleep", "30"}})
 			h.started(t)
 			h.send(t, proto.TypeStdin, bytes.Repeat([]byte("x"), 128<<10))
 			for range tc.frames {
 				h.send(t, proto.TypeStdin, bytes.Repeat([]byte("x"), tc.bytes))
 			}
-			sig, err := json.Marshal(proto.Signal{Signal: int(syscall.SIGTERM)})
+			sig, err := proto.Marshal(&proto.Signal{Signal: int32(syscall.SIGTERM)})
 			assert.NilError(t, err)
 
 			h.send(t, proto.TypeSignal, sig)
 			_, exit := h.wait(t, 3*time.Second)
 
-			assert.Equal(t, exit.Signal, int(syscall.SIGTERM))
+			assert.Equal(t, exit.Signal, int32(syscall.SIGTERM))
 		})
 	}
 }
@@ -238,7 +238,7 @@ func TestServeDeliversASignalQueuedBehindStdinTheProcessNeverReads(t *testing.T)
 func TestServeSendsTheExitWithinTheDrainGraceWhileABackgroundChildHoldsStdout(t *testing.T) {
 	m := newManager()
 	m.drainGrace = 100 * time.Millisecond
-	h := startExec(t, m, proto.Request{Argv: []string{"sh", "-c", "sleep 3 & echo hi"}})
+	h := startExec(t, m, &proto.Request{Argv: []string{"sh", "-c", "sleep 3 & echo hi"}})
 	h.started(t)
 
 	start := time.Now()
@@ -246,7 +246,7 @@ func TestServeSendsTheExitWithinTheDrainGraceWhileABackgroundChildHoldsStdout(t 
 	took := time.Since(start)
 
 	assert.Check(t, cmp.Equal(out, "hi\n"))
-	assert.Check(t, cmp.Equal(exit, proto.Exit{}))
+	assert.Check(t, cmp.DeepEqual(exit, &proto.Exit{}, protocmp.Transform()))
 	assert.Check(t, took <= m.drainGrace+time.Second, "EXIT after %s", took)
 }
 
@@ -254,7 +254,7 @@ func TestServeReturnsBeforeTheHangupGraceWhenTheProcessExitsOnSIGHUP(t *testing.
 	m := newManager()
 	// long enough that only the process's own exit ends Serve in time
 	m.hangupGrace = 5 * time.Second
-	h := startExec(t, m, proto.Request{Argv: []string{"sh", "-c", "echo ready; sleep 30"}})
+	h := startExec(t, m, &proto.Request{Argv: []string{"sh", "-c", "echo ready; sleep 30"}})
 	pid := h.started(t)
 	t.Cleanup(func() { syscall.Kill(-pid, syscall.SIGKILL) })
 	f := h.next(t, 5*time.Second)
@@ -278,7 +278,7 @@ func TestServeDetachesAProcessThatIgnoresSIGHUPAfterTheHangupGrace(t *testing.T)
 	m := newManager()
 	m.hangupGrace = 200 * time.Millisecond
 	// The process prints once its trap is set.
-	h := startExec(t, m, proto.Request{Argv: []string{"sh", "-c", `trap "" HUP; echo ready; sleep 30`}})
+	h := startExec(t, m, &proto.Request{Argv: []string{"sh", "-c", `trap "" HUP; echo ready; sleep 30`}})
 	pid := h.started(t)
 	t.Cleanup(func() { syscall.Kill(-pid, syscall.SIGKILL) })
 	f := h.next(t, 5*time.Second)
@@ -318,7 +318,7 @@ func TestNewManagersTakeTheDrainAndHangupGraces(t *testing.T) {
 // holds, are still read, so none meets a closed socket: a host whose write
 // fails there loses the EXIT frame to EPIPE.
 func TestServeReadsHostFramesThatArriveAfterTheExit(t *testing.T) {
-	h := startExec(t, newManager(), proto.Request{Argv: []string{"sh", "-c", "echo refused >&2; exit 1"}})
+	h := startExec(t, newManager(), &proto.Request{Argv: []string{"sh", "-c", "echo refused >&2; exit 1"}})
 	h.started(t)
 	h.wait(t, 5*time.Second)
 

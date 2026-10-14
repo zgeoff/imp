@@ -1,5 +1,5 @@
 import { AgentError } from './agent-connection';
-import type { AgentErrorCode } from './agent-protocol';
+import type { AgentErrorCode } from './agent-error-codes';
 
 // an AgentError with one of `codes`: the agent's own, or AGENT_OUTDATED,
 // which impd gives for an agent from before a feature

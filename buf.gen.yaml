@@ -1,0 +1,15 @@
+# `bun run gen:proto` runs this: the agent's Go types, impd's TypeScript types
+# and the protocol reference, all from proto/imp/agent/v1/agent.proto.
+version: v2
+clean: false
+plugins:
+  # the plugin version follows google.golang.org/protobuf in agent/go.mod
+  - local: [go, -C, agent, tool, protoc-gen-go]
+    out: agent
+    opt: module=github.com/zgeoff/imp/agent
+  - local: protoc-gen-es
+    out: packages/daemon/src/agent-client/gen
+    opt: [target=ts, json_types=true]
+  - local: [bun, scripts/proto/protoc-gen-protocol-reference.ts]
+    out: docs/reference
+    strategy: all

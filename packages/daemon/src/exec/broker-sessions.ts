@@ -1,4 +1,4 @@
-import type { AgentSession } from '../agent-client/agent-protocol';
+import type { SessionInfo } from '../agent-client/agent-protocol';
 import type { ExecStream } from '../agent-client/exec-stream';
 import { isBrokerSession, writeBrokerSession } from '../db/broker-sessions';
 import type { ImpDatabase } from '../db/open-database';
@@ -16,17 +16,20 @@ export async function checkBrokerAttach(
   impId: string,
   name: string,
   resumeGeneration: string | undefined,
-  sessions: readonly AgentSession[],
+  sessions: readonly SessionInfo[],
 ): Promise<Error | null> {
   const attached = sessions.filter(
     (session) =>
       session.name === name &&
       (session.state === 'running' ||
-        (resumeGeneration !== undefined && session.execution_generation === resumeGeneration)),
+        (resumeGeneration !== undefined && session.executionGeneration === resumeGeneration)),
   );
 
   for (const session of attached) {
-    const refused = await isCovered(db, impId, session.execution_generation, name);
+    // an agent from before output offsets names no generation
+    const generation = session.executionGeneration === '' ? undefined : session.executionGeneration;
+
+    const refused = await isCovered(db, impId, generation, name);
 
     if (refused !== null) {
       return refused;
@@ -43,7 +46,7 @@ export async function checkOpenedSession(
   impId: string,
   name: string,
   stream: Pick<ExecStream, 'created' | 'output'>,
-  sessions: readonly AgentSession[],
+  sessions: readonly SessionInfo[],
 ): Promise<Error | null> {
   const output = stream.output;
   const generation = output?.continuity === 'offsets' ? output.executionGeneration : undefined;
@@ -56,7 +59,9 @@ export async function checkOpenedSession(
   // never pass an attach that requires the broker
   if (generation !== undefined) {
     // an exited run stays listed while a resume can still attach to it
-    const listed = sessions.flatMap((session) => session.execution_generation ?? []);
+    const listed = sessions.flatMap((session) =>
+      session.executionGeneration === '' ? [] : [session.executionGeneration],
+    );
 
     await writeBrokerSession(db, impId, generation, listed);
   }

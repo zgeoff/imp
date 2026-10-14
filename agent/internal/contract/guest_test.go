@@ -1,7 +1,6 @@
 package contract
 
 import (
-	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -28,53 +27,53 @@ const (
 )
 
 // guestMessages is one value per message the agent sends impd, with every
-// field of every type set in at least one of them, so impd's schemas see
-// each field the agent can send.
+// field of every message set in at least one of them, so impd's tests see
+// each field the agent can send. The fixtures hold them as the agent's own
+// writer marshals them.
 func guestMessages() map[string]any {
-	uptime := int64(5321)
-	from, to, first := uint64(4096), uint64(8192), uint64(128)
-	previous := &proto.Previous{Generation: previousGn, End: 2048, Exit: proto.Exit{Code: 1}}
+	previous := &proto.Previous{ExecutionGeneration: previousGn, End: 2048, Exit: &proto.Exit{Code: 1}}
 	output := func(resume *proto.Resume) *proto.Output {
-		return &proto.Output{BootID: bootID, Generation: generation, BufferStart: 512, End: 9000,
-			Offset: 4096, Prelude: 12, Previous: previous, Resume: resume, Log: true}
+		return &proto.Output{BootId: bootID, ExecutionGeneration: generation, BufferStart: 512, End: 9000,
+			Offset: 4096, Prelude: 12, Previous: previous, Resume: resume, Log: new(true)}
 	}
-	def := proto.ServiceDef{Name: "web", Argv: []string{"/usr/bin/web", "--port", "8080"},
-		Env: []string{"MODE=prod"}, Cwd: "/srv/web", User: "dev", Restart: "on-failure", Source: "api"}
+	def := &proto.ServiceDef{Name: new("web"), Argv: []string{"/usr/bin/web", "--port", "8080"},
+		Env: []string{"MODE=prod"}, Cwd: new("/srv/web"), User: new("dev"), Restart: new("on-failure"),
+		Source: new("api")}
 
 	return map[string]any{
-		"ping": proto.Ping{OK: true, Version: proto.Version, UptimeMs: &uptime,
-			IdentityReset: proto.IdentityResetOK, Stage: proto.StageTemplate, BootID: bootID,
-			Inner: &proto.InnerStatus{Up: false, Restarts: 3, LastError: "start inner init: exit status 1"}},
-		"ping-inner-up": proto.Ping{OK: true, Version: proto.Version, UptimeMs: &uptime, BootID: bootID,
+		"ping": &proto.Ping{Ok: true, Version: proto.Version, UptimeMs: new(5321.0),
+			IdentityReset: new(proto.IdentityResetOK), Stage: new(proto.StageTemplate), BootId: new(bootID),
+			Inner: &proto.InnerStatus{Up: false, Restarts: 3, LastError: new("start inner init: exit status 1")}},
+		"ping-inner-up": &proto.Ping{Ok: true, Version: proto.Version, UptimeMs: new(5321.0), BootId: new(bootID),
 			Inner: &proto.InnerStatus{Up: true}},
-		"ok": proto.OK{OK: true},
-		"error": proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrInnerDown,
+		"ok": &proto.OK{Ok: true},
+		"error": &proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrInnerDown,
 			Message: "the inner container is down"}},
-		"error-no-session": proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrNoSession,
-			Message: "no session build", Data: proto.NoSessionData{BootID: bootID, Previous: previous}}},
-		"error-invalid-resume": proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrInvalidResume,
-			Message: "offset 9999 is past the end", Data: proto.InvalidResumeData{End: 9000, BufferStart: 512}}},
-		"listening-socket": proto.Listening{OK: true, Path: "/run/imp/agent/ssh-1.sock", Listener: "l1"},
-		"listening-port":   proto.Listening{OK: true, Port: 41234, Listener: "l2"},
-		"connection":       proto.Connection{ID: 7},
-		"activity": proto.Activity{TCPEstablished: 2, ExecSessions: 1, Load1: 0.25,
-			Sessions: []proto.SessionInfo{{Name: "build", Pid: 812, Argv: []string{"make", "-j4"},
+		"error-no-session": &proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrNoSession,
+			Message: "no session build", Data: &proto.ErrorData{BootId: new(bootID), Previous: previous}}},
+		"error-invalid-resume": &proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrInvalidResume,
+			Message: "offset 9999 is past the end", Data: &proto.ErrorData{End: new(9000.0), BufferStart: new(512.0)}}},
+		"listening-socket": &proto.Listening{Ok: true, Path: new("/run/imp/agent/ssh-1.sock"), Listener: "l1"},
+		"listening-port":   &proto.Listening{Ok: true, Port: new(uint32(41234)), Listener: "l2"},
+		"connection":       &proto.Connection{Id: 7},
+		"activity": &proto.Activity{TcpEstablished: 2, ExecSessions: 1, Load1: 0.25,
+			Sessions: []*proto.SessionInfo{{Name: "build", Pid: 812, Argv: []string{"make", "-j4"},
 				State: proto.SessionExited, Attached: true, Cols: 120, Rows: 40,
 				StartedUnixMs: 1760000000000, Exit: &proto.Exit{Code: 137, Signal: 9},
-				Generation: generation, BootID: bootID, End: 9000, Log: true}}},
-		"started": proto.Started{Pid: 812, Session: "build", Created: true, KillGraceMs: 5000,
-			Output: output(&proto.Resume{Kind: proto.ResumeGenerationChanged, Generation: generation,
-				FirstOffset: &first})},
-		"started-resume-gap": proto.Started{Pid: 812, Session: "build",
-			Output: output(&proto.Resume{Kind: proto.ResumeGap, From: &from, To: &to})},
-		"started-resume-exact": proto.Started{Pid: 812, Session: "build",
+				ExecutionGeneration: generation, BootId: bootID, End: 9000, Log: new(true)}}},
+		"started": &proto.Started{Pid: 812, Session: new("build"), Created: new(true), KillGraceMs: new(uint32(5000)),
+			Output: output(&proto.Resume{Kind: proto.ResumeGenerationChanged, ExecutionGeneration: new(generation),
+				FirstOffset: new(128.0)})},
+		"started-resume-gap": &proto.Started{Pid: 812, Session: new("build"),
+			Output: output(&proto.Resume{Kind: proto.ResumeGap, From: new(4096.0), To: new(8192.0)})},
+		"started-resume-exact": &proto.Started{Pid: 812, Session: new("build"),
 			Output: output(&proto.Resume{Kind: proto.ResumeExact})},
-		"exit":     proto.Exit{Code: 137, Signal: 9},
-		"detached": proto.Detached{Reason: proto.DetachTakenOver},
-		"services-list": proto.ServicesList{ImageUser: "dev", Services: []proto.ServiceStatus{{
-			Name: "web", State: "backoff", Pid: 901, Restarts: 2, LastExit: &proto.Exit{Code: 1},
-			Def: def, Root: true}}},
-		"cursor": proto.LogCursor{Inode: 131074, Offset: 65536},
+		"exit":     &proto.Exit{Code: 137, Signal: 9},
+		"detached": &proto.Detached{Reason: proto.DetachTakenOver},
+		"services-list": &proto.ServicesList{ImageUser: "dev", Services: []*proto.ServiceStatus{{
+			Name: "web", State: "backoff", Pid: new(int32(901)), Restarts: 2, LastExit: &proto.Exit{Code: 1},
+			Def: def, Root: new(true)}}},
+		"cursor": &proto.LogCursor{Inode: 131074, Offset: 65536},
 	}
 }
 
@@ -106,9 +105,7 @@ func TestGuestFixturesMatchWhatTheAgentSends(t *testing.T) {
 
 	for name, value := range fixtures {
 		t.Run(name, func(t *testing.T) {
-			want, err := json.MarshalIndent(value, "", "  ")
-			assert.NilError(t, err)
-			want = append(want, '\n')
+			want := encodeFixture(t, value)
 			path := filepath.Join(dir, name+".json")
 			if *write {
 				assert.NilError(t, os.WriteFile(path, want, 0o644))

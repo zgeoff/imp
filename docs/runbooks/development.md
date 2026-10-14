@@ -218,6 +218,11 @@ records, because a read through the service repairs what it finds.
 After you add a migration, run `bun run render:db-schema`: kysely-codegen writes the daemon's typed
 schema from a freshly migrated database, and `bun test` fails while the committed file differs.
 
+After you change the agent protocol's schema, `proto/imp/agent/v1/agent.proto`, run
+`bun run gen:proto`. It lints the schema with buf, then writes the agent's Go types (with
+`protoc-gen-go` from the agent's `go.mod`, so Go must be on `PATH`), impd's TypeScript types and
+`docs/reference/agent-protocol.md`. CI runs it again and fails while the committed output differs.
+
 The property tests (`*.property.test.ts`) use fast-check. On a failure it prints the seed and the
 path of the shrunk case. Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay
 the case.
