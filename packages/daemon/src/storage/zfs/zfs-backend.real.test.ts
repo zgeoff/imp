@@ -1023,7 +1023,8 @@ test.skipIf(readZfsTestPool() === null)(
 
     const fd = openSync(join(tree, 'layer.bin'), 'w');
 
-    onTestFinished(() => {
+    // closed before the dataset is unmounted
+    ctx.stack.defer(() => {
       closeSync(fd);
     });
 
