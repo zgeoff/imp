@@ -2,11 +2,14 @@
 
 ## [1.4.3](https://github.com/zgeoff/imp/compare/v1.4.2...v1.4.3) (2026-10-14)
 
-
 ### Bug Fixes
 
-* **geo-457:** count a growing hold's written bytes once ([#375](https://github.com/zgeoff/imp/issues/375)) ([81a035b](https://github.com/zgeoff/imp/commit/81a035b3face359d26e6bdd15c52c81f7247062c))
-* **geo-863:** hold an imp a kernel oops killed until a reboot ([#374](https://github.com/zgeoff/imp/issues/374)) ([ec2c03d](https://github.com/zgeoff/imp/commit/ec2c03df7cb3edc3298e27932f3de7d17422fa46))
+- **geo-457:** count a growing hold's written bytes once
+  ([#375](https://github.com/zgeoff/imp/issues/375))
+  ([81a035b](https://github.com/zgeoff/imp/commit/81a035b3face359d26e6bdd15c52c81f7247062c))
+- **geo-863:** hold an imp a kernel oops killed until a reboot
+  ([#374](https://github.com/zgeoff/imp/issues/374))
+  ([ec2c03d](https://github.com/zgeoff/imp/commit/ec2c03df7cb3edc3298e27932f3de7d17422fa46))
 
 ## [1.4.2](https://github.com/zgeoff/imp/compare/v1.4.1...v1.4.2) (2026-10-14)
 
