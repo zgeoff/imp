@@ -144,7 +144,11 @@ func Run() error {
 		Dial:     dialer,
 		Inner: func() *proto.InnerStatus {
 			st := mgr.Status()
-			return &proto.InnerStatus{Up: st.Up, Restarts: st.Restarts, LastError: st.LastErr}
+			status := &proto.InnerStatus{Up: st.Up, Restarts: uint32(st.Restarts)}
+			if st.LastErr != "" {
+				status.LastError = new(st.LastErr)
+			}
+			return status
 		},
 
 		IdentityReset: identityReset,

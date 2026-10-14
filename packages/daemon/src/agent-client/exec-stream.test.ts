@@ -630,13 +630,10 @@ test.each([
     );
   });
 
-  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toMatchObject({
-    name: 'ZodError',
-    issues: expect.toPartiallyContain({
-      path: ['output', 'execution_generation'],
-      code: 'invalid_format',
-    }),
-  });
+  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toThrowWithMessage(
+    Error,
+    'agent exec: STARTED names a session, generation or boot the agent never makes',
+  );
 });
 
 test.each([
@@ -683,10 +680,10 @@ test.each([
     );
   });
 
-  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toMatchObject({
-    name: 'ZodError',
-    issues: expect.toPartiallyContain({ path: ['output', 'boot_id'], code: 'invalid_format' }),
-  });
+  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toThrowWithMessage(
+    Error,
+    'agent exec: STARTED names a session, generation or boot the agent never makes',
+  );
 });
 
 test.each([
@@ -732,8 +729,8 @@ test.each([
     );
   });
 
-  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toMatchObject({
-    name: 'ZodError',
-    issues: expect.toPartiallyContain({ path: ['session'], code: 'invalid_format' }),
-  });
+  expect(openTapStream(ctx.vsockPath, 'main')).rejects.toThrowWithMessage(
+    Error,
+    'agent exec: STARTED names a session, generation or boot the agent never makes',
+  );
 });

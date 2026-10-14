@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"syscall"
@@ -101,8 +102,8 @@ type run struct {
 	bootID     string
 }
 
-func newSession(name string, req proto.Request, r run) *session {
-	cols, rows := req.Cols, req.Rows
+func newSession(name string, req *proto.Request, r run) *session {
+	cols, rows := uint16(req.GetCols()), uint16(req.GetRows())
 	if cols == 0 || rows == 0 {
 		cols, rows = 80, 24
 	}
@@ -115,7 +116,7 @@ func newSession(name string, req proto.Request, r run) *session {
 		generation:  r.generation,
 		seq:         r.seq,
 		bootID:      r.bootID,
-		log:         req.Log,
+		log:         req.GetLog(),
 		stdin:       make(chan []byte, stdinQueue),
 		done:        make(chan struct{}),
 		screen:      newHistory(historyLimit),
@@ -151,7 +152,7 @@ func (s *session) run() {
 
 	exit := proto.ExitOf(st.Code, int(st.Signal))
 	s.mu.Lock()
-	s.exit = &exit
+	s.exit = exit
 	if s.viewer != nil {
 		s.deliverExit(s.viewer)
 	}
@@ -186,14 +187,14 @@ func (s *session) output(p []byte) {
 	s.raw.Write(p)
 	if v := s.viewer; v != nil && !v.push(frame{typ: proto.TypeStdout, payload: append([]byte(nil), p...)}) {
 		s.viewer = nil
-		v.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachSlow})}, true)
+		v.stop(&frame{typ: proto.TypeDetached, payload: mustMarshal(&proto.Detached{Reason: proto.DetachSlow})}, true)
 	}
 	// a tap that falls behind is dropped the same way: impd taps again from
 	// the offset it has, and learns of the gap from the ring
 	for t := range s.taps {
 		if !t.push(frame{typ: proto.TypeStdout, payload: append([]byte(nil), p...)}) {
 			s.dropTap(t)
-			t.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachSlow})}, true)
+			t.stop(&frame{typ: proto.TypeDetached, payload: mustMarshal(&proto.Detached{Reason: proto.DetachSlow})}, true)
 		}
 	}
 }
@@ -256,14 +257,14 @@ func (s *session) tap(t *viewer, resume *proto.ResumeFrom) *proto.Error {
 	out, data := s.outputNow(), []byte(nil)
 	if resume == nil {
 		out.Offset = out.BufferStart
-		data = s.raw.From(out.Offset)
+		data = s.raw.From(uint64(out.Offset))
 	} else {
 		var err error
 		if out, data, err = s.place(resume); err != nil {
 			return err.(*proto.Error)
 		}
 	}
-	t.pushJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid, Session: s.name, Output: &out})
+	t.pushMessage(proto.TypeStarted, &proto.Started{Pid: int32(s.proc.Pid), Session: new(s.name), Output: out})
 	if len(data) > 0 {
 		t.push(frame{typ: proto.TypeStdout, payload: data})
 	}
@@ -272,7 +273,7 @@ func (s *session) tap(t *viewer, resume *proto.ResumeFrom) *proto.Error {
 		return nil
 	}
 	s.taps[t] = struct{}{}
-	s.tapStart[t] = out.Offset
+	s.tapStart[t] = uint64(out.Offset)
 	s.tapless = false
 	return nil
 }
@@ -297,7 +298,7 @@ func (s *session) dropTap(t *viewer) {
 // exitFrame is the EXIT as a last frame; written runs once it is out. The
 // caller holds mu, and exit is set.
 func (s *session) exitFrame(written func()) *frame {
-	return &frame{typ: proto.TypeExit, payload: mustJSON(*s.exit), written: written}
+	return &frame{typ: proto.TypeExit, payload: mustMarshal(s.exit), written: written}
 }
 
 // attach makes v the viewer: STARTED, the output that resume asks for (a
@@ -316,9 +317,13 @@ func (s *session) attach(v *viewer, cols, rows uint16, created bool, resume *pro
 	}
 	out.Previous = previous
 	if old := s.viewer; old != nil {
-		old.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachTakenOver})}, false)
+		old.stop(&frame{typ: proto.TypeDetached, payload: mustMarshal(&proto.Detached{Reason: proto.DetachTakenOver})}, false)
 	}
-	v.pushJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid, Session: s.name, Created: created, Output: &out})
+	started := &proto.Started{Pid: int32(s.proc.Pid), Session: new(s.name), Output: out}
+	if created {
+		started.Created = new(true)
+	}
+	v.pushMessage(proto.TypeStarted, started)
 	if len(data) > 0 {
 		v.push(frame{typ: proto.TypeStdout, payload: data})
 	}
@@ -342,38 +347,53 @@ func (s *session) attach(v *viewer, cols, rows uint16, created bool, resume *pro
 // place finds where a connection's data starts, and the data up to now: a
 // fresh attach replays the history, its prelude first; a resume reads the
 // raw ring. The caller holds mu.
-func (s *session) place(resume *proto.ResumeFrom) (proto.Output, []byte, error) {
+func (s *session) place(resume *proto.ResumeFrom) (*proto.Output, []byte, error) {
 	out := s.outputNow()
-	start, end := out.BufferStart, out.End
+	start, end := s.raw.Start(), s.raw.End()
 	switch {
 	case resume == nil:
 		prelude, kept := s.screen.Replay()
-		out.Offset = end - uint64(len(kept))
-		out.Prelude = len(prelude)
+		out.Offset = float64(end - uint64(len(kept)))
+		out.Prelude = uint32(len(prelude))
 		return out, append(append(make([]byte, 0, len(prelude)+len(kept)), prelude...), kept...), nil
-	case resume.Generation != s.generation:
-		out.Resume = &proto.Resume{Kind: proto.ResumeGenerationChanged, Generation: s.generation, FirstOffset: &start}
-		out.Offset = start
-	case resume.Offset > end:
+	case !isOffset(resume.GetOffset()):
+		return out, nil, &proto.Error{
+			Code:    proto.ErrBadRequest,
+			Message: fmt.Sprintf("resume offset %v is not a whole number of bytes", resume.GetOffset()),
+		}
+	case resume.GetExecutionGeneration() != s.generation:
+		out.Resume = &proto.Resume{Kind: proto.ResumeGenerationChanged, ExecutionGeneration: new(s.generation), FirstOffset: new(float64(start))}
+		out.Offset = float64(start)
+	case uint64(resume.GetOffset()) > end:
 		return out, nil, &proto.Error{
 			Code:    proto.ErrInvalidResume,
-			Message: fmt.Sprintf("offset %d is past the end of the output, %d", resume.Offset, end),
-			Data:    proto.InvalidResumeData{End: end, BufferStart: start},
+			Message: fmt.Sprintf("offset %d is past the end of the output, %d", uint64(resume.GetOffset()), end),
+			Data:    &proto.ErrorData{End: new(float64(end)), BufferStart: new(float64(start))},
 		}
-	case resume.Offset >= start:
+	case uint64(resume.GetOffset()) >= start:
 		out.Resume = &proto.Resume{Kind: proto.ResumeExact}
-		out.Offset = resume.Offset
+		out.Offset = resume.GetOffset()
 	default:
-		out.Resume = &proto.Resume{Kind: proto.ResumeGap, From: &resume.Offset, To: &start}
-		out.Offset = start
+		out.Resume = &proto.Resume{Kind: proto.ResumeGap, From: new(resume.GetOffset()), To: new(float64(start))}
+		out.Offset = float64(start)
 	}
-	return out, s.raw.From(out.Offset), nil
+	return out, s.raw.From(uint64(out.Offset)), nil
+}
+
+// isOffset reports whether a resume's offset, a JSON number, names a byte:
+// whole and not negative.
+func isOffset(offset float64) bool {
+	return offset >= 0 && offset == math.Trunc(offset)
 }
 
 // outputNow is where the output stands, before a connection's place in it.
 // The caller holds mu.
-func (s *session) outputNow() proto.Output {
-	return proto.Output{BootID: s.bootID, Generation: s.generation, BufferStart: s.raw.Start(), End: s.raw.End(), Log: s.log}
+func (s *session) outputNow() *proto.Output {
+	out := &proto.Output{BootId: s.bootID, ExecutionGeneration: s.generation, BufferStart: float64(s.raw.Start()), End: float64(s.raw.End())}
+	if s.log {
+		out.Log = new(true)
+	}
+	return out
 }
 
 // redraw sizes the pty for a new viewer. The kernel sends SIGWINCH only for
@@ -470,36 +490,38 @@ func (s *session) writeStdin() {
 	}
 }
 
-func (s *session) info() proto.SessionInfo {
+func (s *session) info() *proto.SessionInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	info := proto.SessionInfo{
-		Name:          s.name,
-		Pid:           s.proc.Pid,
-		Argv:          s.argv,
-		State:         proto.SessionRunning,
-		Attached:      s.viewer != nil,
-		Cols:          s.cols,
-		Rows:          s.rows,
-		StartedUnixMs: s.started.UnixMilli(),
-		Exit:          s.exit,
-		Generation:    s.generation,
-		BootID:        s.bootID,
-		End:           s.raw.End(),
-		Log:           s.log,
+	info := &proto.SessionInfo{
+		Name:                s.name,
+		Pid:                 int32(s.proc.Pid),
+		Argv:                s.argv,
+		State:               proto.SessionRunning,
+		Attached:            s.viewer != nil,
+		Cols:                uint32(s.cols),
+		Rows:                uint32(s.rows),
+		StartedUnixMs:       float64(s.started.UnixMilli()),
+		Exit:                s.exit,
+		ExecutionGeneration: s.generation,
+		BootId:              s.bootID,
+		End:                 float64(s.raw.End()),
 	}
 	if s.exit != nil {
 		info.State = proto.SessionExited
+	}
+	if s.log {
+		info.Log = new(true)
 	}
 	return info
 }
 
 // ended returns the generation as previous: called once done closed, so
 // its end and exit are final.
-func (s *session) ended() proto.Previous {
+func (s *session) ended() *proto.Previous {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return proto.Previous{Generation: s.generation, End: s.raw.End(), Exit: *s.exit}
+	return &proto.Previous{ExecutionGeneration: s.generation, End: float64(s.raw.End()), Exit: s.exit}
 }
 
 // exited reports whether the process exited: a new session may then take

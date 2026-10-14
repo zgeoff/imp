@@ -2,8 +2,10 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
+import { ErrorDataSchema, RequestSchema } from '../agent-client/agent-protocol';
 import { sendActivity, sendAgentRequest, sendSessionKill } from '../agent-client/agent-requests';
 import { openAttachStream, openExecStream, openTapStream } from '../agent-client/exec-stream';
 import { startStubSessionAgent } from './start-stub-session-agent';
@@ -489,7 +491,7 @@ test('it counts open connections as exec_sessions, not runs and not taps', async
 
   const activity = await sendActivity(path);
 
-  expect(activity.exec_sessions).toBe(2);
+  expect(activity.execSessions).toBe(2);
   expect(activity.sessions).toHaveLength(2);
 });
 
@@ -539,8 +541,26 @@ test('it lists the exec requests it got, not its activity requests', async () =>
   });
 
   expect(agent.readExecs()).toStrictEqual([
-    { op: 'exec', argv: ['true'], tty: false, env: ['A=1'] },
+    create(RequestSchema, { op: 'exec', argv: ['true'], tty: false, env: ['A=1'] }),
   ]);
+});
+
+test('it keeps the JSON of each exec request as it came, not its activity requests', async () => {
+  const ctx = await setupTest();
+
+  const path = join(ctx.dir, 'v.sock');
+
+  const agent = await startStubSessionAgent(path, { stack: ctx.stack });
+
+  await sendActivity(path);
+
+  const stream = await openExecStream(path, { argv: ['true'], tty: false });
+
+  ctx.stack.defer(() => {
+    stream.close();
+  });
+
+  expect(agent.readExecPayloads()).toStrictEqual([{ op: 'exec', argv: ['true'], tty: false }]);
 });
 
 test('it sends a run’s output to the client attached to it', async () => {
@@ -739,7 +759,7 @@ test('it refuses session.kill of a name with no run with NO_SESSION and its boot
   expect(killing).rejects.toMatchObject({
     code: 'NO_SESSION',
     detail: 'no session "main"',
-    data: { boot_id: '22222222-2222-4222-8222-222222222222' },
+    data: create(ErrorDataSchema, { bootId: '22222222-2222-4222-8222-222222222222' }),
   });
 });
 

@@ -1,14 +1,12 @@
 package server
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
-	"gotest.tools/v3/assert/cmp"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
@@ -18,7 +16,7 @@ import (
 func TestPingOmitsUptimeWithoutAClock(t *testing.T) {
 	failing := func(int32, *unix.Timespec) error { return errors.New("no clock") }
 
-	data, err := json.Marshal(BuildPing(failing))
+	data, err := proto.Marshal(BuildPing(failing))
 
 	assert.NilError(t, err)
 	assert.Check(t, !strings.Contains(string(data), "uptime_ms"), "ping = %s, want no uptime_ms", data)
@@ -33,16 +31,16 @@ func TestPingReportsUptimeFromTheClock(t *testing.T) {
 	ping := BuildPing(clock)
 
 	assert.Assert(t, ping.UptimeMs != nil)
-	assert.Equal(t, *ping.UptimeMs, int64(2500))
+	assert.Equal(t, *ping.UptimeMs, 2500.0)
 }
 
 func TestPingOmitsTheIdentityResetWhenNoneRan(t *testing.T) {
 	s := &Server{}
 
-	resp, err := s.unary(proto.Request{Op: proto.OpPing})
+	resp, err := s.unary(&proto.Request{Op: proto.OpPing})
 
 	assert.NilError(t, err)
-	data, err := json.Marshal(resp)
+	data, err := proto.Marshal(resp)
 	assert.NilError(t, err)
 	assert.Check(t, !strings.Contains(string(data), "identity_reset"), "ping = %s", data)
 }
@@ -53,12 +51,10 @@ func TestPingReportsTheIdentityResetThatRan(t *testing.T) {
 		t.Run(reset, func(t *testing.T) {
 			s := &Server{IdentityReset: reset}
 
-			resp, err := s.unary(proto.Request{Op: proto.OpPing})
+			resp, err := s.unary(&proto.Request{Op: proto.OpPing})
 
 			assert.NilError(t, err)
-			data, err := json.Marshal(resp)
-			assert.NilError(t, err)
-			assert.Check(t, cmp.Contains(string(data), `"identity_reset":"`+reset+`"`))
+			assert.Equal(t, resp.(*proto.Ping).GetIdentityReset(), reset)
 		})
 	}
 }
@@ -67,8 +63,8 @@ func TestPingReportsTheIdentityResetThatRan(t *testing.T) {
 func TestPingReportsTheBootID(t *testing.T) {
 	s := &Server{BootID: "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11"}
 
-	resp, err := s.unary(proto.Request{Op: proto.OpPing})
+	resp, err := s.unary(&proto.Request{Op: proto.OpPing})
 
 	assert.NilError(t, err)
-	assert.Equal(t, resp.(proto.Ping).BootID, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+	assert.Equal(t, resp.(*proto.Ping).GetBootId(), "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 }

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -103,9 +102,9 @@ func TestServeReturnsTheErrorOfAFailedFirstListen(t *testing.T) {
 
 // roundTrip runs one request through handle and returns the RESPONSE
 // payload, or nil if the connection closed without one.
-func roundTrip(t *testing.T, s *Server, req proto.Request) []byte {
+func roundTrip(t *testing.T, s *Server, req *proto.Request) []byte {
 	t.Helper()
-	b, err := json.Marshal(req)
+	b, err := proto.Marshal(req)
 	assert.NilError(t, err)
 	return roundTripFrame(t, s, proto.TypeRequest, b)
 }
@@ -132,7 +131,7 @@ func roundTripFrame(t *testing.T, s *Server, typ proto.Type, payload []byte) []b
 func errorCode(t *testing.T, payload []byte) string {
 	t.Helper()
 	var er proto.ErrorResponse
-	assert.NilError(t, json.Unmarshal(payload, &er), "reply %s", payload)
+	assert.NilError(t, proto.Unmarshal(payload, &er), "reply %s", payload)
 	assert.Assert(t, er.Error != nil, "reply %s is not an error", payload)
 	return er.Error.Code
 }
@@ -150,7 +149,7 @@ func TestHandleRefusesARequestThatIsNotJSON(t *testing.T) {
 }
 
 func TestHandleRefusesAnUnknownOp(t *testing.T) {
-	resp := roundTrip(t, &Server{}, proto.Request{Op: "imp-test-none"})
+	resp := roundTrip(t, &Server{}, &proto.Request{Op: "imp-test-none"})
 
 	assert.Equal(t, errorCode(t, resp), proto.ErrUnknownOp)
 }
@@ -158,10 +157,10 @@ func TestHandleRefusesAnUnknownOp(t *testing.T) {
 func TestHandleRefusesARequestWithoutItsRequiredField(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		req  proto.Request
+		req  *proto.Request
 	}{
-		{name: "resumed without unix_ms", req: proto.Request{Op: proto.OpResumed}},
-		{name: "grow without disk_bytes", req: proto.Request{Op: proto.OpGrow}},
+		{name: "resumed without unix_ms", req: &proto.Request{Op: proto.OpResumed}},
+		{name: "grow without disk_bytes", req: &proto.Request{Op: proto.OpGrow}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := roundTrip(t, &Server{}, tc.req)
@@ -179,7 +178,7 @@ func TestHandleRepliesFrozenToASecondFreeze(t *testing.T) {
 	assert.NilError(t, s.freeze(time.Hour))
 	t.Cleanup(func() { s.thaw() })
 
-	resp := roundTrip(t, s, proto.Request{Op: proto.OpFreeze, TimeoutMs: 1000})
+	resp := roundTrip(t, s, &proto.Request{Op: proto.OpFreeze, TimeoutMs: new(uint32(1000))})
 
 	assert.Equal(t, errorCode(t, resp), proto.ErrFrozen)
 }

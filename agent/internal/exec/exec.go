@@ -3,7 +3,6 @@
 package exec
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,13 +82,13 @@ func (m *Manager) Active() int { return int(m.active.Load()) }
 
 // Serve runs req to completion. r and w are the connection's frame streams;
 // the caller closes the connection after Serve returns.
-func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
+func (m *Manager) Serve(req *proto.Request, r *proto.Reader, w *proto.Writer) error {
 	m.active.Add(1)
 	defer m.active.Add(-1)
 
 	s, err := m.start(req)
 	if err != nil {
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{
 			Error: proto.StartError(err, errors.Is(err, proc.ErrDown)),
 		})
 	}
@@ -109,7 +108,11 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 			panic(v)
 		}
 	}()
-	if err := w.WriteJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid, KillGraceMs: s.stop.grace.Milliseconds()}); err != nil {
+	started := &proto.Started{Pid: int32(s.proc.Pid)}
+	if ms := s.stop.grace.Milliseconds(); ms > 0 {
+		started.KillGraceMs = new(uint32(ms))
+	}
+	if err := w.WriteMessage(proto.TypeStarted, started); err != nil {
 		_ = s.proc.Signal(syscall.SIGHUP)
 	}
 
@@ -164,7 +167,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	s.close()
 	writer.Wait()
 
-	err = w.WriteJSON(proto.TypeExit, proto.ExitOf(st.Code, int(st.Signal)))
+	err = w.WriteMessage(proto.TypeExit, proto.ExitOf(st.Code, int(st.Signal)))
 	// The host closes once it has EXIT. Read until then: a host frame that
 	// races the exit (stdin EOF) must not hit a closed socket, or the host
 	// loses the EXIT frame to EPIPE.
@@ -202,13 +205,13 @@ type session struct {
 	closeOnce sync.Once
 }
 
-func (m *Manager) start(req proto.Request) (*session, error) {
+func (m *Manager) start(req *proto.Request) (*session, error) {
 	s := &session{
 		stdinQ: make(chan []byte, stdinQueueChunks),
 		done:   make(chan struct{}),
 		stop:   stopTimer{grace: killGrace(req)},
 	}
-	if req.TTY {
+	if req.GetTty() {
 		group, err := m.ttyGroup()
 		if err != nil {
 			return nil, err
@@ -331,12 +334,12 @@ func (s *session) input(r *proto.Reader) {
 			}
 		case proto.TypeResize:
 			var rs proto.Resize
-			if s.tty != nil && json.Unmarshal(f.Payload, &rs) == nil {
-				_ = pty.SetWinsize(s.tty, rs.Cols, rs.Rows)
+			if s.tty != nil && proto.Unmarshal(f.Payload, &rs) == nil {
+				_ = pty.SetWinsize(s.tty, uint16(rs.Cols), uint16(rs.Rows))
 			}
 		case proto.TypeSignal:
 			var sig proto.Signal
-			if json.Unmarshal(f.Payload, &sig) == nil && sig.Signal > 0 && !s.exited.Load() {
+			if proto.Unmarshal(f.Payload, &sig) == nil && sig.Signal > 0 && !s.exited.Load() {
 				s.stop.arm(syscall.Signal(sig.Signal))
 				_ = s.proc.Signal(syscall.Signal(sig.Signal))
 			}

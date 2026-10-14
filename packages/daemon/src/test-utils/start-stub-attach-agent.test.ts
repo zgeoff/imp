@@ -2,6 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
+import { PingSchema } from '../agent-client/agent-protocol';
 import { sendPing } from '../agent-client/agent-requests';
 import { openAttachStream } from '../agent-client/exec-stream';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
@@ -30,7 +32,7 @@ test('it reports its boot and a 0.15.0 agent in its ping', async () => {
 
   const ping = await sendPing(path);
 
-  expect(ping).toStrictEqual({ ok: true, version: '0.15.0', boot_id: 'boot-a' });
+  expect(ping).toStrictEqual(create(PingSchema, { ok: true, version: '0.15.0', bootId: 'boot-a' }));
 });
 
 test('it answers a session request with the first reply, and keeps a stream open', async () => {

@@ -41,9 +41,9 @@ func TestKillGraceReachesAChildThatLeftTheProcessGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	child := fmt.Sprintf(`trap "" TERM; echo $$ > %s; exec sleep 300`, pidFile)
 	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), tree)
-	h := startExec(t, m, proto.Request{
+	h := startExec(t, m, &proto.Request{
 		Argv:        []string{"sh", "-c", fmt.Sprintf("setsid sh -c '%s' >/dev/null 2>&1 & exec sleep 300", child)},
-		KillGraceMs: 300,
+		KillGraceMs: new(uint32(300)),
 	})
 	h.started(t)
 	escapee := readPid(t, pidFile)

@@ -86,7 +86,7 @@ export interface StartedVm {
   readonly timings: Readonly<Record<string, number>>;
 
   // what a boot with isIdentityReset reported; absent for any other start
-  readonly identityReset?: 'ok' | 'failed' | undefined;
+  readonly identityReset?: string | undefined;
 
   // the guest's boot_id; absent from an agent from before output offsets
   readonly bootId?: string | undefined;
@@ -354,8 +354,8 @@ export function createVmRunner(
           firecrackerVersion,
           agentVersion: ping.version,
           timings: timer.marks,
-          identityReset: ping.identity_reset,
-          bootId: ping.boot_id,
+          identityReset: ping.identityReset,
+          bootId: ping.bootId,
         };
       } catch (error) {
         await stopVmNow(pid, plan.paths);
@@ -498,7 +498,7 @@ export function createVmRunner(
           firecrackerVersion,
           agentVersion: ping.version,
           timings: timer.marks,
-          bootId: ping.boot_id,
+          bootId: ping.bootId,
         };
       } catch (error) {
         await stopVmNow(pid, plan.paths);
@@ -547,7 +547,7 @@ export function createVmRunner(
       try {
         const answer = await sendUptimePing(paths.vsockSocket, UPTIME_PING_TIMEOUT_MS);
 
-        return answer.uptime_ms ?? null;
+        return answer.uptimeMs ?? null;
       } catch {
         return null;
       }
@@ -585,7 +585,7 @@ export function createVmRunner(
 
       const firecrackerVersion = await createFirecrackerClient(paths.apiSocket).getVersion();
 
-      return { agentVersion: ping.version, firecrackerVersion, bootId: ping.boot_id };
+      return { agentVersion: ping.version, firecrackerVersion, bootId: ping.bootId };
     },
     buildTemplateVm: (plan) => buildTemplateVm(plan, jails, mergeWrapper),
     loadTemplateVm: (plan) => loadTemplateVm(plan, jails, mergeWrapper),

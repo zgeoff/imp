@@ -2,8 +2,10 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
 import { invariant } from '@imp/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
+import { ErrorDataSchema, PingSchema, SessionInfoSchema } from './agent-protocol';
 import { sendActivity, sendAgentRequest, sendPing, sendSessionKill } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
 
@@ -42,7 +44,7 @@ test("#sendPing resolves with the agent's answer", async () => {
 
   const ping = await sendPing(ctx.vsockPath);
 
-  expect(ping).toStrictEqual({ ok: true, version: '0.1.0', uptime_ms: 5 });
+  expect(ping).toStrictEqual(create(PingSchema, { ok: true, version: '0.1.0', uptimeMs: 5 }));
 });
 
 test('#sendAgentRequest rejects when the agent closes the connection without a response', async () => {
@@ -89,16 +91,37 @@ test('#sendAgentRequest rejects with the error the agent answers', async () => {
   await startStubAgent(ctx.vsockPath, (socket) => {
     socket.end(
       encodeJsonFrame(FRAME_TYPES.response, {
-        error: { code: 'BAD_REQUEST', message: 'missing op', data: { field: 'op' } },
+        error: {
+          code: 'INVALID_RESUME',
+          message: 'offset 9999 is past the end',
+          data: { end: 9000, buffer_start: 512 },
+        },
       }),
     );
   });
 
   expect(sendAgentRequest(ctx.vsockPath, { op: 'ping' })).rejects.toMatchObject({
     name: 'AgentError',
+    code: 'INVALID_RESUME',
+    detail: 'offset 9999 is past the end',
+    data: create(ErrorDataSchema, { end: 9000, bufferStart: 512 }),
+  });
+});
+
+test('#sendAgentRequest drops the fields of an error’s data it does not know', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'BAD_REQUEST', message: 'missing op', data: { field: 'op' } },
+      }),
+    );
+  });
+
+  expect(sendAgentRequest(ctx.vsockPath, { op: 'ping' })).rejects.toMatchObject({
     code: 'BAD_REQUEST',
-    detail: 'missing op',
-    data: { field: 'op' },
+    data: create(ErrorDataSchema),
   });
 });
 
@@ -131,7 +154,6 @@ test.each([
   ['generation is a NUL', { execution_generation: '\0' }],
   ['generation is a NUL inside a name', { execution_generation: 'a\0b' }],
   ['generation is a value of 4096 characters', { execution_generation: 'x'.repeat(4096) }],
-  ['generation is an empty value', { execution_generation: '' }],
   ['generation is 31 hex characters and a slash', { execution_generation: `${'a'.repeat(31)}/` }],
   [
     'generation is 31 hex characters and a backslash',
@@ -228,7 +250,7 @@ test.each([
   const activity = await sendActivity(ctx.vsockPath);
 
   expect(activity.sessions).toStrictEqual([
-    {
+    create(SessionInfoSchema, {
       name: 'main',
       pid: 1,
       argv: ['sh'],
@@ -236,11 +258,52 @@ test.each([
       attached: false,
       cols: 80,
       rows: 24,
-      started_unix_ms: 1,
-      execution_generation: '0123456789abcdef0123456789abcdef',
-      boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+      startedUnixMs: 1,
+      executionGeneration: '0123456789abcdef0123456789abcdef',
+      bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
       log: true,
-    },
+    }),
+  ]);
+});
+
+test('#sendActivity keeps a session without a generation, as an agent from before offsets lists it', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        tcp_established: 0,
+        exec_sessions: 0,
+        load1: 0,
+        sessions: [
+          {
+            name: 'main',
+            pid: 1,
+            argv: ['sh'],
+            state: 'running',
+            attached: false,
+            cols: 80,
+            rows: 24,
+            started_unix_ms: 1,
+          },
+        ],
+      }),
+    );
+  });
+
+  const activity = await sendActivity(ctx.vsockPath);
+
+  expect(activity.sessions).toStrictEqual([
+    create(SessionInfoSchema, {
+      name: 'main',
+      pid: 1,
+      argv: ['sh'],
+      state: 'running',
+      attached: false,
+      cols: 80,
+      rows: 24,
+      startedUnixMs: 1,
+    }),
   ]);
 });
 

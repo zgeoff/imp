@@ -1,6 +1,9 @@
 import type { Socket } from 'node:net';
-import * as z from 'zod';
-import type { AgentService } from '../agent-client/agent-protocol';
+import { create, toJson } from '@bufbuild/protobuf';
+import type { JsonValue } from '@bufbuild/protobuf';
+import { RequestSchema, ServiceStatusSchema } from '../agent-client/agent-protocol';
+import type { Request, ServiceDef, ServiceStatus } from '../agent-client/agent-protocol';
+import { decodeAgentMessage } from '../agent-client/decode-agent-message';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -21,26 +24,6 @@ const MAX_LOG_LINES = 100_000;
 // the newline byte, which ends each line of a log
 const NEWLINE = 0x0a;
 
-const AgentDefSchema = z.object({
-  name: z.string(),
-  argv: z.array(z.string()).readonly(),
-  env: z.array(z.string()).readonly().optional(),
-  user: z.string().optional(),
-  restart: z.enum(['always', 'on-failure', 'never']).optional(),
-});
-
-const AgentRequestSchema = z.object({
-  op: z.string(),
-  service: z.string().optional(),
-  def: AgentDefSchema.optional(),
-  replace: z.boolean().optional(),
-  lines: z.int().optional(),
-  follow: z.boolean().optional(),
-  cursor: z.object({ inode: z.int(), offset: z.int() }).optional(),
-});
-
-type AgentRequest = z.infer<typeof AgentRequestSchema>;
-
 // one open follow of a service's log
 interface Follow {
   readonly service: string;
@@ -57,7 +40,7 @@ interface StubServiceAgentOptions {
   readonly stack?: Readonly<AsyncDisposableStack>;
 }
 
-function sendResponse(socket: Socket, value: unknown): void {
+function sendResponse(socket: Socket, value: JsonValue): void {
   socket.end(encodeJsonFrame(FRAME_TYPES.response, value));
 }
 
@@ -96,8 +79,8 @@ export async function startStubServiceAgent(
   vsockPath: string,
   options: Readonly<StubServiceAgentOptions>,
 ) {
-  const services: AgentService[] = [];
-  const requests: AgentRequest[] = [];
+  const services: ServiceStatus[] = [];
+  const requests: Request[] = [];
 
   const logs = new Map<string, Buffer>();
 
@@ -118,16 +101,17 @@ export async function startStubServiceAgent(
     return pid;
   };
 
-  const toService = (def: z.infer<typeof AgentDefSchema>): AgentService => ({
-    name: def.name,
-    state: 'running',
-    pid: startProcess(),
-    restarts: 0,
-    ...(options.knowsServices && {
-      def: { ...def, restart: def.restart ?? 'always', source: 'api' as const },
-      root: (def.user ?? IMAGE_USER) === 'root',
-    }),
-  });
+  const toService = (def: ServiceDef): ServiceStatus =>
+    create(ServiceStatusSchema, {
+      name: def.name ?? '',
+      state: 'running',
+      pid: startProcess(),
+      restarts: 0,
+      ...(options.knowsServices && {
+        def: { ...def, restart: def.restart ?? 'always', source: 'api' },
+        root: (def.user ?? IMAGE_USER) === 'root',
+      }),
+    });
 
   const sendLog = (socket: Socket, data: Uint8Array, end: number): void => {
     socket.write(encodeFrame(FRAME_TYPES.stdout, data));
@@ -136,7 +120,7 @@ export async function startStubServiceAgent(
 
   // the last `lines` lines; or from a cursor, unless the log shrank below it
   // or it names another file, which sends the whole log
-  const findLogStart = (log: Buffer, request: Readonly<AgentRequest>): number => {
+  const findLogStart = (log: Buffer, request: Readonly<Request>): number => {
     if (request.cursor === undefined) {
       return findLastLines(log, request.lines ?? 0);
     }
@@ -146,7 +130,7 @@ export async function startStubServiceAgent(
     return cursor.inode === LOG_INODE && cursor.offset <= log.length ? cursor.offset : 0;
   };
 
-  const handleLogs = (socket: Socket, request: Readonly<AgentRequest>): void => {
+  const handleLogs = (socket: Socket, request: Readonly<Request>): void => {
     const service = request.service ?? '';
     const log = logs.get(service) ?? Buffer.alloc(0);
     const lines = request.lines ?? 0;
@@ -186,7 +170,7 @@ export async function startStubServiceAgent(
     });
   };
 
-  const handleAdd = (socket: Socket, request: Readonly<AgentRequest>): void => {
+  const handleAdd = (socket: Socket, request: Readonly<Request>): void => {
     const def = request.def;
 
     if (def === undefined || def.argv[0] === 'bad') {
@@ -212,7 +196,7 @@ export async function startStubServiceAgent(
 
   // a remove or a restart needs the service itself: a log that a removed
   // service left is NO_SERVICE to both, as it is to the agent
-  const handleChange = (socket: Socket, request: Readonly<AgentRequest>): void => {
+  const handleChange = (socket: Socket, request: Readonly<Request>): void => {
     const name = request.service ?? '';
     const index = services.findIndex((service) => service.name === name);
     const service = services[index];
@@ -227,7 +211,7 @@ export async function startStubServiceAgent(
       services.splice(index, 1);
     } else {
       // a new process, which has no last exit yet
-      const { last_exit: _lastExit, ...kept } = service;
+      const { lastExit: _lastExit, ...kept } = service;
 
       services.splice(index, 1, { ...kept, state: 'running', pid: startProcess(), restarts: 0 });
     }
@@ -235,7 +219,7 @@ export async function startStubServiceAgent(
     sendResponse(socket, { ok: true });
   };
 
-  const handleRequest = (socket: Socket, request: Readonly<AgentRequest>): void => {
+  const handleRequest = (socket: Socket, request: Readonly<Request>): void => {
     requests.push(request);
 
     const name = request.service ?? '';
@@ -244,11 +228,23 @@ export async function startStubServiceAgent(
     if (request.op === 'services.list' && failing.list) {
       sendError(socket, 'INTERNAL', 'the services could not be listed');
     } else if (request.op === 'services.list') {
-      sendResponse(socket, {
-        // by name in byte order, as the agent's sort; names are unique
-        services: services.toSorted((left, right) => (left.name < right.name ? -1 : 1)),
-        ...(options.knowsServices && { image_user: IMAGE_USER }),
-      });
+      // by name in byte order, as the agent's sort; names are unique, and
+      // each service has every field the agent always writes, zero or not
+      const listed = services
+        .toSorted((left, right) => (left.name < right.name ? -1 : 1))
+        .map((service) =>
+          toJson(ServiceStatusSchema, service, {
+            useProtoFieldName: true,
+            alwaysEmitImplicit: true,
+          }),
+        );
+
+      // an agent from before the services API had no image user to write
+      const answer = options.knowsServices
+        ? { services: listed, image_user: IMAGE_USER }
+        : { services: listed };
+
+      sendResponse(socket, answer);
     } else if (!options.knowsServices) {
       sendError(socket, 'UNKNOWN_OP', `unknown op ${request.op}`);
     } else if (request.op === 'services.add') {
@@ -270,7 +266,7 @@ export async function startStubServiceAgent(
     vsockPath,
     (socket, request, frames) => {
       if (frames.length === 1) {
-        handleRequest(socket, AgentRequestSchema.parse(decodeJsonPayload(request)));
+        handleRequest(socket, decodeAgentMessage(RequestSchema, decodeJsonPayload(request)));
       }
     },
     closeWith,

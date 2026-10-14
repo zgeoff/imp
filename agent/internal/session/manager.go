@@ -8,7 +8,6 @@ package session
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -48,7 +47,7 @@ type Manager struct {
 	// recorded, when set, gets each retired run once record has kept or
 	// passed over it; a test sets it before it starts a session, to know
 	// when a run that ended late has been judged
-	recorded func(proto.Previous)
+	recorded func(*proto.Previous)
 
 	// starting serializes starts, so a spawn needs no hold on mu, which List
 	// and Kill take. It guards seq too.
@@ -67,7 +66,7 @@ type Manager struct {
 // ended is a generation in previous, with its place among the runs.
 type ended struct {
 	seq      uint64
-	previous proto.Previous
+	previous *proto.Previous
 }
 
 func NewManager(l *launch.Launcher, bootID string) *Manager {
@@ -78,18 +77,18 @@ func NewManager(l *launch.Launcher, bootID string) *Manager {
 func (m *Manager) Attached() int { return int(m.attached.Load()) }
 
 // List returns every session, sorted by name.
-func (m *Manager) List() []proto.SessionInfo {
+func (m *Manager) List() []*proto.SessionInfo {
 	m.mu.Lock()
 	all := make([]*session, 0, len(m.sessions))
 	for _, s := range m.sessions {
 		all = append(all, s)
 	}
 	m.mu.Unlock()
-	infos := make([]proto.SessionInfo, 0, len(all))
+	infos := make([]*proto.SessionInfo, 0, len(all))
 	for _, s := range all {
 		infos = append(infos, s.info())
 	}
-	slices.SortFunc(infos, func(a, b proto.SessionInfo) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(infos, func(a, b *proto.SessionInfo) int { return strings.Compare(a.Name, b.Name) })
 	return infos
 }
 
@@ -123,7 +122,7 @@ func (m *Manager) Kill(name string) error {
 // Serve runs one session connection: exec with a session name (start the
 // session, or attach to it if it runs), session.attach or session.tap. It
 // returns when the connection ends; the caller closes it.
-func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *proto.Writer) error {
+func (m *Manager) Serve(req *proto.Request, conn net.Conn, r *proto.Reader, w *proto.Writer) error {
 	if req.Op == proto.OpSessionTap {
 		return m.serveTap(req, conn, r, w)
 	}
@@ -131,12 +130,12 @@ func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *pr
 	defer m.attached.Add(-1)
 
 	v := newViewer(conn, w)
-	safe.Go("session "+req.Session+" writer", v.run, func() { conn.Close() })
+	safe.Go("session "+req.GetSession()+" writer", v.run, func() { conn.Close() })
 	s, perr := m.attach(req, v)
 	if perr != nil {
 		v.stop(nil, false)
 		<-v.done
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: perr})
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: perr})
 	}
 
 	input(s, v, r)
@@ -149,20 +148,20 @@ func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *pr
 // serveTap runs one tap: impd reading a logged session's output for its
 // log. A tap is not a viewer, so it counts as no open connection: a logged
 // session must not keep the imp awake.
-func (m *Manager) serveTap(req proto.Request, conn net.Conn, r *proto.Reader, w *proto.Writer) error {
+func (m *Manager) serveTap(req *proto.Request, conn net.Conn, r *proto.Reader, w *proto.Writer) error {
 	m.mu.Lock()
-	s, ok := m.sessions[req.Session]
+	s, ok := m.sessions[req.GetSession()]
 	m.mu.Unlock()
 	if !ok {
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: m.noSession(req.Session)})
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: m.noSession(req.GetSession())})
 	}
 	t := newViewer(conn, w)
 	t.progress = s.tapProgress
-	safe.Go("session "+req.Session+" tap", t.run, func() { conn.Close() })
+	safe.Go("session "+req.GetSession()+" tap", t.run, func() { conn.Close() })
 	if perr := s.tap(t, req.ResumeFrom); perr != nil {
 		t.stop(nil, false)
 		<-t.done
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: perr})
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: perr})
 	}
 	// a tap sends nothing; reading finds the connection's end
 	for {
@@ -179,13 +178,13 @@ func (m *Manager) serveTap(req proto.Request, conn net.Conn, r *proto.Reader, w 
 // attach finds the session req names and makes v its viewer. A start that
 // finds the session over between its look and the attach (a viewer got the
 // EXIT meanwhile) looks again, and then replaces it.
-func (m *Manager) attach(req proto.Request, v *viewer) (*session, *proto.Error) {
+func (m *Manager) attach(req *proto.Request, v *viewer) (*session, *proto.Error) {
 	for range 2 {
 		s, created, perr := m.find(req)
 		if perr != nil {
 			return nil, perr
 		}
-		err := s.attach(v, req.Cols, req.Rows, created, req.ResumeFrom, m.previousOf(s.name))
+		err := s.attach(v, uint16(req.GetCols()), uint16(req.GetRows()), created, req.ResumeFrom, m.previousOf(s.name))
 		if err == nil {
 			return s, nil
 		}
@@ -196,32 +195,32 @@ func (m *Manager) attach(req proto.Request, v *viewer) (*session, *proto.Error) 
 			break
 		}
 	}
-	return nil, m.noSession(req.Session)
+	return nil, m.noSession(req.GetSession())
 }
 
 // find returns the session req names. exec starts it unless it runs
 // already, or a resume names its generation, which exited but whose EXIT
 // no viewer got yet; session.attach only finds it.
-func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
-	if !NamePattern.MatchString(req.Session) {
-		return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("bad session name %q", req.Session)}
+func (m *Manager) find(req *proto.Request) (*session, bool, *proto.Error) {
+	if !NamePattern.MatchString(req.GetSession()) {
+		return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("bad session name %q", req.GetSession())}
 	}
 	if req.Op == proto.OpSessionAttach {
 		m.mu.Lock()
-		s, ok := m.sessions[req.Session]
+		s, ok := m.sessions[req.GetSession()]
 		m.mu.Unlock()
 		if !ok {
-			return nil, false, m.noSession(req.Session)
+			return nil, false, m.noSession(req.GetSession())
 		}
 		return s, false, nil
 	}
-	if !req.TTY {
+	if !req.GetTty() {
 		return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: "a session needs a tty"}
 	}
 	m.starting.Lock()
 	defer m.starting.Unlock()
 	m.mu.Lock()
-	s, ok := m.sessions[req.Session]
+	s, ok := m.sessions[req.GetSession()]
 	count := len(m.sessions)
 	m.mu.Unlock()
 	if ok && (!s.exited() || isResumeOf(req.ResumeFrom, s) && !s.over()) {
@@ -242,7 +241,7 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 		return nil, false, proto.StartError(err, errors.Is(err, proc.ErrDown))
 	}
 	m.seq++
-	s = newSession(req.Session, req, run{proc: p, master: master, generation: newGeneration(), seq: m.seq, bootID: m.bootID})
+	s = newSession(req.GetSession(), req, run{proc: p, master: master, generation: newGeneration(), seq: m.seq, bootID: m.bootID})
 	s.onDelivered = func() { m.removeIfOver(s) }
 	m.mu.Lock()
 	m.sessions[s.name] = s
@@ -316,7 +315,7 @@ func (m *Manager) previousOf(name string) *proto.Previous {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e, ok := m.previous[name]; ok {
-		return &e.previous
+		return e.previous
 	}
 	return nil
 }
@@ -325,13 +324,13 @@ func (m *Manager) noSession(name string) *proto.Error {
 	return &proto.Error{
 		Code:    proto.ErrNoSession,
 		Message: fmt.Sprintf("no session %q", name),
-		Data:    proto.NoSessionData{BootID: m.bootID, Previous: m.previousOf(name)},
+		Data:    &proto.ErrorData{BootId: new(m.bootID), Previous: m.previousOf(name)},
 	}
 }
 
 // isResumeOf reports whether a resume names s's generation.
 func isResumeOf(resume *proto.ResumeFrom, s *session) bool {
-	return resume != nil && resume.Generation == s.generation
+	return resume != nil && resume.GetExecutionGeneration() == s.generation
 }
 
 // newGeneration returns 16 random bytes as 32 lowercase hex characters.
@@ -356,12 +355,12 @@ func input(s *session, v *viewer, r *proto.Reader) {
 			// A tty has no EOF to give; the client sends ^D itself.
 		case proto.TypeResize:
 			var rs proto.Resize
-			if json.Unmarshal(f.Payload, &rs) == nil {
-				s.resize(v, rs.Cols, rs.Rows)
+			if proto.Unmarshal(f.Payload, &rs) == nil {
+				s.resize(v, uint16(rs.Cols), uint16(rs.Rows))
 			}
 		case proto.TypeSignal:
 			var sig proto.Signal
-			if json.Unmarshal(f.Payload, &sig) == nil && sig.Signal > 0 {
+			if proto.Unmarshal(f.Payload, &sig) == nil && sig.Signal > 0 {
 				s.signal(v, syscall.Signal(sig.Signal))
 			}
 		default:

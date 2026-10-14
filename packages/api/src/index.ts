@@ -145,6 +145,7 @@ export {
   SERVICE_LOG_MAX_LINES,
   SERVICE_NAME_PATTERN,
   ServiceRestartSchema,
+  ServiceStateSchema,
 } from './schemas/service-schema';
 
 export type { Service, ServiceDef, ServiceList, ServiceLog } from './schemas/service-schema';

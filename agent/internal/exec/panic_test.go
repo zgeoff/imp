@@ -116,7 +116,7 @@ func TestServeHangsUpTheProcessWhenItsOwnBodyPanics(t *testing.T) {
 	panicked := make(chan any, 1)
 	go func() {
 		defer func() { panicked <- recover() }()
-		newManager().Serve(proto.Request{Op: proto.OpExec, Argv: []string{"sh", "-c", "echo $$ > " + pidFile + "; exec sleep 30"}},
+		newManager().Serve(&proto.Request{Op: proto.OpExec, Argv: []string{"sh", "-c", "echo $$ > " + pidFile + "; exec sleep 30"}},
 			proto.NewReader(guest), proto.NewWriter(startedPanics{guest, release}))
 	}()
 	pid := readPid(t, pidFile)
@@ -151,7 +151,7 @@ func TestServeHangsUpTheProcessWhenASessionGoroutinePanics(t *testing.T) {
 	t.Cleanup(func() { conn.Close() })
 	served := make(chan error, 1)
 	go func() {
-		served <- newManager().Serve(proto.Request{Op: proto.OpExec, Argv: []string{"sh", "-c", "echo hi; exec sleep 30"}},
+		served <- newManager().Serve(&proto.Request{Op: proto.OpExec, Argv: []string{"sh", "-c", "echo hi; exec sleep 30"}},
 			proto.NewReader(guest), proto.NewWriter(stdoutPanics{guest}))
 		guest.Close()
 	}()
@@ -170,6 +170,6 @@ func TestServeHangsUpTheProcessWhenASessionGoroutinePanics(t *testing.T) {
 	conn.Close()
 	err := <-served
 
-	assert.Check(t, cmp.Equal(exit.Signal, int(syscall.SIGHUP)))
+	assert.Check(t, cmp.Equal(exit.Signal, int32(syscall.SIGHUP)))
 	assert.Check(t, err, "Serve")
 }

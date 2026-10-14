@@ -8,6 +8,7 @@
     "start": "bun src/main.ts"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "catalog:",
     "@imp/api": "workspace:*",
     "@imp/local-tar": "workspace:*",
     "@imp/mcp": "workspace:*",

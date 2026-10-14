@@ -117,6 +117,18 @@ jobs:
       - name: Dockerfile Parser Diff
         run: bun scripts/dockerfile-difftest/run.ts --seed 1
 
+      # the agent protocol's generated code and reference against its schema;
+      # protoc-gen-go runs from the agent's go.mod, whose toolchain Go fetches
+      - name: Generated Protocol Code
+        run: |
+          bun run gen:proto
+          changed="$(git status --porcelain -- agent/internal/proto packages/daemon/src/agent-client/gen docs/reference)"
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::the generated protocol code differs from proto/; run bun run gen:proto"
+            exit 1
+          fi
+
       # the ACME issuer against Pebble and challtestsrv in Docker
       - name: Test ACME
         run: bun run test:pebble

@@ -8,6 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "catalog:",
     "@faker-js/faker": "catalog:",
     "@mswjs/interceptors": "catalog:",
     "@opentelemetry/api": "catalog:",

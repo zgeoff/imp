@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -56,7 +57,7 @@ func TestStopAllDeliversSIGTERMWhenItLandsDuringAStart(t *testing.T) {
 		offset := time.Duration(i) * 50 * time.Microsecond
 		t.Run(fmt.Sprintf("stop %s into the start", offset), func(t *testing.T) {
 			s := newSupervisor(t)
-			s.startAt(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
+			s.startAt(&Def{Name: new("sleeper"), Argv: []string{"sleep", "30"}, Restart: new("always")}, "")
 			time.Sleep(offset)
 
 			began := time.Now()
@@ -71,14 +72,14 @@ func TestStopAllDeliversSIGTERMWhenItLandsDuringAStart(t *testing.T) {
 		})
 	}
 
-	var killed []proto.Exit
+	var killed []*proto.Exit
 	for _, e := range exits {
 		if e != nil {
-			killed = append(killed, *e)
+			killed = append(killed, e)
 		}
 	}
-	sigterm := slices.Repeat([]proto.Exit{{Code: -1, Signal: 15}}, len(killed))
-	assert.Check(t, cmp.DeepEqual(killed, sigterm), "every process that ran ends by SIGTERM")
+	sigterm := slices.Repeat([]*proto.Exit{{Code: -1, Signal: 15}}, len(killed))
+	assert.Check(t, cmp.DeepEqual(killed, sigterm, protocmp.Transform()), "every process that ran ends by SIGTERM")
 }
 
 // heldRunner starts processes through a Direct runner, then reports each
@@ -183,7 +184,7 @@ func TestStopAllDeliversSIGTERMBetweenTheForkAndItsRecord(t *testing.T) {
 	// the release first, so a start the runner holds cannot block the stop
 	t.Cleanup(func() { r.release(); s.StopAll() })
 	s.logDir = t.TempDir()
-	s.startAt(Def{Name: "sleeper", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
+	s.startAt(&Def{Name: new("sleeper"), Argv: []string{"sleep", "30"}, Restart: new("always")}, "")
 	p := r.nextFork(t)
 	t.Cleanup(func() { p.Signal(syscall.SIGKILL) })
 	stopped := make(chan time.Duration, 1)
@@ -225,7 +226,7 @@ func TestStopAllDeliversSIGTERMBetweenTheForkAndItsRecord(t *testing.T) {
 	assert.Check(t, took < stopGrace, "StopAll took %s; SIGTERM was lost", took)
 	list := s.List()
 	assert.Assert(t, cmp.Len(list, 1))
-	assert.Check(t, cmp.DeepEqual(list[0].LastExit, &proto.Exit{Code: -1, Signal: 15}))
+	assert.Check(t, cmp.DeepEqual(list[0].LastExit, &proto.Exit{Code: -1, Signal: 15}, protocmp.Transform()))
 }
 
 // TestAFailedRestartKeepsTheLastExit runs a service that exits 3 and
@@ -236,10 +237,10 @@ func TestAFailedRestartKeepsTheLastExit(t *testing.T) {
 	s := newSupervisor(t)
 	s.firstBackoff = 100 * time.Millisecond
 
-	s.startAt(Def{Name: "once", Argv: []string{bin}, Restart: "always"}, "")
+	s.startAt(&Def{Name: new("once"), Argv: []string{bin}, Restart: new("always")}, "")
 
 	// The first restart comes after the first backoff and fails.
-	var st proto.ServiceStatus
+	var st *proto.ServiceStatus
 	poll.WaitOn(t, func(poll.LogT) poll.Result {
 		st = s.List()[0]
 		if st.Restarts >= 2 {
@@ -247,7 +248,7 @@ func TestAFailedRestartKeepsTheLastExit(t *testing.T) {
 		}
 		return poll.Continue("the service restarted %d times, want 2", st.Restarts)
 	}, poll.WithTimeout(3*time.Second), poll.WithDelay(20*time.Millisecond))
-	assert.DeepEqual(t, st.LastExit, &proto.Exit{Code: 3})
+	assert.DeepEqual(t, st.LastExit, &proto.Exit{Code: 3}, protocmp.Transform())
 }
 
 // A service waits one second before its first restart, doubling up to 60 s.
@@ -283,7 +284,7 @@ func openLogWithin(t *testing.T, s *Supervisor, svc *service) error {
 // loop.
 func TestOpenLogRefusesAFIFOWithoutAReaderWithoutBlocking(t *testing.T) {
 	s := newSupervisor(t)
-	svc := &service{def: Def{Name: "fifo"}}
+	svc := &service{def: &Def{Name: new("fifo")}}
 	assert.NilError(t, unix.Mkfifo(s.logPath(svc), 0o644))
 
 	err := openLogWithin(t, s, svc)
@@ -297,7 +298,7 @@ func TestOpenLogRefusesAFIFOWithoutAReaderWithoutBlocking(t *testing.T) {
 // refuse it.
 func TestOpenLogRefusesAFIFOWithAReaderAsNotRegular(t *testing.T) {
 	s := newSupervisor(t)
-	svc := &service{def: Def{Name: "fifo"}}
+	svc := &service{def: &Def{Name: new("fifo")}}
 	assert.NilError(t, unix.Mkfifo(s.logPath(svc), 0o644))
 	r, err := os.OpenFile(s.logPath(svc), os.O_RDONLY|unix.O_NONBLOCK, 0)
 	assert.NilError(t, err)
@@ -313,7 +314,7 @@ func TestOpenLogRefusesAFIFOWithAReaderAsNotRegular(t *testing.T) {
 func TestOpenLogHandsTheServiceABlockingFile(t *testing.T) {
 	s := newSupervisor(t)
 
-	f, err := s.openLog(&service{def: Def{Name: "plain"}})
+	f, err := s.openLog(&service{def: &Def{Name: new("plain")}})
 
 	assert.NilError(t, err)
 	t.Cleanup(func() { f.Close() })

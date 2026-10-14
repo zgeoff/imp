@@ -166,7 +166,7 @@ async function runBuildVm(
         readUptimeMs: async () => {
           const ping = await sendPing(plan.paths.vsockSocket);
 
-          return ping.uptime_ms ?? null;
+          return ping.uptimeMs ?? null;
         },
         minUptimeMs: plan.minGuestUptimeMs,
         isWanted: () => Promise.resolve(true),
@@ -336,8 +336,8 @@ export async function loadTemplateVm(
       firecrackerVersion,
       agentVersion: ping.version,
       timings: marks.marks,
-      identityReset: ping.identity_reset,
-      bootId: ping.boot_id,
+      identityReset: ping.identityReset,
+      bootId: ping.bootId,
     };
   } catch (error) {
     stopPid(pid);

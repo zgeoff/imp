@@ -10,3 +10,6 @@ kernel/out/**
 # kysely-codegen writes it (bun run render:db-schema); render-schema.test.ts
 # compares it byte for byte
 packages/daemon/src/db/schema.ts
+
+# protoc-gen-es writes it (bun run gen:proto); CI compares it with the schema
+packages/daemon/src/agent-client/gen/**

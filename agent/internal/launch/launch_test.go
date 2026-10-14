@@ -15,7 +15,7 @@ import (
 func TestSpecRefusesAnEmptyArgv(t *testing.T) {
 	l := New(&proc.Direct{}, imagecfg.NewLive(imagecfg.Config{User: "imp"}), nil)
 
-	spec, err := l.Spec(proto.Request{Cwd: "/work"})
+	spec, err := l.Spec(&proto.Request{Cwd: new("/work")})
 
 	assert.Check(t, cmp.ErrorContains(err, "argv is empty"))
 	assert.Check(t, cmp.DeepEqual(spec, proc.Spec{}))
@@ -28,7 +28,7 @@ func TestSpecFillsTheImageDefaultsAroundTheRequest(t *testing.T) {
 		User:    "imp",
 	}), nil)
 
-	spec, err := l.Spec(proto.Request{Argv: []string{"ls", "-l"}, Env: []string{"LANG=C.UTF-8"}, Cwd: "/tmp"})
+	spec, err := l.Spec(&proto.Request{Argv: []string{"ls", "-l"}, Env: []string{"LANG=C.UTF-8"}, Cwd: new("/tmp")})
 
 	assert.NilError(t, err)
 	assert.DeepEqual(t, spec, proc.Spec{
@@ -44,7 +44,7 @@ func TestSpecFillsTheImageDefaultsAroundTheRequest(t *testing.T) {
 func TestSpecRunsAsTheRequestedUserOverTheImageUser(t *testing.T) {
 	l := New(&proc.Direct{}, imagecfg.NewLive(imagecfg.Config{User: "imp"}), nil)
 
-	spec, err := l.Spec(proto.Request{Argv: []string{"id"}, User: "svc"})
+	spec, err := l.Spec(&proto.Request{Argv: []string{"id"}, User: new("svc")})
 
 	assert.NilError(t, err)
 	assert.Equal(t, spec.User, "svc")
@@ -57,7 +57,7 @@ func TestStartPTYOpensNoPTYForAnEmptyArgv(t *testing.T) {
 		return nil, nil, os.ErrInvalid
 	})
 
-	p, master, err := l.StartPTY(proto.Request{}, nil)
+	p, master, err := l.StartPTY(&proto.Request{}, nil)
 
 	assert.Check(t, cmp.ErrorContains(err, "argv is empty"))
 	assert.Check(t, cmp.Nil(p))

@@ -1,7 +1,6 @@
 package dial
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -27,7 +26,7 @@ type host struct {
 	served chan error
 }
 
-func startServe(t *testing.T, req proto.Request) *host {
+func startServe(t *testing.T, req *proto.Request) *host {
 	t.Helper()
 	hostEnd, guestEnd := net.Pipe()
 	t.Cleanup(func() { hostEnd.Close() })
@@ -72,7 +71,7 @@ func (h *host) errorCode(t *testing.T) string {
 	f := h.next(t)
 	assert.Equal(t, f.Type, proto.TypeResponse, "frame %s", f.Payload)
 	var resp proto.ErrorResponse
-	assert.NilError(t, json.Unmarshal(f.Payload, &resp))
+	assert.NilError(t, proto.Unmarshal(f.Payload, &resp))
 	assert.Assert(t, resp.Error != nil, "RESPONSE %s is no error", f.Payload)
 	return resp.Error.Code
 }
@@ -160,7 +159,7 @@ func TestServeRelaysWithAHalfCloseBothWays(t *testing.T) {
 				got, _ := io.ReadAll(c)
 				c.Write([]byte("got " + string(got)))
 			})
-			h := startServe(t, proto.Request{Op: proto.OpDial, Network: tc.network, Address: addr.String()})
+			h := startServe(t, &proto.Request{Op: proto.OpDial, Network: new(tc.network), Address: new(addr.String())})
 			h.requireOK(t)
 
 			assert.NilError(t, h.w.Write(proto.TypeStdin, []byte("hello ")))
@@ -200,7 +199,7 @@ func TestServeFailsTheDialToARefusedPort(t *testing.T) {
 	assert.NilError(t, err)
 	address := fmt.Sprintf("127.0.0.1:%d", sa.(*syscall.SockaddrInet4).Port)
 
-	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "tcp", Address: address})
+	h := startServe(t, &proto.Request{Op: proto.OpDial, Network: new("tcp"), Address: new(address)})
 
 	assert.Check(t, cmp.Equal(h.errorCode(t), proto.ErrDialFailed))
 	h.waitServed(t)
@@ -209,12 +208,12 @@ func TestServeFailsTheDialToARefusedPort(t *testing.T) {
 func TestServeRefusesABadDialRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		req  proto.Request
+		req  *proto.Request
 	}{
-		{name: "udp", req: proto.Request{Op: proto.OpDial, Network: "udp", Address: "127.0.0.1:53"}},
-		{name: "no address", req: proto.Request{Op: proto.OpDial, Network: "tcp"}},
-		{name: "a relative unix path", req: proto.Request{Op: proto.OpDial, Network: "unix", Address: "echo.sock"}},
-		{name: "an abstract socket", req: proto.Request{Op: proto.OpDial, Network: "unix", Address: "@abstract"}},
+		{name: "udp", req: &proto.Request{Op: proto.OpDial, Network: new("udp"), Address: new("127.0.0.1:53")}},
+		{name: "no address", req: &proto.Request{Op: proto.OpDial, Network: new("tcp")}},
+		{name: "a relative unix path", req: &proto.Request{Op: proto.OpDial, Network: new("unix"), Address: new("echo.sock")}},
+		{name: "an abstract socket", req: &proto.Request{Op: proto.OpDial, Network: new("unix"), Address: new("@abstract")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -236,7 +235,7 @@ func TestServeEndsTheRelayWhenTheHostCloses(t *testing.T) {
 		io.Copy(io.Discard, c)
 		close(targetClosed)
 	})
-	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "tcp", Address: addr.String()})
+	h := startServe(t, &proto.Request{Op: proto.OpDial, Network: new("tcp"), Address: new(addr.String())})
 	h.requireOK(t)
 
 	h.conn.Close()
@@ -261,7 +260,7 @@ func TestServeEndsWithoutStdoutEOFWhenTheTargetResets(t *testing.T) {
 		c.Write([]byte("partial"))
 		c.(*net.TCPConn).SetLinger(0)
 	})
-	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "tcp", Address: addr.String()})
+	h := startServe(t, &proto.Request{Op: proto.OpDial, Network: new("tcp"), Address: new(addr.String())})
 	h.requireOK(t)
 
 	assert.NilError(t, h.w.Write(proto.TypeStdinEOF, nil))

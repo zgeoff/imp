@@ -1,9 +1,16 @@
+import type { MessageInitShape } from '@bufbuild/protobuf';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
-import { LogCursorSchema, OkResponseSchema, ServicesListSchema } from './agent-protocol';
-import type { AgentServiceDef, AgentServices, LogCursor } from './agent-protocol';
-import { readFrameWithin, requireNoAgentError, sendAgentRequest } from './agent-requests';
+import { LogCursorSchema, OKSchema, ServicesListSchema } from './agent-protocol';
+import type { LogCursor, ServiceDefSchema, ServicesList } from './agent-protocol';
+import {
+  readFrameWithin,
+  requireNoAgentError,
+  sendAgentRequest,
+  sendRequestFrame,
+} from './agent-requests';
+import { decodeAgentMessage } from './decode-agent-message';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 
 // The agent's services ops (docs/architecture/protocol.md#servicesadd-servicesremove-servicesrestart). Each
@@ -19,15 +26,15 @@ const LOGS_START_TIMEOUT_MS = 5000;
 export async function sendServicesList(
   vsockPath: string,
   timeoutMs?: number,
-): Promise<AgentServices> {
+): Promise<ServicesList> {
   const response = await sendAgentRequest(vsockPath, { op: 'services.list' }, timeoutMs);
 
-  return ServicesListSchema.parse(response);
+  return decodeAgentMessage(ServicesListSchema, response);
 }
 
 export async function sendServicesAdd(
   vsockPath: string,
-  def: AgentServiceDef,
+  def: MessageInitShape<typeof ServiceDefSchema>,
   replace: boolean,
 ): Promise<void> {
   const response = await sendAgentRequest(
@@ -36,7 +43,7 @@ export async function sendServicesAdd(
     STOP_TIMEOUT_MS,
   ).catch(handleUnknownOp('services'));
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 export async function sendServicesRemove(vsockPath: string, service: string): Promise<void> {
@@ -46,7 +53,7 @@ export async function sendServicesRemove(vsockPath: string, service: string): Pr
     STOP_TIMEOUT_MS,
   ).catch(handleUnknownOp('services'));
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 export async function sendServicesRestart(vsockPath: string, service: string): Promise<void> {
@@ -56,7 +63,7 @@ export async function sendServicesRestart(vsockPath: string, service: string): P
     STOP_TIMEOUT_MS,
   ).catch(handleUnknownOp('services'));
 
-  OkResponseSchema.parse(response);
+  decodeAgentMessage(OKSchema, response);
 }
 
 export interface ServiceLogRequest {
@@ -86,7 +93,7 @@ export async function openServiceLogStream(
   const connection = await openAgentConnection(vsockPath);
 
   try {
-    connection.sendJson(FRAME_TYPES.request, {
+    sendRequestFrame(connection, {
       op: 'services.logs',
       service: request.service,
       lines: request.lines,
@@ -101,8 +108,7 @@ export async function openServiceLogStream(
     }
 
     requireNoAgentError(first);
-
-    OkResponseSchema.parse(decodeJsonPayload(first));
+    decodeAgentMessage(OKSchema, decodeJsonPayload(first));
   } catch (error) {
     connection.close();
 
@@ -128,7 +134,10 @@ async function* readLogChunks(
     if (frame.type === FRAME_TYPES.stdout) {
       yield { kind: 'data', data: frame.payload };
     } else if (frame.type === FRAME_TYPES.cursor) {
-      yield { kind: 'cursor', cursor: LogCursorSchema.parse(decodeJsonPayload(frame)) };
+      yield {
+        kind: 'cursor',
+        cursor: decodeAgentMessage(LogCursorSchema, decodeJsonPayload(frame)),
+      };
     }
   }
 }

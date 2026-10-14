@@ -37,13 +37,13 @@ type halfCloser interface {
 // Serve dials req's address and relays until both sides are done. r and w
 // are the host connection's frame streams; the caller closes it after Serve
 // returns, which also ends a relay the host gave up on.
-func (d *Dialer) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
+func (d *Dialer) Serve(req *proto.Request, r *proto.Reader, w *proto.Writer) error {
 	target, err := d.open(req)
 	if err != nil {
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: toProtoError(err)})
+		return w.WriteMessage(proto.TypeResponse, &proto.ErrorResponse{Error: toProtoError(err)})
 	}
 	defer target.Close()
-	if err := w.WriteJSON(proto.TypeResponse, proto.OK{OK: true}); err != nil {
+	if err := w.WriteMessage(proto.TypeResponse, &proto.OK{Ok: true}); err != nil {
 		return err
 	}
 	return Relay(target, r, w)
@@ -96,17 +96,17 @@ func Relay(target net.Conn, r *proto.Reader, w *proto.Writer) error {
 	}
 }
 
-func (d *Dialer) open(req proto.Request) (net.Conn, error) {
-	if req.Network != "tcp" && req.Network != "unix" {
-		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("network must be tcp or unix, got %q", req.Network)}
+func (d *Dialer) open(req *proto.Request) (net.Conn, error) {
+	if req.GetNetwork() != "tcp" && req.GetNetwork() != "unix" {
+		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("network must be tcp or unix, got %q", req.GetNetwork())}
 	}
-	if req.Address == "" {
+	if req.GetAddress() == "" {
 		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "address is required"}
 	}
-	if req.Network == "unix" {
-		return d.openUnix(req.Address)
+	if req.GetNetwork() == "unix" {
+		return d.openUnix(req.GetAddress())
 	}
-	c, err := net.DialTimeout(req.Network, req.Address, dialTimeout)
+	c, err := net.DialTimeout(req.GetNetwork(), req.GetAddress(), dialTimeout)
 	if err != nil {
 		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: err.Error()}
 	}

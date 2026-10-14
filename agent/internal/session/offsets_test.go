@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -21,11 +22,11 @@ import (
 var generationPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // output reads the STARTED's output, which a session connection always has.
-func (h *host) output(t *testing.T) (proto.Started, proto.Output) {
+func (h *host) output(t *testing.T) (*proto.Started, *proto.Output) {
 	t.Helper()
 	st := h.started(t)
-	assert.Assert(t, st.Output != nil, "STARTED %+v has no output", st)
-	return st, *st.Output
+	assert.Assert(t, st.Output != nil, "STARTED %v has no output", st)
+	return st, st.Output
 }
 
 // data reads STDOUT until it holds n bytes, and fails on any other frame.
@@ -39,31 +40,34 @@ func (h *host) data(t *testing.T, n int) []byte {
 	return h.out.Bytes()
 }
 
-// wire is a resume as the agent sends it: each kind with its own fields
+// wire is a resume as the agent sends it, compacted: each kind with its own
+// fields
 func wire(t *testing.T, r *proto.Resume) string {
 	t.Helper()
-	b, err := json.Marshal(r)
+	b, err := proto.Marshal(r)
 	assert.NilError(t, err)
-	return string(b)
+	var out bytes.Buffer
+	assert.NilError(t, json.Compact(&out, b))
+	return out.String()
 }
 
 func resumeFrom(t *testing.T, m *Manager, name string, generation string, offset uint64) *host {
 	t.Helper()
-	return connect(t, m, proto.Request{Op: proto.OpSessionAttach, Session: name, Cols: 80, Rows: 24,
-		ResumeFrom: &proto.ResumeFrom{Generation: generation, Offset: offset}})
+	return connect(t, m, &proto.Request{Op: proto.OpSessionAttach, Session: new(name), Cols: new(uint32(80)), Rows: new(uint32(24)),
+		ResumeFrom: &proto.ResumeFrom{ExecutionGeneration: generation, Offset: float64(offset)}})
 }
 
 // startQuiet starts a session that writes exactly what script prints, with
 // no newline translation or echo, then waits for its output to reach n
 // bytes with no viewer attached.
-func startQuiet(t *testing.T, m *Manager, name, script string, n uint64) proto.Output {
+func startQuiet(t *testing.T, m *Manager, name, script string, n uint64) *proto.Output {
 	t.Helper()
 	h := start(t, m, name, "stty -opost -echo; "+script+"; exec sleep 60")
 	_, out := h.output(t)
 	h.detach(t)
 	waitFor(t, "the output", func() bool {
-		info, _ := find(m, name)
-		return info.End == n
+		info, ok := find(m, name)
+		return ok && info.End == float64(n)
 	})
 	return out
 }
@@ -74,8 +78,8 @@ func TestStartReportsAGenerationAndTheBootID(t *testing.T) {
 	h := start(t, m, "main", "exec sleep 60")
 
 	_, out := h.output(t)
-	assert.Check(t, cmp.Regexp(generationPattern, out.Generation))
-	assert.Check(t, cmp.Equal(out.BootID, "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90"))
+	assert.Check(t, cmp.Regexp(generationPattern, out.ExecutionGeneration))
+	assert.Check(t, cmp.Equal(out.BootId, "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90"))
 }
 
 // A fresh attach sends the history's replay as before offsets, as one frame
@@ -102,15 +106,16 @@ func TestFreshAttachSendsTheReplayAndPlacesIt(t *testing.T) {
 	f := h.next(t)
 	assert.Assert(t, cmp.Equal(f.Type, proto.TypeStdout))
 	assert.Assert(t, bytes.Equal(f.Payload, want), "replay frame of %d bytes, want the history's %d", len(f.Payload), len(want))
-	assert.Assert(t, out.Prelude <= len(f.Payload), "a prelude of %d in a frame of %d", out.Prelude, len(f.Payload))
-	kept := uint64(len(f.Payload) - out.Prelude)
+	prelude := int(out.Prelude)
+	assert.Assert(t, prelude <= len(f.Payload), "a prelude of %d in a frame of %d", prelude, len(f.Payload))
+	kept := float64(len(f.Payload) - prelude)
 	assert.Check(t, cmp.Nil(out.Resume))
-	assert.Check(t, cmp.Equal(out.End, uint64(len(fixture))))
+	assert.Check(t, cmp.Equal(out.End, float64(len(fixture))))
 	assert.Check(t, cmp.Equal(out.Offset, out.End-kept))
-	assert.Check(t, out.Prelude != 0, "the replay has a prelude")
-	assert.Check(t, bytes.Equal(f.Payload[out.Prelude:], fixture[out.Offset:]), "the replay after the prelude is not the output from its offset")
+	assert.Check(t, prelude != 0, "the replay has a prelude")
+	assert.Check(t, bytes.Equal(f.Payload[prelude:], fixture[int(out.Offset):]), "the replay after the prelude is not the output from its offset")
 	assert.Check(t, cmp.Equal(out.BufferStart, out.End-ringSize), "the ring holds exactly ringSize bytes")
-	assert.Check(t, cmp.Equal(out.Generation, first.Generation))
+	assert.Check(t, cmp.Equal(out.ExecutionGeneration, first.ExecutionGeneration))
 }
 
 // The ring holds exactly ringSize bytes even when its start falls inside an
@@ -124,8 +129,8 @@ func TestFreshAttachReportsTheExactBufferStartInsideASequence(t *testing.T) {
 	h := attach(t, m, "main")
 
 	_, out := h.output(t)
-	assert.Check(t, cmp.Equal(out.BufferStart, n-ringSize))
-	assert.Check(t, cmp.Equal(out.End, n))
+	assert.Check(t, cmp.Equal(out.BufferStart, float64(n-ringSize)))
+	assert.Check(t, cmp.Equal(out.End, float64(n)))
 }
 
 func TestResumeAtTheBufferStartInsideASequenceReadsTheRawRing(t *testing.T) {
@@ -133,12 +138,12 @@ func TestResumeAtTheBufferStartInsideASequenceReadsTheRawRing(t *testing.T) {
 	n := uint64(ringSize + 1000)
 	first := startQuiet(t, m, "main", `printf '\033]0;'; head -c `+strconv.FormatUint(n-4, 10)+` /dev/zero | tr '\0' t`, n)
 
-	r := resumeFrom(t, m, "main", first.Generation, n-ringSize)
+	r := resumeFrom(t, m, "main", first.ExecutionGeneration, n-ringSize)
 
 	_, resumed := r.output(t)
-	assert.Assert(t, resumed.Resume != nil, "resume at the buffer start: %+v", resumed)
+	assert.Assert(t, resumed.Resume != nil, "resume at the buffer start: %v", resumed)
 	assert.Check(t, cmp.Equal(resumed.Resume.Kind, proto.ResumeExact))
-	assert.Check(t, cmp.Equal(resumed.Prelude, 0))
+	assert.Check(t, cmp.Equal(resumed.Prelude, uint32(0)))
 	assert.Check(t, bytes.Equal(r.data(t, ringSize), bytes.Repeat([]byte("t"), ringSize)), "resumed bytes are not the %d raw ones", ringSize)
 }
 
@@ -146,15 +151,15 @@ func TestResumeInsideTheRingIsExact(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	out := startQuiet(t, m, "main", "printf 0123456789", 10)
 
-	h := resumeFrom(t, m, "main", out.Generation, 4)
+	h := resumeFrom(t, m, "main", out.ExecutionGeneration, 4)
 
 	st, resumed := h.output(t)
-	assert.Check(t, !st.Created, "the resume attached")
+	assert.Check(t, !st.GetCreated(), "the resume attached")
 	assert.Check(t, cmp.Equal(wire(t, resumed.Resume), `{"kind":"exact"}`), "exact alone")
-	assert.Check(t, cmp.Equal(resumed.Offset, uint64(4)))
-	assert.Check(t, cmp.Equal(resumed.Prelude, 0))
-	assert.Check(t, cmp.Equal(resumed.End, uint64(10)))
-	assert.Check(t, cmp.Equal(resumed.BufferStart, uint64(0)))
+	assert.Check(t, cmp.Equal(resumed.Offset, 4.0))
+	assert.Check(t, cmp.Equal(resumed.Prelude, uint32(0)))
+	assert.Check(t, cmp.Equal(resumed.End, 10.0))
+	assert.Check(t, cmp.Equal(resumed.BufferStart, 0.0))
 	assert.Check(t, cmp.Equal(string(h.data(t, 6)), "456789"))
 }
 
@@ -163,11 +168,11 @@ func TestResumeAtTheEndIsExact(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	out := startQuiet(t, m, "main", "printf 0123456789", 10)
 
-	again := resumeFrom(t, m, "main", out.Generation, 10)
+	again := resumeFrom(t, m, "main", out.ExecutionGeneration, 10)
 
 	_, at := again.output(t)
 	assert.Check(t, cmp.Equal(wire(t, at.Resume), `{"kind":"exact"}`))
-	assert.Check(t, cmp.Equal(at.Offset, uint64(10)))
+	assert.Check(t, cmp.Equal(at.Offset, 10.0))
 }
 
 func TestResumeBelowTheRingIsAGap(t *testing.T) {
@@ -175,12 +180,12 @@ func TestResumeBelowTheRingIsAGap(t *testing.T) {
 	const n = 1 << 20
 	out := startQuiet(t, m, "main", "head -c 1048576 /dev/zero | tr '\\0' g", n)
 
-	h := resumeFrom(t, m, "main", out.Generation, 0)
+	h := resumeFrom(t, m, "main", out.ExecutionGeneration, 0)
 
 	_, resumed := h.output(t)
 	assert.Check(t, cmp.Equal(wire(t, resumed.Resume), `{"kind":"gap","from":0,"to":`+strconv.Itoa(n-ringSize)+`}`))
-	assert.Check(t, cmp.Equal(resumed.Offset, uint64(n-ringSize)))
-	assert.Check(t, cmp.Equal(resumed.Prelude, 0))
+	assert.Check(t, cmp.Equal(resumed.Offset, float64(n-ringSize)))
+	assert.Check(t, cmp.Equal(resumed.Prelude, uint32(0)))
 	assert.Check(t, cmp.Len(h.data(t, ringSize), ringSize))
 }
 
@@ -191,8 +196,8 @@ func TestResumeOfAnotherGenerationReadsFromTheStart(t *testing.T) {
 	h := resumeFrom(t, m, "main", strings.Repeat("0", 32), 1)
 
 	_, resumed := h.output(t)
-	assert.Check(t, cmp.Equal(wire(t, resumed.Resume), `{"kind":"generation_changed","execution_generation":"`+out.Generation+`","first_offset":0}`))
-	assert.Check(t, cmp.Equal(resumed.Offset, uint64(0)))
+	assert.Check(t, cmp.Equal(wire(t, resumed.Resume), `{"kind":"generation_changed","execution_generation":"`+out.ExecutionGeneration+`","first_offset":0}`))
+	assert.Check(t, cmp.Equal(resumed.Offset, 0.0))
 	assert.Check(t, cmp.Equal(string(h.data(t, 3)), "abc"))
 }
 
@@ -204,30 +209,37 @@ func TestResumePastTheEndIsInvalidAndKeepsTheViewer(t *testing.T) {
 	viewer := attach(t, m, "main")
 	viewer.output(t)
 
-	h := resumeFrom(t, m, "main", out.Generation, 4)
+	h := resumeFrom(t, m, "main", out.ExecutionGeneration, 4)
 
-	resp := decode[struct {
-		Error struct {
-			Code string                  `json:"code"`
-			Data proto.InvalidResumeData `json:"data"`
-		} `json:"error"`
-	}](t, h.next(t))
+	resp := decode[proto.ErrorResponse](t, h.next(t))
+	assert.Assert(t, resp.Error != nil)
 	assert.Check(t, cmp.Equal(resp.Error.Code, proto.ErrInvalidResume))
-	assert.Check(t, cmp.Equal(resp.Error.Data, proto.InvalidResumeData{End: 3, BufferStart: 0}))
+	assert.Check(t, cmp.DeepEqual(resp.Error.Data, &proto.ErrorData{End: new(3.0), BufferStart: new(0.0)}, protocmp.Transform()))
 	info, _ := find(m, "main")
 	assert.Check(t, info.Attached, "the attached viewer lost the session")
+}
+
+// A resume offset that names no byte is refused before it is placed.
+func TestResumeAtAnOffsetThatIsNoByteIsABadRequest(t *testing.T) {
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+	out := startQuiet(t, m, "main", "printf abc", 3)
+
+	h := connect(t, m, &proto.Request{Op: proto.OpSessionAttach, Session: new("main"),
+		ResumeFrom: &proto.ResumeFrom{ExecutionGeneration: out.ExecutionGeneration, Offset: 1.5}})
+
+	assert.Check(t, cmp.Equal(h.errorCode(t), proto.ErrBadRequest))
 }
 
 // A start with a resume for a name with no process starts one, from 0.
 func TestStartWithAResumeStartsAGenerationFromZero(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 
-	h := connect(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sleep", "60"},
-		ResumeFrom: &proto.ResumeFrom{Generation: strings.Repeat("a", 32), Offset: 7}})
+	h := connect(t, m, &proto.Request{Op: proto.OpExec, Session: new("main"), Tty: new(true), Argv: []string{"sleep", "60"},
+		ResumeFrom: &proto.ResumeFrom{ExecutionGeneration: strings.Repeat("a", 32), Offset: 7}})
 
 	st, out := h.output(t)
-	assert.Check(t, st.Created)
-	assert.Check(t, cmp.Equal(wire(t, out.Resume), `{"kind":"generation_changed","execution_generation":"`+out.Generation+`","first_offset":0}`))
+	assert.Check(t, st.GetCreated())
+	assert.Check(t, cmp.Equal(wire(t, out.Resume), `{"kind":"generation_changed","execution_generation":"`+out.ExecutionGeneration+`","first_offset":0}`))
 }
 
 // A resume of a generation that exited, whose EXIT no viewer got, attaches
@@ -244,14 +256,14 @@ func TestResumeOfAnExitedGenerationGetsTheTailThenTheExit(t *testing.T) {
 		return info.State == proto.SessionExited
 	})
 
-	r := connect(t, m, proto.Request{Op: proto.OpExec, Session: "job", TTY: true, Argv: []string{"sleep", "60"},
-		ResumeFrom: &proto.ResumeFrom{Generation: out.Generation, Offset: 4}})
+	r := connect(t, m, &proto.Request{Op: proto.OpExec, Session: new("job"), Tty: new(true), Argv: []string{"sleep", "60"},
+		ResumeFrom: &proto.ResumeFrom{ExecutionGeneration: out.ExecutionGeneration, Offset: 4}})
 
 	st, resumed := r.output(t)
-	assert.Check(t, !st.Created, "the resume attached to the exited generation")
-	assert.Check(t, cmp.Equal(resumed.Generation, out.Generation))
+	assert.Check(t, !st.GetCreated(), "the resume attached to the exited generation")
+	assert.Check(t, cmp.Equal(resumed.ExecutionGeneration, out.ExecutionGeneration))
 	assert.Check(t, cmp.Equal(wire(t, resumed.Resume), `{"kind":"exact"}`))
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, r.last(t)), proto.Exit{Code: 3}))
+	assert.Check(t, cmp.DeepEqual(decode[proto.Exit](t, r.last(t)), &proto.Exit{Code: 3}, protocmp.Transform()))
 	assert.Check(t, cmp.Equal(r.out.String(), "two"))
 }
 
@@ -272,9 +284,9 @@ func TestStartAfterAnExitReportsThePreviousGeneration(t *testing.T) {
 	next := start(t, m, "job", "sleep 60")
 
 	st, out := next.output(t)
-	assert.Check(t, st.Created)
-	assert.Check(t, cmp.DeepEqual(out.Previous, &proto.Previous{Generation: first.Generation, End: 4, Exit: proto.Exit{Code: 5}}))
-	assert.Check(t, out.Generation != first.Generation, "the replacement has a generation of its own")
+	assert.Check(t, st.GetCreated())
+	assert.Check(t, cmp.DeepEqual(out.Previous, &proto.Previous{ExecutionGeneration: first.ExecutionGeneration, End: 4, Exit: &proto.Exit{Code: 5}}, protocmp.Transform()))
+	assert.Check(t, out.ExecutionGeneration != first.ExecutionGeneration, "the replacement has a generation of its own")
 }
 
 // previous is written once the process ends, not at the kill.
@@ -297,11 +309,11 @@ func TestPreviousIsFinalAfterAKill(t *testing.T) {
 	// the kill grace never runs out here: the test ends the killed process
 	// itself, once the replacement is previous, so the end order is certain
 	m.killGrace = time.Hour
-	recorded := make(chan proto.Previous, 4)
-	m.recorded = func(p proto.Previous) { recorded <- p }
+	recorded := make(chan *proto.Previous, 4)
+	m.recorded = func(p *proto.Previous) { recorded <- p }
 	h := start(t, m, "job", `trap '' HUP; stty -opost; printf ready; while :; do sleep 0.05; done`)
 	killed, first := h.output(t)
-	t.Cleanup(func() { syscall.Kill(killed.Pid, syscall.SIGKILL) })
+	t.Cleanup(func() { syscall.Kill(int(killed.Pid), syscall.SIGKILL) })
 	h.until(t, "ready")
 	h.detach(t)
 	assert.NilError(t, m.Kill("job"))
@@ -312,13 +324,13 @@ func TestPreviousIsFinalAfterAKill(t *testing.T) {
 	b.detach(t)
 	waitFor(t, "the replacement as previous", func() bool {
 		p := m.previousOf("job")
-		return p != nil && p.Generation == second.Generation
+		return p != nil && p.ExecutionGeneration == second.ExecutionGeneration
 	})
 
-	assert.NilError(t, syscall.Kill(killed.Pid, syscall.SIGKILL))
+	assert.NilError(t, syscall.Kill(int(killed.Pid), syscall.SIGKILL))
 	// the manager judges the killed run once its process has ended
-	var late proto.Previous
-	for late.Generation != first.Generation {
+	late := &proto.Previous{}
+	for late.ExecutionGeneration != first.ExecutionGeneration {
 		select {
 		case late = <-recorded:
 		case <-time.After(5 * time.Second):
@@ -326,8 +338,8 @@ func TestPreviousIsFinalAfterAKill(t *testing.T) {
 		}
 	}
 
-	assert.Check(t, cmp.Equal(replacementExit, proto.Exit{Code: 2}))
-	assert.Check(t, cmp.DeepEqual(m.previousOf("job"), &proto.Previous{Generation: second.Generation, End: 1, Exit: proto.Exit{Code: 2}}))
+	assert.Check(t, cmp.DeepEqual(replacementExit, &proto.Exit{Code: 2}, protocmp.Transform()))
+	assert.Check(t, cmp.DeepEqual(m.previousOf("job"), &proto.Previous{ExecutionGeneration: second.ExecutionGeneration, End: 1, Exit: &proto.Exit{Code: 2}}, protocmp.Transform()))
 }
 
 // NO_SESSION carries the boot and the name's previous generation.
@@ -339,23 +351,19 @@ func TestNoSessionCarriesTheBootAndThePreviousGeneration(t *testing.T) {
 	h.detach(t)
 	waitFor(t, "the name to free", func() bool { _, ok := find(m, "job"); return !ok })
 
-	resp := decode[struct {
-		Error struct {
-			Code string              `json:"code"`
-			Data proto.NoSessionData `json:"data"`
-		} `json:"error"`
-	}](t, attach(t, m, "job").next(t))
+	resp := decode[proto.ErrorResponse](t, attach(t, m, "job").next(t))
 
+	assert.Assert(t, resp.Error != nil)
 	assert.Check(t, cmp.Equal(resp.Error.Code, proto.ErrNoSession))
-	assert.Check(t, cmp.Equal(resp.Error.Data.BootID, "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90"))
-	assert.Assert(t, resp.Error.Data.Previous != nil)
-	assert.Check(t, cmp.Equal(resp.Error.Data.Previous.Generation, out.Generation))
+	assert.Check(t, cmp.Equal(resp.Error.Data.GetBootId(), "b2a7e1d4-0c55-4f8e-9a61-3d2f7c4e8b90"))
+	assert.Assert(t, resp.Error.Data.GetPrevious() != nil)
+	assert.Check(t, cmp.Equal(resp.Error.Data.GetPrevious().ExecutionGeneration, out.ExecutionGeneration))
 }
 
 func TestNoSessionForANameThatNeverRanHasNoPrevious(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 
-	data := m.noSession("other").Data.(proto.NoSessionData)
+	data := m.noSession("other").Data
 
 	assert.Check(t, cmp.Nil(data.Previous))
 }

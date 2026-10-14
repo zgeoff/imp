@@ -1,26 +1,32 @@
 import type { Session } from '@imp/api';
+import { isAgentSessionState } from '../agent-client/is-agent-session-state';
 import { findSignalName } from '../exec/signal-names';
 import type { SeenSession } from './session-cache';
 
 export function toApiSession(session: Readonly<SeenSession>): Session {
+  const hasOffsets = session.executionGeneration !== '';
+
   const api: Session = {
     name: session.name,
     pid: session.pid,
     argv: [...session.argv],
-    state: session.state,
+    state: getSessionState(session.state),
     attached: session.attached,
     cols: session.cols,
     rows: session.rows,
-    startedAt: new Date(session.started_unix_ms),
-    continuity: session.execution_generation === undefined ? 'none' : 'offsets',
-    ...(session.execution_generation !== undefined && {
-      executionGeneration: session.execution_generation,
+    startedAt: new Date(session.startedUnixMs),
+
+    // an agent from before output offsets leaves the generation, the boot
+    // and the end out
+    continuity: hasOffsets ? 'offsets' : 'none',
+    ...(hasOffsets && {
+      executionGeneration: session.executionGeneration,
+      bootId: session.bootId,
+      end: session.end,
     }),
-    ...(session.boot_id !== undefined && { bootId: session.boot_id }),
-    ...(session.end !== undefined && { end: session.end }),
-    ...(session.end !== undefined &&
-      session.observed_unix_ms !== undefined && {
-        endObservedAt: new Date(session.observed_unix_ms),
+    ...(hasOffsets &&
+      session.observedUnixMs !== undefined && {
+        endObservedAt: new Date(session.observedUnixMs),
       }),
     ...(session.log === true && { log: true }),
   };
@@ -35,4 +41,13 @@ export function toApiSession(session: Readonly<SeenSession>): Session {
   }
 
   return api;
+}
+
+// impd keeps only the sessions whose state it knows (parseAgentActivity)
+function getSessionState(state: string): Session['state'] {
+  if (!isAgentSessionState(state)) {
+    throw new Error(`a session in state ${JSON.stringify(state)}`);
+  }
+
+  return state;
 }

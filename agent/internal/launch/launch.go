@@ -37,12 +37,12 @@ func New(runner proc.Runner, image *imagecfg.Live, openPTY func() (master, slave
 }
 
 // Spec resolves req's argv, env, cwd and user. The caller sets Files and TTY.
-func (l *Launcher) Spec(req proto.Request) (proc.Spec, error) {
+func (l *Launcher) Spec(req *proto.Request) (proc.Spec, error) {
 	if len(req.Argv) == 0 {
 		return proc.Spec{}, errors.New("argv is empty")
 	}
 	image := l.image.Get()
-	user := req.User
+	user := req.GetUser()
 	if user == "" {
 		user = image.User
 	}
@@ -51,7 +51,7 @@ func (l *Launcher) Spec(req proto.Request) (proc.Spec, error) {
 	return proc.Spec{
 		Argv:    req.Argv,
 		Env:     proc.Merge(image.Env, req.Env),
-		Dir:     req.Cwd,
+		Dir:     req.GetCwd(),
 		Workdir: image.Workdir,
 		User:    user,
 		SetHome: true,
@@ -66,7 +66,7 @@ func (l *Launcher) Start(spec proc.Spec) (*proc.Process, error) {
 // StartPTY starts req on a new pty, sized from req, and returns the process
 // and the pty master. The child's end of the pty is closed here. A non-nil
 // cgroup is the leaf the child is born in, as Spec.Cgroup.
-func (l *Launcher) StartPTY(req proto.Request, cgroup *os.File) (*proc.Process, *os.File, error) {
+func (l *Launcher) StartPTY(req *proto.Request, cgroup *os.File) (*proc.Process, *os.File, error) {
 	spec, err := l.Spec(req)
 	if err != nil {
 		return nil, nil, err
@@ -75,7 +75,7 @@ func (l *Launcher) StartPTY(req proto.Request, cgroup *os.File) (*proc.Process, 
 	if err != nil {
 		return nil, nil, err
 	}
-	cols, rows := req.Cols, req.Rows
+	cols, rows := uint16(req.GetCols()), uint16(req.GetRows())
 	if cols == 0 || rows == 0 {
 		cols, rows = defaultCols, defaultRows
 	}

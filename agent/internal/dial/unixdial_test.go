@@ -258,7 +258,7 @@ func TestServeDialsAUnixSocketForARootImageInTheAgent(t *testing.T) {
 	t.Parallel()
 	path := listenUnix(t, shortDir(t), "echo.sock")
 
-	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "unix", Address: path})
+	h := startServe(t, &proto.Request{Op: proto.OpDial, Network: new("unix"), Address: new(path)})
 
 	h.requireOK(t)
 }

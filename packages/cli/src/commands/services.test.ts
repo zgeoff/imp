@@ -3,6 +3,8 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
+import { RequestSchema } from '@imp/daemon/src/agent-client/agent-protocol';
+import { encodeAgentMessage } from '@imp/daemon/src/agent-client/encode-agent-message';
 import { sendServicesAdd } from '@imp/daemon/src/agent-client/service-requests';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
@@ -300,13 +302,15 @@ test('#serviceCommand sends the definition to the guest with --env given more th
 
   expect(result).toStrictEqual({ stdout: '', stderr: '', code: 0 });
 
-  expect(agent.requests).toStrictEqual([
-    {
-      op: 'services.add',
-      def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f'], env: ['A=1', 'B=2'] },
-      replace: true,
-    },
-  ]);
+  expect(agent.requests.map((request) => encodeAgentMessage(RequestSchema, request))).toStrictEqual(
+    [
+      {
+        op: 'services.add',
+        def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f'], env: ['A=1', 'B=2'] },
+        replace: true,
+      },
+    ],
+  );
 });
 
 test('#serviceCommand adds the service and then sets the imp’s HTTP port for --http-port', async () => {
@@ -337,12 +341,14 @@ test('#serviceCommand adds the service and then sets the imp’s HTTP port for -
   expect(result).toStrictEqual({ stdout: '', stderr: '', code: 0 });
   expect(updated.httpPort).toBe(8081);
 
-  expect(agent.requests).toStrictEqual([
-    {
-      op: 'services.add',
-      def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f -p 8081'] },
-    },
-  ]);
+  expect(agent.requests.map((request) => encodeAgentMessage(RequestSchema, request))).toStrictEqual(
+    [
+      {
+        op: 'services.add',
+        def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f -p 8081'] },
+      },
+    ],
+  );
 
   // newest first: the port set came after the imp's create
   expect(calls.map((call) => [call.procedure, call.outcome])).toStrictEqual([
@@ -378,10 +384,12 @@ test('#serviceCommand sets no HTTP port when the guest refuses the add', async (
   expect(imp.httpPort).not.toBe(8081);
   expect(updated.httpPort).toBe(imp.httpPort);
 
-  expect(agent.requests).toStrictEqual([
-    { op: 'services.add', def: { name: 'web', argv: ['httpd'] } },
-    { op: 'services.add', def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f -p 8081'] } },
-  ]);
+  expect(agent.requests.map((request) => encodeAgentMessage(RequestSchema, request))).toStrictEqual(
+    [
+      { op: 'services.add', def: { name: 'web', argv: ['httpd'] } },
+      { op: 'services.add', def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd -f -p 8081'] } },
+    ],
+  );
 });
 
 test('#serviceCommand says the service runs and how to set the port when an exec token may not set it', async () => {
@@ -409,10 +417,12 @@ test('#serviceCommand says the service runs and how to set the port when an exec
   });
 
   // the list of what the guest runs, then the add
-  expect(agent.requests).toStrictEqual([
-    { op: 'services.list' },
-    { op: 'services.add', def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd'] } },
-  ]);
+  expect(agent.requests.map((request) => encodeAgentMessage(RequestSchema, request))).toStrictEqual(
+    [
+      { op: 'services.list' },
+      { op: 'services.add', def: { name: 'web', argv: ['/bin/sh', '-c', 'httpd'] } },
+    ],
+  );
 
   expect(imp.httpPort).not.toBe(8081);
   expect(updated.httpPort).toBe(imp.httpPort);

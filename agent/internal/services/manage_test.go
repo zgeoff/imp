@@ -1,7 +1,6 @@
 package services
 
 import (
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -35,73 +35,73 @@ func requireCode(t *testing.T, err error, code string) {
 }
 
 // waitRunning waits for the named service to run with a pid other than not.
-func waitRunning(t *testing.T, s *Supervisor, name string, not int) proto.ServiceStatus {
+func waitRunning(t *testing.T, s *Supervisor, name string, not int32) *proto.ServiceStatus {
 	t.Helper()
-	var got proto.ServiceStatus
+	var got *proto.ServiceStatus
 	poll.WaitOn(t, func(poll.LogT) poll.Result {
 		list := s.List()
 		for _, st := range list {
-			if st.Name == name && st.State == "running" && st.Pid != not {
+			if st.Name == name && st.State == "running" && st.GetPid() != not {
 				got = st
 				return poll.Success()
 			}
 		}
-		return poll.Continue("%s is not running with a pid other than %d: %+v", name, not, list)
+		return poll.Continue("%s is not running with a pid other than %d: %v", name, not, list)
 	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
 	return got
 }
 
-func readDefFile(t *testing.T, path string) Def {
+func readDefFile(t *testing.T, path string) *Def {
 	t.Helper()
 	b, err := os.ReadFile(path)
 	assert.NilError(t, err)
-	var d Def
-	assert.NilError(t, json.Unmarshal(b, &d))
+	d := &Def{}
+	assert.NilError(t, proto.Unmarshal(b, d))
 	return d
 }
 
 func TestAddWritesTheFileAndStartsTheService(t *testing.T) {
 	s := newManagedSupervisor(t)
 
-	err := s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}, Env: []string{"A=1"}}, false)
+	err := s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "30"}, Env: []string{"A=1"}}, false)
 
 	assert.NilError(t, err)
 	st := waitRunning(t, s, "web", 0)
-	assert.Check(t, cmp.DeepEqual(st.Def, Def{Name: "web", Argv: []string{"sleep", "30"}, Env: []string{"A=1"}, Restart: "always", Source: "api"}))
+	assert.Check(t, cmp.DeepEqual(st.Def, &Def{Name: new("web"), Argv: []string{"sleep", "30"}, Env: []string{"A=1"}, Restart: new("always"), Source: new("api")}, protocmp.Transform()))
 	// the file holds no name: its own name is the service's
-	assert.Check(t, cmp.DeepEqual(readDefFile(t, filepath.Join(s.dir, "web.json")), Def{Argv: []string{"sleep", "30"}, Env: []string{"A=1"}, Restart: "always", Source: "api"}))
+	assert.Check(t, cmp.DeepEqual(readDefFile(t, filepath.Join(s.dir, "web.json")), &Def{Argv: []string{"sleep", "30"}, Env: []string{"A=1"}, Restart: new("always"), Source: new("api")}, protocmp.Transform()))
 	_, statErr := os.Stat(filepath.Join(s.dir, "web.json.tmp"))
 	assert.Check(t, cmp.ErrorIs(statErr, fs.ErrNotExist), "the temp file is left")
 }
 
 func TestAddRefusesAServiceThatRuns(t *testing.T) {
 	s := newManagedSupervisor(t)
-	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	assert.NilError(t, s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "30"}}, false))
 	waitRunning(t, s, "web", 0)
 
-	err := s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false)
+	err := s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "30"}}, false)
 
 	requireCode(t, err, proto.ErrServiceTaken)
 }
 
 func TestAddWithReplaceRestartsTheServiceFromTheNewDefinition(t *testing.T) {
 	s := newManagedSupervisor(t)
-	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	assert.NilError(t, s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "30"}}, false))
 	first := waitRunning(t, s, "web", 0)
 
-	err := s.Add(Def{Name: "web", Argv: []string{"sleep", "31"}}, true)
+	err := s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "31"}}, true)
 
 	assert.NilError(t, err)
-	again := waitRunning(t, s, "web", first.Pid)
+	again := waitRunning(t, s, "web", first.GetPid())
 	assert.Check(t, cmp.DeepEqual(again.Def.Argv, []string{"sleep", "31"}))
 	assert.Check(t, cmp.DeepEqual(readDefFile(t, filepath.Join(s.dir, "web.json")).Argv, []string{"sleep", "31"}))
 }
 
 func TestAddRefusesAFileWrittenByHand(t *testing.T) {
 	s := newManagedSupervisor(t)
-	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "db.json"), Def{Argv: []string{"true"}}))
+	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "db.json"), &Def{Argv: []string{"true"}}))
 
-	err := s.Add(Def{Name: "db", Argv: []string{"true"}}, false)
+	err := s.Add(&Def{Name: new("db"), Argv: []string{"true"}}, false)
 
 	requireCode(t, err, proto.ErrServiceTaken)
 }
@@ -109,15 +109,15 @@ func TestAddRefusesAFileWrittenByHand(t *testing.T) {
 func TestAddRefusesABadDefinitionAndWritesNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		def  Def
+		def  *Def
 	}{
-		{name: "an empty name", def: Def{Name: "", Argv: []string{"x"}}},
-		{name: "a path", def: Def{Name: "../x", Argv: []string{"x"}}},
-		{name: "an uppercase name", def: Def{Name: "Web", Argv: []string{"x"}}},
-		{name: "an underscore", def: Def{Name: "a_b", Argv: []string{"x"}}},
-		{name: "a dot", def: Def{Name: "a.b", Argv: []string{"x"}}},
-		{name: "no argv", def: Def{Name: "web", Argv: nil}},
-		{name: "an unknown restart policy", def: Def{Name: "web", Argv: []string{"x"}, Restart: "sometimes"}},
+		{name: "an empty name", def: &Def{Name: new(""), Argv: []string{"x"}}},
+		{name: "a path", def: &Def{Name: new("../x"), Argv: []string{"x"}}},
+		{name: "an uppercase name", def: &Def{Name: new("Web"), Argv: []string{"x"}}},
+		{name: "an underscore", def: &Def{Name: new("a_b"), Argv: []string{"x"}}},
+		{name: "a dot", def: &Def{Name: new("a.b"), Argv: []string{"x"}}},
+		{name: "no argv", def: &Def{Name: new("web"), Argv: nil}},
+		{name: "an unknown restart policy", def: &Def{Name: new("web"), Argv: []string{"x"}, Restart: new("sometimes")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newManagedSupervisor(t)
@@ -165,7 +165,7 @@ func TestRestartRefusesANameOutsideServicesD(t *testing.T) {
 
 func TestRemoveStopsTheServiceAndDeletesItsFile(t *testing.T) {
 	s := newManagedSupervisor(t)
-	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	assert.NilError(t, s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "30"}}, false))
 	st := waitRunning(t, s, "web", 0)
 
 	err := s.Remove("web")
@@ -173,12 +173,12 @@ func TestRemoveStopsTheServiceAndDeletesItsFile(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Len(s.List(), 0))
 	assert.Check(t, !exists(fsroot.Host, filepath.Join(s.dir, "web.json")), "the file is left")
-	assert.Check(t, cmp.ErrorIs(syscall.Kill(st.Pid, 0), syscall.ESRCH), "pid %d still runs", st.Pid)
+	assert.Check(t, cmp.ErrorIs(syscall.Kill(int(st.GetPid()), 0), syscall.ESRCH), "pid %d still runs", st.GetPid())
 }
 
 func TestRemoveReportsNoServiceForOneAlreadyRemoved(t *testing.T) {
 	s := newManagedSupervisor(t)
-	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	assert.NilError(t, s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "30"}}, false))
 	waitRunning(t, s, "web", 0)
 	assert.NilError(t, s.Remove("web"))
 
@@ -189,20 +189,20 @@ func TestRemoveReportsNoServiceForOneAlreadyRemoved(t *testing.T) {
 
 func TestRestartRunsTheEditedFile(t *testing.T) {
 	s := newManagedSupervisor(t)
-	assert.NilError(t, s.Add(Def{Name: "web", Argv: []string{"sleep", "30"}}, false))
+	assert.NilError(t, s.Add(&Def{Name: new("web"), Argv: []string{"sleep", "30"}}, false))
 	first := waitRunning(t, s, "web", 0)
-	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "web.json"), Def{Name: "web", Argv: []string{"sleep", "32"}}))
+	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "web.json"), &Def{Name: new("web"), Argv: []string{"sleep", "32"}}))
 
 	err := s.Restart("web")
 
 	assert.NilError(t, err)
-	second := waitRunning(t, s, "web", first.Pid)
+	second := waitRunning(t, s, "web", first.GetPid())
 	assert.DeepEqual(t, second.Def.Argv, []string{"sleep", "32"})
 }
 
 func TestRestartStartsAFileWrittenAfterBoot(t *testing.T) {
 	s := newManagedSupervisor(t)
-	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "late.json"), Def{Argv: []string{"sleep", "30"}}))
+	assert.NilError(t, writeDef(fsroot.Host, filepath.Join(s.dir, "late.json"), &Def{Argv: []string{"sleep", "30"}}))
 
 	err := s.Restart("late")
 
@@ -231,21 +231,21 @@ func TestRestartRefusesAFileThatDoesNotParse(t *testing.T) {
 
 func TestRestartKeepsAServiceWhoseFileIsGone(t *testing.T) {
 	s := newManagedSupervisor(t)
-	s.startAt(Def{Name: "mem", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
+	s.startAt(&Def{Name: new("mem"), Argv: []string{"sleep", "30"}, Restart: new("always")}, "")
 	first := waitRunning(t, s, "mem", 0)
 
 	err := s.Restart("mem")
 
 	assert.NilError(t, err)
-	again := waitRunning(t, s, "mem", first.Pid)
-	assert.DeepEqual(t, again.Def, Def{Name: "mem", Argv: []string{"sleep", "30"}, Restart: "always"})
+	again := waitRunning(t, s, "mem", first.GetPid())
+	assert.DeepEqual(t, again.Def, &Def{Name: new("mem"), Argv: []string{"sleep", "30"}, Restart: new("always")}, protocmp.Transform())
 }
 
 func TestAddAfterStopAllIsRefusedAsPoweringOff(t *testing.T) {
 	s := newManagedSupervisor(t)
 	s.StopAll()
 
-	err := s.Add(Def{Name: "web", Argv: []string{"true"}}, false)
+	err := s.Add(&Def{Name: new("web"), Argv: []string{"true"}}, false)
 
 	requireCode(t, err, proto.ErrPoweringOff)
 }
@@ -261,13 +261,13 @@ func TestRestartAfterStopAllIsRefusedAsPoweringOff(t *testing.T) {
 
 func TestListSaysWhichServicesRunAsRoot(t *testing.T) {
 	s := newManagedSupervisor(t)
-	s.startAt(Def{Name: "rooted", Argv: []string{"sleep", "30"}, Restart: "always"}, "")
-	s.startAt(Def{Name: "nobody", Argv: []string{"sleep", "30"}, User: "65534", Restart: "always"}, "")
+	s.startAt(&Def{Name: new("rooted"), Argv: []string{"sleep", "30"}, Restart: new("always")}, "")
+	s.startAt(&Def{Name: new("nobody"), Argv: []string{"sleep", "30"}, User: new("65534"), Restart: new("always")}, "")
 
-	root := map[string]bool{}
+	root := map[string]*bool{}
 	for _, st := range s.List() {
 		root[st.Name] = st.Root
 	}
 
-	assert.DeepEqual(t, root, map[string]bool{"rooted": true, "nobody": false})
+	assert.DeepEqual(t, root, map[string]*bool{"rooted": new(true), "nobody": new(false)})
 }

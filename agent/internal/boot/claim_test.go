@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -18,7 +19,7 @@ import (
 )
 
 type parkResult struct {
-	claim proto.Claim
+	claim *proto.Claim
 	err   error
 }
 
@@ -27,7 +28,7 @@ type parkResult struct {
 // once it listens. The result arrives on the returned channel when a claim
 // applies. Cleanup closes the listener, makes the next listen fail so the
 // park loop ends, and waits for it.
-func startParked(t *testing.T, apply func(proto.Claim) error) <-chan parkResult {
+func startParked(t *testing.T, apply func(*proto.Claim) error) <-chan parkResult {
 	t.Helper()
 	// relative, from the test's own directory: a socket path past 108 bytes
 	// fails to bind, and TMPDIR can be that long
@@ -70,12 +71,12 @@ func startParked(t *testing.T, apply func(proto.Claim) error) <-chan parkResult 
 
 // sendParked sends one request to the parked listener and returns the
 // reply's raw JSON.
-func sendParked(t *testing.T, req proto.Request) string {
+func sendParked(t *testing.T, req *proto.Request) string {
 	t.Helper()
 	c, err := net.Dial("unix", "agent.sock")
 	assert.NilError(t, err)
 	t.Cleanup(func() { c.Close() })
-	assert.NilError(t, proto.NewWriter(c).WriteJSON(proto.TypeRequest, req))
+	assert.NilError(t, proto.NewWriter(c).WriteMessage(proto.TypeRequest, req))
 	f, err := proto.NewReader(c).Next()
 	assert.NilError(t, err)
 	return string(f.Payload)
@@ -85,20 +86,20 @@ func sendParked(t *testing.T, req proto.Request) string {
 func errorCode(t *testing.T, reply string) string {
 	t.Helper()
 	var r proto.ErrorResponse
-	assert.NilError(t, json.Unmarshal([]byte(reply), &r))
+	assert.NilError(t, proto.Unmarshal([]byte(reply), &r))
 	assert.Assert(t, r.Error != nil, "not an error response: %s", reply)
 	return r.Error.Code
 }
 
 func validClaim() *proto.Claim {
-	return &proto.Claim{ID: "a", Hostname: "web", IP: "10.66.0.2/30", GW: "10.66.0.1", MAC: "06:00:0a:42:00:02", Seed: make([]byte, 64)}
+	return &proto.Claim{Id: "a", Hostname: "web", Ip: "10.66.0.2/30", Gw: "10.66.0.1", Mac: "06:00:0a:42:00:02", Seed: make([]byte, 64)}
 }
 
 func TestStartParkedEndsTheParkLoopAtCleanup(t *testing.T) {
 	var result <-chan parkResult
 
 	t.Run("parked", func(t *testing.T) {
-		result = startParked(t, func(proto.Claim) error { return nil })
+		result = startParked(t, func(*proto.Claim) error { return nil })
 	})
 
 	select {
@@ -110,27 +111,27 @@ func TestStartParkedEndsTheParkLoopAtCleanup(t *testing.T) {
 }
 
 func TestParkForClaimAnswersPingAsABootTemplate(t *testing.T) {
-	startParked(t, func(proto.Claim) error { return nil })
+	startParked(t, func(*proto.Claim) error { return nil })
 
-	reply := sendParked(t, proto.Request{Op: proto.OpPing})
+	reply := sendParked(t, &proto.Request{Op: proto.OpPing})
 
 	var p proto.Ping
-	assert.NilError(t, json.Unmarshal([]byte(reply), &p))
-	assert.Equal(t, p.Stage, proto.StageTemplate)
+	assert.NilError(t, proto.Unmarshal([]byte(reply), &p))
+	assert.Equal(t, p.GetStage(), proto.StageTemplate)
 }
 
 func TestParkForClaimRefusesAnyOtherOpAsUnknown(t *testing.T) {
-	startParked(t, func(proto.Claim) error { return nil })
+	startParked(t, func(*proto.Claim) error { return nil })
 
-	reply := sendParked(t, proto.Request{Op: proto.OpExec})
+	reply := sendParked(t, &proto.Request{Op: proto.OpExec})
 
 	assert.Equal(t, errorCode(t, reply), proto.ErrUnknownOp)
 }
 
 func TestParkForClaimRefusesAClaimWithoutAHostnameAndIP(t *testing.T) {
-	startParked(t, func(proto.Claim) error { return nil })
+	startParked(t, func(*proto.Claim) error { return nil })
 
-	reply := sendParked(t, proto.Request{Op: proto.OpClaim})
+	reply := sendParked(t, &proto.Request{Op: proto.OpClaim})
 
 	assert.Equal(t, errorCode(t, reply), proto.ErrBadRequest)
 }
@@ -138,9 +139,9 @@ func TestParkForClaimRefusesAClaimWithoutAHostnameAndIP(t *testing.T) {
 // A claim that fails to apply leaves the guest parked for another, and the
 // next claim that applies ends the park.
 func TestParkForClaimStaysParkedAfterAClaimFailsToApply(t *testing.T) {
-	var applied []proto.Claim
+	var applied []*proto.Claim
 	fail := true
-	result := startParked(t, func(c proto.Claim) error {
+	result := startParked(t, func(c *proto.Claim) error {
 		applied = append(applied, c)
 		if fail {
 			fail = false
@@ -148,22 +149,24 @@ func TestParkForClaimStaysParkedAfterAClaimFailsToApply(t *testing.T) {
 		}
 		return nil
 	})
-	failed := sendParked(t, proto.Request{Op: proto.OpClaim, Claim: validClaim()})
+	failed := sendParked(t, &proto.Request{Op: proto.OpClaim, Claim: validClaim()})
 
-	reply := sendParked(t, proto.Request{Op: proto.OpClaim, Claim: validClaim()})
+	reply := sendParked(t, &proto.Request{Op: proto.OpClaim, Claim: validClaim()})
 
 	res := <-result
 	assert.Check(t, cmp.Equal(errorCode(t, failed), proto.ErrInternal))
-	assert.Check(t, cmp.Equal(reply, `{"ok":true}`))
+	var ok any
+	assert.NilError(t, json.Unmarshal([]byte(reply), &ok))
+	assert.Check(t, cmp.DeepEqual(ok, map[string]any{"ok": true}))
 	assert.Check(t, res.err)
-	assert.Check(t, cmp.DeepEqual(res.claim, *validClaim()))
+	assert.Check(t, cmp.DeepEqual(res.claim, validClaim(), protocmp.Transform()))
 	assert.Check(t, cmp.Len(applied, 2))
 }
 
 // Once a claim applies, the listener closes so the server can take the port.
 func TestParkForClaimClosesTheListenerAfterAClaim(t *testing.T) {
-	result := startParked(t, func(proto.Claim) error { return nil })
-	sendParked(t, proto.Request{Op: proto.OpClaim, Claim: validClaim()})
+	result := startParked(t, func(*proto.Claim) error { return nil })
+	sendParked(t, &proto.Request{Op: proto.OpClaim, Claim: validClaim()})
 	<-result
 
 	_, err := net.Dial("unix", "agent.sock")
@@ -191,14 +194,14 @@ func TestParkForClaimReturnsTheErrorWhenListeningAgainFails(t *testing.T) {
 		return l, err
 	}
 
-	_, err := parkForClaim(listen, func(proto.Claim) error { return nil })
+	_, err := parkForClaim(listen, func(*proto.Claim) error { return nil })
 
 	assert.Check(t, cmp.ErrorIs(err, refused))
 	assert.Check(t, cmp.Equal(listens, 2))
 }
 
 func TestClaimParamsCarryTheClaimAndNeverTheTemplateFlag(t *testing.T) {
-	p := claimParams(proto.Claim{ID: "a", Hostname: "web", IP: "10.66.0.2/30", GW: "10.66.0.1", IP6: "fd00::2/128", GW6: "fe80::1", DNS: []string{"1.1.1.1"}, ResetIdentity: true})
+	p := claimParams(&proto.Claim{Id: "a", Hostname: "web", Ip: "10.66.0.2/30", Gw: "10.66.0.1", Ip6: new("fd00::2/128"), Gw6: new("fe80::1"), Dns: []string{"1.1.1.1"}, ResetIdentity: new(true)})
 
 	assert.DeepEqual(t, p, cmdline.Params{
 		Hostname:      "web",

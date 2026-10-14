@@ -71,7 +71,7 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
 
     deps.imps.watchdog.observe(imp, activity !== null);
 
-    const tcpEstablished = activity?.tcp_established ?? 0;
+    const tcpEstablished = activity?.tcpEstablished ?? 0;
 
     const decision = checkIdle(
       {

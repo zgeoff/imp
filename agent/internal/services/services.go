@@ -5,7 +5,6 @@
 package services
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -72,7 +71,7 @@ type Supervisor struct {
 }
 
 type service struct {
-	def Def
+	def *Def
 	// path is the services.d file the definition came from
 	path     string
 	state    string
@@ -126,7 +125,7 @@ func (s *Supervisor) Suspend() {
 		select {
 		case <-svc.done:
 		case <-deadline:
-			log.Printf("services: %s: its supervisor did not stop in %s", svc.def.Name, suspendWait)
+			log.Printf("services: %s: its supervisor did not stop in %s", svc.def.GetName(), suspendWait)
 			return
 		}
 	}
@@ -177,21 +176,21 @@ func (s *Supervisor) startAll() error {
 
 // ReadDef reads one services.d file: the file name is the service name, and
 // a file without source "api" came with the image.
-func ReadDef(fsys fsroot.FS, path string) (Def, error) {
-	var d Def
+func ReadDef(fsys fsroot.FS, path string) (*Def, error) {
+	d := &Def{}
 	b, err := fsys.ReadFile(path)
 	if err != nil {
 		return d, err
 	}
-	if err := json.Unmarshal(b, &d); err != nil {
+	if err := proto.Unmarshal(b, d); err != nil {
 		return d, err
 	}
 	// the file name is the name: a name field could claim another service's
-	d.Name = strings.TrimSuffix(filepath.Base(path), ".json")
-	if d.Source != "api" {
-		d.Source = "image"
+	d.Name = new(strings.TrimSuffix(filepath.Base(path), ".json"))
+	if d.GetSource() != "api" {
+		d.Source = new("image")
 	}
-	return d, checkDef(&d)
+	return d, checkDef(d)
 }
 
 // checkDef rejects a definition the supervisor cannot run, and fills in the
@@ -200,29 +199,29 @@ func checkDef(d *Def) error {
 	if len(d.Argv) == 0 {
 		return fmt.Errorf("argv is empty")
 	}
-	switch d.Restart {
+	switch d.GetRestart() {
 	case "":
-		d.Restart = "always"
+		d.Restart = new("always")
 	case "always", "on-failure", "never":
 	default:
-		return fmt.Errorf("restart %q: want always, on-failure or never", d.Restart)
+		return fmt.Errorf("restart %q: want always, on-failure or never", d.GetRestart())
 	}
 	return nil
 }
 
-func (s *Supervisor) startAt(def Def, path string) {
+func (s *Supervisor) startAt(def *Def, path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopping || s.services[def.Name] != nil {
+	if s.stopping || s.services[def.GetName()] != nil {
 		return
 	}
 	svc := &service{def: def, path: path, state: "starting",
 		stop: make(chan struct{}), done: make(chan struct{})}
-	s.services[def.Name] = svc
+	s.services[def.GetName()] = svc
 	s.wg.Add(1)
 	// A panic in the supervisor loop leaves the service unsupervised, not
 	// the agent dead.
-	safe.Go("services: "+def.Name, func() { s.run(svc) }, func() { s.setState(svc, "exited") })
+	safe.Go("services: "+def.GetName(), func() { s.run(svc) }, func() { s.setState(svc, "exited") })
 }
 
 func (s *Supervisor) run(svc *service) {
@@ -242,13 +241,13 @@ func (s *Supervisor) run(svc *service) {
 		svc.pid, svc.proc = 0, nil
 		// A failed start is not an exit: last_exit keeps the previous one.
 		if err != nil {
-			log.Printf("services: %s: %v", svc.def.Name, err)
+			log.Printf("services: %s: %v", svc.def.GetName(), err)
 		} else {
-			svc.lastExit = &proto.Exit{Code: st.Code, Signal: int(st.Signal)}
+			svc.lastExit = &proto.Exit{Code: int32(st.Code), Signal: int32(st.Signal)}
 		}
 		stopped := isClosed(svc.stop)
 		failed := err != nil || st.Code != 0 || st.Signal != 0
-		if stopped || !shouldRestart(svc.def.Restart, failed) {
+		if stopped || !shouldRestart(svc.def.GetRestart(), failed) {
 			svc.state = "exited"
 			if stopped {
 				svc.state = "stopped"
@@ -304,11 +303,11 @@ func (s *Supervisor) once(svc *service) (reaper.Status, error) {
 		logf.Close()
 		return reaper.Status{}, err
 	}
-	user := svc.def.User
+	user := svc.def.GetUser()
 	if user == "" {
 		user = s.image.Get().User
 	}
-	cwd := svc.def.Cwd
+	cwd := svc.def.GetCwd()
 	if cwd == "" {
 		cwd = "/"
 	}
@@ -338,7 +337,7 @@ func (s *Supervisor) once(svc *service) (reaper.Status, error) {
 }
 
 func (s *Supervisor) logPath(svc *service) string {
-	return filepath.Join(s.logDir, svc.def.Name+".log")
+	return filepath.Join(s.logDir, svc.def.GetName()+".log")
 }
 
 // openLog rotates the service's log if it is too big, then opens it for
@@ -353,7 +352,7 @@ func (s *Supervisor) openLog(svc *service) (*os.File, error) {
 	defer svc.logMu.Unlock()
 	path := s.logPath(svc)
 	if err := rotateLog(s.fsys, path); err != nil {
-		log.Printf("services: %s: rotate log: %v", svc.def.Name, err)
+		log.Printf("services: %s: rotate log: %v", svc.def.GetName(), err)
 	}
 	f, err := s.fsys.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND|unix.O_NONBLOCK, 0o644)
 	if err != nil {
@@ -377,19 +376,23 @@ func (s *Supervisor) setState(svc *service, state string) {
 }
 
 // List reports every service, sorted by name.
-func (s *Supervisor) List() []proto.ServiceStatus {
+func (s *Supervisor) List() []*proto.ServiceStatus {
 	s.mu.Lock()
-	out := make([]proto.ServiceStatus, 0, len(s.services))
+	out := make([]*proto.ServiceStatus, 0, len(s.services))
 	for _, svc := range s.services {
-		out = append(out, proto.ServiceStatus{
-			Name: svc.def.Name, State: svc.state, Pid: svc.pid,
-			Restarts: svc.restarts, LastExit: svc.lastExit, Def: svc.def,
-		})
+		status := &proto.ServiceStatus{
+			Name: svc.def.GetName(), State: svc.state,
+			Restarts: uint32(svc.restarts), LastExit: svc.lastExit, Def: svc.def,
+		}
+		if svc.pid != 0 {
+			status.Pid = new(int32(svc.pid))
+		}
+		out = append(out, status)
 	}
 	s.mu.Unlock()
 	// /etc/passwd is read outside mu
-	for i := range out {
-		out[i].Root = s.runsAsRoot(out[i].Def.User)
+	for _, status := range out {
+		status.Root = new(s.runsAsRoot(status.Def.GetUser()))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

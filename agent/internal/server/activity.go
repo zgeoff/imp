@@ -11,18 +11,18 @@ import (
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
-func (s *Server) activity() (proto.Activity, error) {
+func (s *Server) activity() (*proto.Activity, error) {
 	n := 0
 	for _, p := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
 		c, err := countEstablished(p)
 		if err != nil && !os.IsNotExist(err) {
-			return proto.Activity{}, err
+			return nil, err
 		}
 		n += c
 	}
-	return proto.Activity{
-		TCPEstablished: n,
-		ExecSessions:   s.Exec.Active() + s.Outer.Active() + s.Sessions.Attached(),
+	return &proto.Activity{
+		TcpEstablished: uint32(n),
+		ExecSessions:   uint32(s.Exec.Active() + s.Outer.Active() + s.Sessions.Attached()),
 		Load1:          load1(),
 		Sessions:       s.Sessions.List(),
 	}, nil

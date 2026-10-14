@@ -1,3 +1,5 @@
+import type { JsonValue } from '@bufbuild/protobuf';
+
 // The agent wire format (docs/architecture/protocol.md#frames):
 // `[u8 type][u32 BE length][payload]`.
 
@@ -113,8 +115,10 @@ export function createFrameDecoder(): FrameDecoder {
   return { push: decodeChunk, end: checkEnded };
 }
 
-export function decodeJsonPayload(frame: AgentFrame): unknown {
-  return JSON.parse(new TextDecoder().decode(frame.payload));
+export function decodeJsonPayload(frame: AgentFrame): JsonValue {
+  const value: JsonValue = JSON.parse(new TextDecoder().decode(frame.payload));
+
+  return value;
 }
 
 function mergeBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

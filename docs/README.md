@@ -138,3 +138,8 @@ How to install, run and use impz.
   instances, git hooks, CI and the branch rules
 - [Releasing](./runbooks/releasing.md) — what release-please and the release workflow do, and the
   steps they leave to you
+
+## Reference
+
+- [The agent protocol](./reference/agent-protocol.md) — every message impd and the guest agent
+  exchange, generated from the protocol's schema

@@ -697,7 +697,7 @@ test('#ls marks an awake imp whose inner container is down', async () => {
 
   // its agent answers, with the container down after three restarts
   await startStubInnerAgent(buildImpPaths(box.dataDir, imp.id).vsockSocket, {
-    inner: { up: false, restarts: 3, last_error: 'start inner init: exit status 1' },
+    inner: { up: false, restarts: 3, lastError: 'start inner init: exit status 1' },
     stack: ctx.stack,
   });
 

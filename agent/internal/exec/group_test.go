@@ -1,7 +1,6 @@
 package exec
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"google.golang.org/protobuf/testing/protocmp"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -138,7 +138,7 @@ func killAfter(t *testing.T, pid int) {
 
 func signal(t *testing.T, h *host, sig syscall.Signal) {
 	t.Helper()
-	b, err := json.Marshal(proto.Signal{Signal: int(sig)})
+	b, err := proto.Marshal(&proto.Signal{Signal: int32(sig)})
 	assert.NilError(t, err)
 	h.send(t, proto.TypeSignal, b)
 }
@@ -148,9 +148,9 @@ func signal(t *testing.T, h *host, sig syscall.Signal) {
 func TestKillGraceKillsAChildThatIgnoresSIGTERMBeforeTheExit(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	const grace = 300 * time.Millisecond
-	h := startExec(t, newManager(), proto.Request{
+	h := startExec(t, newManager(), &proto.Request{
 		Argv:        []string{"sh", "-c", childScript(pidFile, "exec sleep 300")},
-		KillGraceMs: grace.Milliseconds(),
+		KillGraceMs: new(uint32(grace.Milliseconds())),
 	})
 	h.started(t)
 	child := readPid(t, pidFile)
@@ -161,7 +161,7 @@ func TestKillGraceKillsAChildThatIgnoresSIGTERMBeforeTheExit(t *testing.T) {
 	_, exit := h.wait(t, 5*time.Second)
 	took := time.Since(sent)
 
-	assert.Check(t, cmp.Equal(exit.Signal, int(syscall.SIGTERM)), "the leader's SIGTERM")
+	assert.Check(t, cmp.Equal(exit.Signal, int32(syscall.SIGTERM)), "the leader's SIGTERM")
 	assert.Check(t, took >= grace && took <= grace+2*time.Second, "EXIT came %s after SIGTERM, want just past the %s grace", took, grace)
 	assert.Check(t, !alive(child), "child %d survived the grace", child)
 }
@@ -170,9 +170,9 @@ func TestKillGraceKillsAChildThatIgnoresSIGTERMBeforeTheExit(t *testing.T) {
 // always has.
 func TestKillGraceLeavesTheGroupAloneWithoutAStopSignal(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	h := startExec(t, newManager(), proto.Request{
+	h := startExec(t, newManager(), &proto.Request{
 		Argv:        []string{"sh", "-c", childScript(pidFile, fmt.Sprintf("while [ ! -s %s ]; do sleep 0.01; done", pidFile))},
-		KillGraceMs: 50,
+		KillGraceMs: new(uint32(50)),
 	})
 	h.started(t)
 
@@ -182,7 +182,7 @@ func TestKillGraceLeavesTheGroupAloneWithoutAStopSignal(t *testing.T) {
 	// Serve has finished with the group once it returns.
 	served := h.hangUp(t, time.Second)
 
-	assert.Check(t, cmp.Equal(exit, proto.Exit{}))
+	assert.Check(t, cmp.DeepEqual(exit, &proto.Exit{}, protocmp.Transform()))
 	assert.Check(t, served, "Serve")
 	assert.Check(t, alive(child), "the background child died without a stop signal")
 }
@@ -195,9 +195,9 @@ func TestKillGraceDoesNotStartOnSIGUSR1(t *testing.T) {
 	// would end it by the signal's default action
 	leaderFile := filepath.Join(dir, "leader")
 	leader := fmt.Sprintf(`trap "exit 0" USR1; echo $$ > %s; while :; do sleep 0.05; done`, leaderFile)
-	h := startExec(t, newManager(), proto.Request{
+	h := startExec(t, newManager(), &proto.Request{
 		Argv:        []string{"sh", "-c", childScript(pidFile, leader)},
-		KillGraceMs: 50,
+		KillGraceMs: new(uint32(50)),
 	})
 	h.started(t)
 	child := readPid(t, pidFile)
@@ -209,7 +209,7 @@ func TestKillGraceDoesNotStartOnSIGUSR1(t *testing.T) {
 	// Serve has finished with the group once it returns.
 	served := h.hangUp(t, time.Second)
 
-	assert.Check(t, cmp.Equal(exit, proto.Exit{}), "the leader's exit 0")
+	assert.Check(t, cmp.DeepEqual(exit, &proto.Exit{}, protocmp.Transform()), "the leader's exit 0")
 	assert.Check(t, served, "Serve")
 	assert.Check(t, alive(child), "SIGUSR1 started the kill grace")
 }
@@ -224,9 +224,9 @@ func TestKillGraceForwardsAStoppedChildsLastOutputBeforeTheExit(t *testing.T) {
 	m := newManager()
 	m.drainGrace = 100 * time.Millisecond
 	child := fmt.Sprintf(`trap "sleep 0.5; echo child-bye; exit 0" TERM; echo $$ > %s; while :; do sleep 0.05; done`, pidFile)
-	h := startExec(t, m, proto.Request{
+	h := startExec(t, m, &proto.Request{
 		Argv:        []string{"sh", "-c", fmt.Sprintf("sh -c '%s' & exec sleep 300", child)},
-		KillGraceMs: 5000,
+		KillGraceMs: new(uint32(5000)),
 	})
 	h.started(t)
 	killAfter(t, readPid(t, pidFile))
@@ -243,15 +243,15 @@ func TestKillGraceForwardsAStoppedChildsLastOutputBeforeTheExit(t *testing.T) {
 func TestKillGraceComesFromTheRequestClampedAndOffForATTY(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		req  proto.Request
+		req  *proto.Request
 		want time.Duration
 	}{
-		{name: "off", req: proto.Request{}, want: 0},
-		{name: "negative", req: proto.Request{KillGraceMs: -5}, want: 0},
-		{name: "set", req: proto.Request{KillGraceMs: 2500}, want: 2500 * time.Millisecond},
-		{name: "clamped", req: proto.Request{KillGraceMs: 600_000}, want: 60 * time.Second},
+		{name: "off", req: &proto.Request{}, want: 0},
+		{name: "zero", req: &proto.Request{KillGraceMs: new(uint32(0))}, want: 0},
+		{name: "set", req: &proto.Request{KillGraceMs: new(uint32(2500))}, want: 2500 * time.Millisecond},
+		{name: "clamped", req: &proto.Request{KillGraceMs: new(uint32(600_000))}, want: 60 * time.Second},
 		// a tty's group belongs to its terminal
-		{name: "tty", req: proto.Request{TTY: true, KillGraceMs: 2500}, want: 0},
+		{name: "tty", req: &proto.Request{Tty: new(true), KillGraceMs: new(uint32(2500))}, want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, killGrace(tc.req), tc.want)
@@ -264,12 +264,13 @@ func TestKillGraceComesFromTheRequestClampedAndOffForATTY(t *testing.T) {
 func TestServeEchoesTheKillGraceInStarted(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		req  proto.Request
-		want int64
+		req  *proto.Request
+		want *uint32
 	}{
-		{name: "plain", req: proto.Request{Argv: []string{"true"}, KillGraceMs: 2500}, want: 2500},
-		{name: "clamped", req: proto.Request{Argv: []string{"true"}, KillGraceMs: 600_000}, want: 60_000},
-		{name: "tty", req: proto.Request{Argv: []string{"true"}, TTY: true, KillGraceMs: 2500}, want: 0},
+		{name: "plain", req: &proto.Request{Argv: []string{"true"}, KillGraceMs: new(uint32(2500))}, want: new(uint32(2500))},
+		{name: "clamped", req: &proto.Request{Argv: []string{"true"}, KillGraceMs: new(uint32(600_000))}, want: new(uint32(60_000))},
+		// left out, as an older agent leaves it out
+		{name: "tty", req: &proto.Request{Argv: []string{"true"}, Tty: new(true), KillGraceMs: new(uint32(2500))}, want: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := startExec(t, newManager(), tc.req)
@@ -278,8 +279,8 @@ func TestServeEchoesTheKillGraceInStarted(t *testing.T) {
 
 			assert.Equal(t, f.Type, proto.TypeStarted, "first frame %q", f.Payload)
 			var st proto.Started
-			assert.NilError(t, json.Unmarshal(f.Payload, &st))
-			assert.Check(t, cmp.Equal(st.KillGraceMs, tc.want))
+			assert.NilError(t, proto.Unmarshal(f.Payload, &st))
+			assert.Check(t, cmp.DeepEqual(st.KillGraceMs, tc.want))
 			h.wait(t, 5*time.Second)
 		})
 	}
@@ -291,9 +292,9 @@ func TestKillGraceStillKillsTheSurvivorAfterTheHostHangsUp(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	const grace = 300 * time.Millisecond
 	child := fmt.Sprintf(`trap "" TERM HUP; echo $$ > %s; exec sleep 300`, pidFile)
-	h := startExec(t, newManager(), proto.Request{
+	h := startExec(t, newManager(), &proto.Request{
 		Argv:        []string{"sh", "-c", fmt.Sprintf("sh -c '%s' >/dev/null 2>&1 & exec sleep 300", child)},
-		KillGraceMs: grace.Milliseconds(),
+		KillGraceMs: new(uint32(grace.Milliseconds())),
 	})
 	h.started(t)
 	survivor := readPid(t, pidFile)
@@ -315,13 +316,13 @@ func TestServeRunsWithoutALeafThatCannotTakeTheChild(t *testing.T) {
 	tree, err := cgroup.NewTree(parent)
 	assert.NilError(t, err)
 	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), tree)
-	h := startExec(t, m, proto.Request{Argv: []string{"echo", "ran"}, KillGraceMs: 100})
+	h := startExec(t, m, &proto.Request{Argv: []string{"echo", "ran"}, KillGraceMs: new(uint32(100))})
 	h.started(t)
 
 	out, exit := h.wait(t, 5*time.Second)
 
 	assert.Check(t, cmp.Equal(strings.TrimSpace(out), "ran"))
-	assert.Check(t, cmp.Equal(exit, proto.Exit{}))
+	assert.Check(t, cmp.DeepEqual(exit, &proto.Exit{}, protocmp.Transform()))
 	leaves, err := os.ReadDir(parent)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Len(leaves, 0))
@@ -330,13 +331,13 @@ func TestServeRunsWithoutALeafThatCannotTakeTheChild(t *testing.T) {
 // A strict manager refuses the exec it cannot give a leaf.
 func TestServeRefusesAStrictExecWithoutACgroupTree(t *testing.T) {
 	m := NewStrictManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), nil)
-	h := startExec(t, m, proto.Request{Argv: []string{"echo", "ran"}})
+	h := startExec(t, m, &proto.Request{Argv: []string{"echo", "ran"}})
 
 	f := h.next(t, 5*time.Second)
 
 	assert.Equal(t, f.Type, proto.TypeResponse, "first frame %q", f.Payload)
 	var resp proto.ErrorResponse
-	assert.NilError(t, json.Unmarshal(f.Payload, &resp))
+	assert.NilError(t, proto.Unmarshal(f.Payload, &resp))
 	assert.Assert(t, resp.Error != nil)
 	assert.Check(t, cmp.Equal(resp.Error.Code, proto.ErrExecFailed))
 	assert.Check(t, cmp.Contains(resp.Error.Message, "no cgroup to run in"))

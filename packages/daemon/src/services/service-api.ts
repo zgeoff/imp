@@ -1,6 +1,7 @@
+import { ServiceRestartSchema, ServiceStateSchema } from '@imp/api';
 import type { ImpEvent, Service, ServiceDef, ServiceList, ServiceLog } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import type { AgentService, AgentServices, LogCursor } from '../agent-client/agent-protocol';
+import type { LogCursor, ServiceStatus, ServicesList } from '../agent-client/agent-protocol';
 import { isAgentError } from '../agent-client/is-agent-error';
 import {
   openServiceLogStream,
@@ -64,7 +65,7 @@ interface ServiceApiParts {
   readonly events: Pick<EventBus, 'subscribe'>;
 
   // the list a sleeping imp's last sleep recorded, if it did
-  readonly readSleptServices: (imp: ImpRecord) => AgentServices | undefined;
+  readonly readSleptServices: (imp: ImpRecord) => ServicesList | undefined;
 
   // the clock and the timers of a follow's and a list's waits; Date.now and
   // setTimeout by default
@@ -253,7 +254,18 @@ export function createServiceApi(parts: ServiceApiParts): ServiceApi {
               requireExecRights(listed, def, rights.replace === true);
             }
 
-            await sendServicesAdd(vsockPath, def, rights.replace === true);
+            await sendServicesAdd(
+              vsockPath,
+              {
+                name: def.name,
+                argv: [...def.argv],
+                ...(def.env !== undefined && { env: [...def.env] }),
+                ...(def.cwd !== undefined && { cwd: def.cwd }),
+                ...(def.user !== undefined && { user: def.user }),
+                ...(def.restart !== undefined && { restart: def.restart }),
+              },
+              rights.replace === true,
+            );
           },
           'services',
         )
@@ -463,11 +475,11 @@ async function listServiceNames(
 // With the exec scope, a service runs as the image's user, and a replace
 // may not stop one that runs as root.
 function requireExecRights(
-  listed: AgentServices,
+  listed: ServicesList,
   def: Readonly<ServiceDef>,
   replace: boolean,
 ): void {
-  if (def.user !== undefined && def.user !== listed.image_user) {
+  if (def.user !== undefined && def.user !== listed.imageUser) {
     throw buildForbiddenError(
       `service ${def.name} runs as ${def.user}, not the image's user: that needs the manage scope`,
     );
@@ -484,7 +496,7 @@ function requireExecRights(
 
 // A service the agent does not list is a file it has not started, whose
 // user nobody checked yet: it counts as root.
-function requireNotRoot(listed: AgentServices, service: string, action: string): void {
+function requireNotRoot(listed: ServicesList, service: string, action: string): void {
   const found = listed.services.find((entry) => entry.name === service);
 
   if (found?.root === false) {
@@ -582,13 +594,15 @@ function handleAgentError(service: string): (error: unknown) => never {
   };
 }
 
-function toApiService(service: AgentService): Service {
+function toApiService(service: ServiceStatus): Service {
   const def = service.def;
-  const exit = service.last_exit;
+  const exit = service.lastExit;
 
+  // a state or a restart policy this impd does not know throws, as a
+  // services list it cannot show
   return {
     name: service.name,
-    state: service.state,
+    state: ServiceStateSchema.parse(service.state),
     pid: service.pid === undefined || service.pid === 0 ? null : service.pid,
     restarts: service.restarts,
     lastExit:
@@ -602,8 +616,8 @@ function toApiService(service: AgentService): Service {
     envKeys: (def?.env ?? []).map((entry) => entry.split('=', 1)[0] ?? entry),
     cwd: def?.cwd ?? null,
     user: def?.user ?? null,
-    restart: def?.restart ?? 'always',
-    source: def?.source ?? 'image',
+    restart: ServiceRestartSchema.parse(def?.restart ?? 'always'),
+    source: def?.source === 'api' ? 'api' : 'image',
 
     // an agent too old to say counts as root
     root: service.root ?? true,

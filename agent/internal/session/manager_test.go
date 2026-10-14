@@ -2,7 +2,6 @@ package session
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
@@ -41,7 +41,7 @@ func newTestManager(t *testing.T, bootID string) *Manager {
 	t.Cleanup(func() {
 		for _, s := range m.List() {
 			m.Kill(s.Name)
-			syscall.Kill(-s.Pid, syscall.SIGKILL)
+			syscall.Kill(-int(s.Pid), syscall.SIGKILL)
 		}
 	})
 	return m
@@ -56,7 +56,7 @@ type host struct {
 	out    bytes.Buffer
 }
 
-func connect(t *testing.T, m *Manager, req proto.Request) *host {
+func connect(t *testing.T, m *Manager, req *proto.Request) *host {
 	t.Helper()
 	guest, conn := net.Pipe()
 	return serve(t, m, req, guest, conn)
@@ -64,7 +64,7 @@ func connect(t *testing.T, m *Manager, req proto.Request) *host {
 
 // runServe runs m.Serve on guest and returns the channel its result comes
 // on. Cleanup closes the host's end, conn, and waits for Serve to return.
-func runServe(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) chan error {
+func runServe(t *testing.T, m *Manager, req *proto.Request, guest, conn net.Conn) chan error {
 	t.Helper()
 	served := make(chan error, 1)
 	exited := make(chan struct{})
@@ -91,7 +91,7 @@ func joined(t *testing.T, done <-chan struct{}, what string) {
 	}
 }
 
-func serve(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) *host {
+func serve(t *testing.T, m *Manager, req *proto.Request, guest, conn net.Conn) *host {
 	t.Helper()
 	h := &host{conn: conn, w: proto.NewWriter(conn), frames: make(chan proto.Frame, 1024)}
 	h.served = runServe(t, m, req, guest, conn)
@@ -118,13 +118,13 @@ func serve(t *testing.T, m *Manager, req proto.Request, guest, conn net.Conn) *h
 
 func start(t *testing.T, m *Manager, name, script string) *host {
 	t.Helper()
-	return connect(t, m, proto.Request{Op: proto.OpExec, Session: name, TTY: true,
-		Argv: []string{"sh", "-c", script}, Cols: 80, Rows: 24})
+	return connect(t, m, &proto.Request{Op: proto.OpExec, Session: new(name), Tty: new(true),
+		Argv: []string{"sh", "-c", script}, Cols: new(uint32(80)), Rows: new(uint32(24))})
 }
 
 func attach(t *testing.T, m *Manager, name string) *host {
 	t.Helper()
-	return connect(t, m, proto.Request{Op: proto.OpSessionAttach, Session: name, Cols: 80, Rows: 24})
+	return connect(t, m, &proto.Request{Op: proto.OpSessionAttach, Session: new(name), Cols: new(uint32(80)), Rows: new(uint32(24))})
 }
 
 func (h *host) next(t *testing.T) proto.Frame {
@@ -139,7 +139,7 @@ func (h *host) next(t *testing.T) proto.Frame {
 	}
 }
 
-func (h *host) started(t *testing.T) proto.Started {
+func (h *host) started(t *testing.T) *proto.Started {
 	t.Helper()
 	f := h.next(t)
 	assert.Equal(t, f.Type, proto.TypeStarted, "first frame %q", f.Payload)
@@ -202,10 +202,13 @@ func (h *host) waitServed(t *testing.T) {
 	}
 }
 
-func decode[T any](t *testing.T, f proto.Frame) T {
+func decode[T any, P interface {
+	*T
+	protoreflect.ProtoMessage
+}](t *testing.T, f proto.Frame) P {
 	t.Helper()
-	var v T
-	assert.NilError(t, json.Unmarshal(f.Payload, &v), "%s frame %q", f.Type, f.Payload)
+	v := P(new(T))
+	assert.NilError(t, proto.Unmarshal(f.Payload, v), "%s frame %q", f.Type, f.Payload)
 	return v
 }
 
@@ -219,13 +222,13 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
 }
 
-func find(m *Manager, name string) (proto.SessionInfo, bool) {
+func find(m *Manager, name string) (*proto.SessionInfo, bool) {
 	for _, s := range m.List() {
 		if s.Name == name {
 			return s, true
 		}
 	}
-	return proto.SessionInfo{}, false
+	return nil, false
 }
 
 func TestServeStartsANewSessionUnderTheRequestedName(t *testing.T) {
@@ -234,8 +237,8 @@ func TestServeStartsANewSessionUnderTheRequestedName(t *testing.T) {
 
 	st := h.started(t)
 
-	assert.Check(t, st.Created, "STARTED did not report a new session")
-	assert.Check(t, cmp.Equal(st.Session, "main"))
+	assert.Check(t, st.GetCreated(), "STARTED did not report a new session")
+	assert.Check(t, cmp.Equal(st.GetSession(), "main"))
 	assert.Check(t, cmp.Equal(m.Attached(), 1))
 }
 
@@ -251,7 +254,7 @@ func TestServeLeavesTheProcessRunningWhenTheViewerDetaches(t *testing.T) {
 	assert.Assert(t, ok, "the session is gone")
 	assert.Check(t, cmp.Equal(info.State, proto.SessionRunning))
 	assert.Check(t, !info.Attached, "the session still counts a viewer")
-	assert.Check(t, syscall.Kill(st.Pid, 0), "the process is gone")
+	assert.Check(t, syscall.Kill(int(st.Pid), 0), "the process is gone")
 	assert.Check(t, cmp.Equal(m.Attached(), 0))
 }
 
@@ -270,7 +273,7 @@ func TestServeReattachesToTheRunningProcessWithItsReplay(t *testing.T) {
 	again.send(t, proto.TypeStdin, []byte("hello\n"))
 	again.until(t, "said hello")
 
-	assert.Check(t, !st.Created, "the attach made a new session")
+	assert.Check(t, !st.GetCreated(), "the attach made a new session")
 	assert.Check(t, cmp.Equal(st.Pid, first.Pid))
 	assert.Check(t, !strings.Contains(again.out.String(), "got-hup"), "the detach sent SIGHUP")
 }
@@ -296,14 +299,14 @@ func TestServeResizesTheSessionToANewViewersSize(t *testing.T) {
 	h.until(t, "ready")
 	h.detach(t)
 
-	wide := connect(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "main", Cols: 120, Rows: 40})
+	wide := connect(t, m, &proto.Request{Op: proto.OpSessionAttach, Session: new("main"), Cols: new(uint32(120)), Rows: new(uint32(40))})
 	wide.started(t)
 	wide.until(t, "winch-40 120")
 
 	info, ok := find(m, "main")
 	assert.Assert(t, ok, "the session is gone")
-	assert.Check(t, cmp.Equal(info.Cols, uint16(120)))
-	assert.Check(t, cmp.Equal(info.Rows, uint16(40)))
+	assert.Check(t, cmp.Equal(info.Cols, uint32(120)))
+	assert.Check(t, cmp.Equal(info.Rows, uint32(40)))
 }
 
 func TestServeHandsTheSessionToANewViewerAndDetachesTheOldOne(t *testing.T) {
@@ -330,7 +333,7 @@ func TestServeHandsTheSessionOnFromAHalfOpenViewer(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	guest, conn := net.Pipe()
 	stuck := &host{conn: conn}
-	stuck.served = runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "echo ready; while read l; do echo \"said $l\"; done"}}, guest, conn)
+	stuck.served = runServe(t, m, &proto.Request{Op: proto.OpExec, Session: new("main"), Tty: new(true), Argv: []string{"sh", "-c", "echo ready; while read l; do echo \"said $l\"; done"}}, guest, conn)
 	waitFor(t, "the session", func() bool { _, ok := find(m, "main"); return ok })
 
 	second := attach(t, m, "main")
@@ -361,7 +364,7 @@ func TestServeRecordsTheExitOfADetachedSession(t *testing.T) {
 	waitFor(t, "the exit", func() bool { info, _ := find(m, "job"); return info.State == proto.SessionExited })
 	info, _ := find(m, "job")
 	assert.Assert(t, info.Exit != nil, "no exit recorded")
-	assert.Check(t, cmp.Equal(info.Exit.Code, 3))
+	assert.Check(t, cmp.Equal(info.Exit.Code, int32(3)))
 }
 
 func TestServeGivesALaterViewerTheReplayAndTheExitOfADetachedSession(t *testing.T) {
@@ -377,7 +380,7 @@ func TestServeGivesALaterViewerTheReplayAndTheExitOfADetachedSession(t *testing.
 	f := later.last(t)
 
 	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 3))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, int32(3)))
 	assert.Check(t, cmp.Contains(later.out.String(), "bye"), "the replay lost the last output")
 }
 
@@ -407,7 +410,7 @@ func TestServeSendsTheExitToTheAttachedViewerAndRemovesTheSession(t *testing.T) 
 	f := h.last(t)
 
 	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 4))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, int32(4)))
 	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
 }
 
@@ -422,7 +425,7 @@ func TestKillHangsUpTheSessionsProcess(t *testing.T) {
 	assert.NilError(t, err)
 	f := h.last(t)
 	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Signal, int(syscall.SIGHUP)))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Signal, int32(syscall.SIGHUP)))
 }
 
 func TestKillRefusesASessionThatIsAlreadyKilled(t *testing.T) {
@@ -458,20 +461,20 @@ func TestKillEscalatesToSIGKILLForAProcessThatIgnoresSIGHUP(t *testing.T) {
 
 	f := h.last(t)
 	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Signal, int(syscall.SIGKILL)))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Signal, int32(syscall.SIGKILL)))
 }
 
 func TestServeRefusesABadRequestAndKeepsNoSession(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		req  proto.Request
+		req  *proto.Request
 		code string
 	}{
-		{name: "no tty", req: proto.Request{Op: proto.OpExec, Session: "main", Argv: []string{"true"}}, code: proto.ErrBadRequest},
-		{name: "bad name", req: proto.Request{Op: proto.OpExec, Session: "Main", TTY: true, Argv: []string{"true"}}, code: proto.ErrBadRequest},
-		{name: "long name", req: proto.Request{Op: proto.OpExec, Session: strings.Repeat("a", 33), TTY: true, Argv: []string{"true"}}, code: proto.ErrBadRequest},
-		{name: "no such program", req: proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"no-such-program"}}, code: proto.ErrExecFailed},
-		{name: "attach to nothing", req: proto.Request{Op: proto.OpSessionAttach, Session: "none"}, code: proto.ErrNoSession},
+		{name: "no tty", req: &proto.Request{Op: proto.OpExec, Session: new("main"), Argv: []string{"true"}}, code: proto.ErrBadRequest},
+		{name: "bad name", req: &proto.Request{Op: proto.OpExec, Session: new("Main"), Tty: new(true), Argv: []string{"true"}}, code: proto.ErrBadRequest},
+		{name: "long name", req: &proto.Request{Op: proto.OpExec, Session: new(strings.Repeat("a", 33)), Tty: new(true), Argv: []string{"true"}}, code: proto.ErrBadRequest},
+		{name: "no such program", req: &proto.Request{Op: proto.OpExec, Session: new("main"), Tty: new(true), Argv: []string{"no-such-program"}}, code: proto.ErrExecFailed},
+		{name: "attach to nothing", req: &proto.Request{Op: proto.OpSessionAttach, Session: new("none")}, code: proto.ErrNoSession},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
@@ -530,7 +533,7 @@ func TestServeReplacesAnExitedSessionOfTheSameName(t *testing.T) {
 	st := h.started(t)
 	h.until(t, "fresh")
 
-	assert.Check(t, st.Created, "the exited session was attached, not replaced")
+	assert.Check(t, st.GetCreated(), "the exited session was attached, not replaced")
 }
 
 func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
@@ -543,7 +546,7 @@ func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
 	again := start(t, m, "s1", "echo other")
 	st := again.started(t)
 
-	assert.Check(t, !st.Created, "a running session was replaced")
+	assert.Check(t, !st.GetCreated(), "a running session was replaced")
 }
 
 // A viewer that stops reading is dropped, and finds DETACHED slow once it
@@ -551,7 +554,7 @@ func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
 func TestServeDropsAViewerThatStopsReading(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	guest, conn := net.Pipe()
-	runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
+	runServe(t, m, &proto.Request{Op: proto.OpExec, Session: new("main"), Tty: new(true), Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
 	waitFor(t, "the viewer to be dropped", func() bool { info, ok := find(m, "main"); return ok && !info.Attached })
 
 	r := proto.NewReader(conn)
@@ -570,7 +573,7 @@ func TestServeDropsAViewerThatStopsReading(t *testing.T) {
 func TestServeKeepsTheSessionRunningAfterItDropsASlowViewer(t *testing.T) {
 	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
 	guest, conn := net.Pipe()
-	runServe(t, m, proto.Request{Op: proto.OpExec, Session: "main", TTY: true, Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
+	runServe(t, m, &proto.Request{Op: proto.OpExec, Session: new("main"), Tty: new(true), Argv: []string{"sh", "-c", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done"}}, guest, conn)
 	waitFor(t, "the viewer to be dropped", func() bool { info, ok := find(m, "main"); return ok && !info.Attached })
 
 	fresh := attach(t, m, "main")
@@ -606,7 +609,7 @@ func TestServeEndsOnlyTheViewerWhoseWriteFails(t *testing.T) {
 	h.detach(t)
 	guest, conn := net.Pipe()
 	fc := &failingConn{Conn: guest}
-	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "main"}, fc, conn)
+	broken := serve(t, m, &proto.Request{Op: proto.OpSessionAttach, Session: new("main")}, fc, conn)
 	broken.started(t)
 	// the pipe is synchronous: once the host read the replay, it is written
 	broken.until(t, "ready")
@@ -632,7 +635,7 @@ func TestServeKeepsAnExitTheViewerCouldNotBeSentForTheNextViewer(t *testing.T) {
 	h.detach(t)
 	guest, conn := net.Pipe()
 	fc := &failingConn{Conn: guest}
-	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "job"}, fc, conn)
+	broken := serve(t, m, &proto.Request{Op: proto.OpSessionAttach, Session: new("job")}, fc, conn)
 	broken.started(t)
 	// the pipe is synchronous: once the host read the replay, it is written
 	broken.until(t, "ready")
@@ -646,6 +649,6 @@ func TestServeKeepsAnExitTheViewerCouldNotBeSentForTheNextViewer(t *testing.T) {
 	f := later.last(t)
 
 	assert.Equal(t, f.Type, proto.TypeExit, "frame %q", f.Payload)
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 5))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, int32(5)))
 	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
 }

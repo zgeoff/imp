@@ -1,8 +1,7 @@
-import * as z from 'zod';
+import { RequestSchema } from '../agent-client/agent-protocol';
+import { decodeAgentMessage } from '../agent-client/decode-agent-message';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { startStubAgent } from './start-stub-agent';
-
-const RequestSchema = z.looseObject({ op: z.string() });
 
 // one answer to a session request: its frame, and whether the agent ends the
 // connection after it (an error) or keeps it open (a STARTED stream)
@@ -39,7 +38,7 @@ export async function startStubAttachAgent(
         return;
       }
 
-      const parsed = RequestSchema.parse(decodeJsonPayload(request));
+      const parsed = decodeAgentMessage(RequestSchema, decodeJsonPayload(request));
 
       if (parsed.op === 'ping') {
         socket.end(
@@ -71,6 +70,6 @@ export async function startStubAttachAgent(
 
     // the ops of the requests it got, in order
     readOps: (): string[] =>
-      agent.received.map((frame) => RequestSchema.parse(decodeJsonPayload(frame)).op),
+      agent.received.map((frame) => decodeAgentMessage(RequestSchema, decodeJsonPayload(frame)).op),
   };
 }

@@ -3,7 +3,9 @@ package proto
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -13,16 +15,64 @@ import (
 func TestWriterFramesEachPayloadBehindATypeAndBigEndianLength(t *testing.T) {
 	var buf bytes.Buffer
 
-	err := NewWriter(&buf).WriteJSON(TypeRequest, Request{Op: OpPing})
+	err := NewWriter(&buf).Write(TypeRequest, []byte(`{"op":"ping"}`))
 
 	assert.NilError(t, err)
 	assert.DeepEqual(t, buf.Bytes(), append([]byte{1, 0, 0, 0, 13}, `{"op":"ping"}`...))
 }
 
+func TestWriteMessageSendsTheJSONFormWithEveryImplicitFieldInOneFrame(t *testing.T) {
+	var buf bytes.Buffer
+
+	err := NewWriter(&buf).WriteMessage(TypeResize, &Resize{Cols: 120})
+
+	assert.NilError(t, err)
+	f, err := NewReader(&buf).Next()
+	assert.NilError(t, err)
+	assert.Equal(t, f.Type, TypeResize)
+	var payload any
+	assert.NilError(t, json.Unmarshal(f.Payload, &payload))
+	assert.DeepEqual(t, payload, map[string]any{"cols": 120.0, "rows": 0.0})
+}
+
+func TestMarshalLeavesOutAnOptionalFieldLeftUnset(t *testing.T) {
+	b, err := Marshal(&Started{Pid: 812})
+
+	assert.NilError(t, err)
+	var payload any
+	assert.NilError(t, json.Unmarshal(b, &payload))
+	assert.DeepEqual(t, payload, map[string]any{"pid": 812.0})
+}
+
+func TestMarshalWritesAWholeCountAsAJSONNumber(t *testing.T) {
+	b, err := Marshal(&LogCursor{Inode: 131074, Offset: 1 << 40})
+
+	assert.NilError(t, err)
+	assert.Equal(t, strings.ReplaceAll(string(b), " ", ""), `{"inode":131074,"offset":1099511627776}`)
+}
+
+func TestUnmarshalIgnoresAFieldTheAgentDoesNotKnow(t *testing.T) {
+	var req Request
+
+	err := Unmarshal([]byte(`{"op":"ping","added_later":true}`), &req)
+
+	assert.NilError(t, err)
+	assert.Equal(t, req.Op, OpPing)
+}
+
+func TestUnmarshalReadsACountWrittenAsAString(t *testing.T) {
+	var req Request
+
+	err := Unmarshal([]byte(`{"op":"grow","disk_bytes":"34359738368"}`), &req)
+
+	assert.NilError(t, err)
+	assert.Equal(t, req.GetDiskBytes(), 34359738368.0)
+}
+
 func TestReaderReadsBackWhatTheWriterSentThenACleanEOF(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewWriter(&buf)
-	assert.NilError(t, w.WriteJSON(TypeRequest, Request{Op: OpPing}))
+	assert.NilError(t, w.Write(TypeRequest, []byte(`{"op":"ping"}`)))
 	assert.NilError(t, w.Write(TypeStdinEOF, nil))
 	assert.NilError(t, w.Write(TypeStdout, []byte("hello")))
 	r := NewReader(&buf)

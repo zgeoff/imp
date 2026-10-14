@@ -6,7 +6,7 @@ import {
   hasFeature,
 } from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
-import type { AgentActivity, AgentInner, AgentSession } from '../agent-client/agent-protocol';
+import type { Activity, InnerStatus, SessionInfo } from '../agent-client/agent-protocol';
 import { sendActivity, sendPing } from '../agent-client/agent-requests';
 import { openDialStream } from '../agent-client/dial-stream';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
@@ -112,7 +112,7 @@ export interface ImpRuntime {
 
   // for the idle loop: the agent's activity, its sessions recorded on the
   // way; null when the agent does not answer
-  readonly readActivity: (imp: ImpRecord) => Promise<AgentActivity | null>;
+  readonly readActivity: (imp: ImpRecord) => Promise<Activity | null>;
 
   // for the wake proxy: the running imp, woken or booted first if needed;
   // `wokeMs` is null when it already ran. `onFound` runs before any wait, so
@@ -413,7 +413,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
           // the agent's sessions, for a start that requires the broker and
           // may attach: a refused attach must not reach the agent
-          const listed: AgentSession[] = [];
+          const listed: SessionInfo[] = [];
 
           if (requiresBroker && session !== undefined) {
             const activity = await sendActivity(paths.vsockSocket);
@@ -799,7 +799,7 @@ async function buildNotAwakeError(context: ImpContext, imp: ImpRecord): Promise<
 }
 
 // an agent from before 0.14.0 reports no inner container
-function updateInner(context: ImpContext, impId: string, inner: AgentInner | undefined): void {
+function updateInner(context: ImpContext, impId: string, inner: InnerStatus | undefined): void {
   if (inner === undefined) {
     context.inners.forget(impId);
 
@@ -819,8 +819,8 @@ async function writeAdoptedBoot(context: ImpContext, imp: ImpRecord): Promise<vo
   try {
     const ping = await sendPing(context.findPaths(imp.id).vsockSocket);
 
-    if (ping.boot_id !== undefined) {
-      await writeUnknownBoot(context.db, imp.id, ping.boot_id, new Date());
+    if (ping.bootId !== undefined) {
+      await writeUnknownBoot(context.db, imp.id, ping.bootId, new Date());
     }
   } catch (error) {
     context.log(`impd: ${imp.name}: could not read its boot id: ${readErrorMessage(error)}`);
@@ -857,8 +857,8 @@ function startNewLogTap(
   ) {
     context.sessionLogs.tapNow(findSessionLogImp(context.findPaths, imp), {
       name: stream.session,
-      execution_generation: output.executionGeneration,
-      boot_id: output.bootId,
+      executionGeneration: output.executionGeneration,
+      bootId: output.bootId,
     });
   }
 }

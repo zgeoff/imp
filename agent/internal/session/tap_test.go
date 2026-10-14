@@ -17,13 +17,13 @@ import (
 
 func startLogged(t *testing.T, m *Manager, name, script string) *host {
 	t.Helper()
-	return connect(t, m, proto.Request{Op: proto.OpExec, Session: name, TTY: true, Log: true,
-		Argv: []string{"sh", "-c", script}, Cols: 80, Rows: 24})
+	return connect(t, m, &proto.Request{Op: proto.OpExec, Session: new(name), Tty: new(true), Log: new(true),
+		Argv: []string{"sh", "-c", script}, Cols: new(uint32(80)), Rows: new(uint32(24))})
 }
 
 func tap(t *testing.T, m *Manager, name string, resume *proto.ResumeFrom) *host {
 	t.Helper()
-	return connect(t, m, proto.Request{Op: proto.OpSessionTap, Session: name, ResumeFrom: resume})
+	return connect(t, m, &proto.Request{Op: proto.OpSessionTap, Session: new(name), ResumeFrom: resume})
 }
 
 // taps reads how many taps the session has now.
@@ -63,7 +63,7 @@ func TestLoggedStartMarksItsOutputAsLogged(t *testing.T) {
 	viewer := startLogged(t, m, "job", "exec sleep 60")
 
 	_, out := viewer.output(t)
-	assert.Check(t, out.Log)
+	assert.Check(t, out.GetLog())
 }
 
 // A tap reads the raw output from the ring's start beside a viewer it never
@@ -77,18 +77,18 @@ func TestTapReadsFromTheRingStartBesideTheViewer(t *testing.T) {
 	tp := tap(t, m, "job", nil)
 
 	st, out := tp.output(t)
-	assert.Check(t, cmp.Equal(st.Session, "job"))
-	assert.Check(t, cmp.Equal(out.Offset, uint64(0)))
-	assert.Check(t, cmp.Equal(out.Prelude, 0))
+	assert.Check(t, cmp.Equal(st.GetSession(), "job"))
+	assert.Check(t, cmp.Equal(out.Offset, 0.0))
+	assert.Check(t, cmp.Equal(out.Prelude, uint32(0)))
 	assert.Check(t, cmp.Nil(out.Resume))
-	assert.Check(t, cmp.Equal(out.Generation, vout.Generation))
-	assert.Check(t, out.Log)
+	assert.Check(t, cmp.Equal(out.ExecutionGeneration, vout.ExecutionGeneration))
+	assert.Check(t, out.GetLog())
 	tp.until(t, "one")
 	waitFor(t, "the tap", func() bool { return taps(m, "job") == 1 })
 	assert.Check(t, cmp.Equal(m.Attached(), 1), "a viewer and a tap")
 	info, _ := find(m, "job")
 	assert.Check(t, info.Attached)
-	assert.Check(t, info.Log)
+	assert.Check(t, info.GetLog())
 }
 
 // A tap reads live output and the EXIT as the viewer does.
@@ -106,10 +106,10 @@ func TestTapReadsTheLiveOutputAndTheExitBesideTheViewer(t *testing.T) {
 
 	vf := viewer.last(t)
 	assert.Check(t, cmp.Equal(vf.Type, proto.TypeExit))
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, vf).Code, 5))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, vf).Code, int32(5)))
 	tf := tp.last(t)
 	assert.Check(t, cmp.Equal(tf.Type, proto.TypeExit))
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, tf).Code, 5))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, tf).Code, int32(5)))
 	assert.Check(t, cmp.Equal(tp.out.String(), "onetwo"), "the tap reads the raw output")
 }
 
@@ -128,7 +128,7 @@ func TestTapGetsTheExitOfASessionWithNoViewer(t *testing.T) {
 
 	f := tp.last(t)
 	assert.Check(t, cmp.Equal(f.Type, proto.TypeExit))
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 3))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, int32(3)))
 }
 
 // A tap gets the EXIT without delivering it: the next viewer still gets it.
@@ -149,7 +149,7 @@ func TestTapLeavesTheExitItGotForTheNextViewer(t *testing.T) {
 	viewer.started(t)
 	f := viewer.last(t)
 	assert.Check(t, cmp.Equal(f.Type, proto.TypeExit))
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 3))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, int32(3)))
 }
 
 // A tap that comes after the exit gets the EXIT.
@@ -170,7 +170,7 @@ func TestTapAfterTheExitGetsTheExit(t *testing.T) {
 	late.started(t)
 	f := late.last(t)
 	assert.Check(t, cmp.Equal(f.Type, proto.TypeExit))
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 3))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, int32(3)))
 }
 
 // A tap that comes after the exit still leaves the EXIT for the next viewer.
@@ -194,7 +194,7 @@ func TestTapAfterTheExitLeavesTheExitForTheNextViewer(t *testing.T) {
 	viewer.started(t)
 	f := viewer.last(t)
 	assert.Check(t, cmp.Equal(f.Type, proto.TypeExit))
-	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, 3))
+	assert.Check(t, cmp.Equal(decode[proto.Exit](t, f).Code, int32(3)))
 }
 
 func TestTapResumesExactlyAtAnOffsetTheRingHolds(t *testing.T) {
@@ -203,12 +203,12 @@ func TestTapResumesExactlyAtAnOffsetTheRingHolds(t *testing.T) {
 	total := uint64(ringSize + 1000)
 	out := startLoggedQuiet(t, m, "job", "head -c "+strconv.FormatUint(total, 10)+" /dev/zero | tr '\\0' x", total)
 
-	exact := tap(t, m, "job", &proto.ResumeFrom{Generation: out.Generation, Offset: total - 10})
+	exact := tap(t, m, "job", &proto.ResumeFrom{ExecutionGeneration: out.ExecutionGeneration, Offset: float64(total - 10)})
 
 	_, eo := exact.output(t)
-	assert.Assert(t, eo.Resume != nil, "exact resume: %+v", eo)
+	assert.Assert(t, eo.Resume != nil, "exact resume: %v", eo)
 	assert.Check(t, cmp.Equal(eo.Resume.Kind, proto.ResumeExact))
-	assert.Check(t, cmp.Equal(eo.Offset, total-10))
+	assert.Check(t, cmp.Equal(eo.Offset, float64(total-10)))
 	assert.Check(t, cmp.DeepEqual(exact.data(t, 10), bytes.Repeat([]byte("x"), 10)))
 }
 
@@ -219,11 +219,11 @@ func TestTapResumeBelowTheRingStartIsAGap(t *testing.T) {
 	total := uint64(ringSize + 1000)
 	out := startLoggedQuiet(t, m, "job", "head -c "+strconv.FormatUint(total, 10)+" /dev/zero | tr '\\0' x", total)
 
-	gap := tap(t, m, "job", &proto.ResumeFrom{Generation: out.Generation, Offset: 5})
+	gap := tap(t, m, "job", &proto.ResumeFrom{ExecutionGeneration: out.ExecutionGeneration, Offset: 5})
 
 	_, gout := gap.output(t)
 	assert.Check(t, cmp.Equal(wire(t, gout.Resume), `{"kind":"gap","from":5,"to":1000}`))
-	assert.Check(t, cmp.Equal(gout.Offset, uint64(1000)))
+	assert.Check(t, cmp.Equal(gout.Offset, 1000.0))
 }
 
 func TestTapResumePastTheEndIsInvalid(t *testing.T) {
@@ -232,7 +232,7 @@ func TestTapResumePastTheEndIsInvalid(t *testing.T) {
 	total := uint64(ringSize + 1000)
 	out := startLoggedQuiet(t, m, "job", "head -c "+strconv.FormatUint(total, 10)+" /dev/zero | tr '\\0' x", total)
 
-	past := tap(t, m, "job", &proto.ResumeFrom{Generation: out.Generation, Offset: total + 1})
+	past := tap(t, m, "job", &proto.ResumeFrom{ExecutionGeneration: out.ExecutionGeneration, Offset: float64(total + 1)})
 
 	assert.Equal(t, past.errorCode(t), proto.ErrInvalidResume)
 }
@@ -278,7 +278,7 @@ func TestTapThatStopsReadingIsDroppedAsSlow(t *testing.T) {
 	guest, conn := net.Pipe()
 	assert.NilError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
 
-	served := runServe(t, m, proto.Request{Op: proto.OpSessionTap, Session: "main"}, guest, conn)
+	served := runServe(t, m, &proto.Request{Op: proto.OpSessionTap, Session: new("main")}, guest, conn)
 
 	r := proto.NewReader(conn)
 	f, err := r.Next()
@@ -341,7 +341,7 @@ func TestTapOfAHeldLoggedSessionReadsItsOutputFromZero(t *testing.T) {
 	tp := tap(t, m, "job", nil)
 
 	_, out := tp.output(t)
-	assert.Check(t, cmp.Equal(out.Offset, uint64(0)))
+	assert.Check(t, cmp.Equal(out.Offset, 0.0))
 	// bytes.Equal: go-cmp walks a megabyte one element at a time
 	got := tp.data(t, total)
 	assert.Check(t, bytes.Equal(got, bytes.Repeat([]byte("x"), total)), "the tap read %d bytes, want %d x's", len(got), total)
@@ -358,14 +358,14 @@ func TestLoggedSessionRunsOnWithoutATapPastTheTapWait(t *testing.T) {
 }
 
 // startLoggedQuiet is startQuiet for a logged session.
-func startLoggedQuiet(t *testing.T, m *Manager, name, script string, n uint64) proto.Output {
+func startLoggedQuiet(t *testing.T, m *Manager, name, script string, n uint64) *proto.Output {
 	t.Helper()
 	h := startLogged(t, m, name, "stty -opost -echo; "+script+"; exec sleep 60")
 	_, out := h.output(t)
 	h.detach(t)
 	waitFor(t, "the output", func() bool {
-		info, _ := find(m, name)
-		return info.End == n
+		info, ok := find(m, name)
+		return ok && info.End == float64(n)
 	})
 	return out
 }
@@ -381,8 +381,8 @@ func TestLoggedStartThatAttachesLeavesTheSessionUnlogged(t *testing.T) {
 	again := startLogged(t, m, "job", "exec sleep 60")
 
 	st, out := again.output(t)
-	assert.Check(t, !st.Created, "the start attached")
-	assert.Check(t, !out.Log, "the attach carries no log")
+	assert.Check(t, !st.GetCreated(), "the start attached")
+	assert.Check(t, cmp.Nil(out.Log), "the attach carries no log")
 }
 
 func TestTapOfASessionALoggedStartAttachedToIsABadRequest(t *testing.T) {

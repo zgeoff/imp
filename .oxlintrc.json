@@ -683,5 +683,12 @@
   ],
   // .claude/** holds the skill-gate hook, which repo-sync delivers from
   // zgeoff/tools: a fix lands upstream, never here
-  "ignorePatterns": [".claude/**", ".cache/**", "kernel/**", "agent/**"]
+  "ignorePatterns": [
+    ".claude/**",
+    ".cache/**",
+    "kernel/**",
+    "agent/**",
+    // protoc-gen-es output (bun run gen:proto)
+    "packages/daemon/src/agent-client/gen/**"
+  ]
 }

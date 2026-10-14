@@ -1,7 +1,6 @@
 package services
 
 import (
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,6 +8,9 @@ import (
 	"regexp"
 	"syscall"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	gproto "google.golang.org/protobuf/proto"
 
 	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -37,24 +39,24 @@ func noService(name string) error {
 
 // Add writes def to services.d and starts it. A service or file with the
 // same name is SERVICE_EXISTS unless replace, which stops it first.
-func (s *Supervisor) Add(def Def, replace bool) error {
-	if err := checkName(def.Name); err != nil {
+func (s *Supervisor) Add(def *Def, replace bool) error {
+	if err := checkName(def.GetName()); err != nil {
 		return err
 	}
-	if err := checkDef(&def); err != nil {
+	if err := checkDef(def); err != nil {
 		return badRequest(err.Error())
 	}
-	def.Source = "api"
+	def.Source = new("api")
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	if err := s.refuseStopping(); err != nil {
 		return err
 	}
-	old := s.find(def.Name)
-	path := filepath.Join(s.dir, def.Name+".json")
+	old := s.find(def.GetName())
+	path := filepath.Join(s.dir, def.GetName()+".json")
 	if !replace {
 		if old != nil || exists(s.fsys, path) {
-			return &proto.Error{Code: proto.ErrServiceTaken, Message: "service " + def.Name + " exists"}
+			return &proto.Error{Code: proto.ErrServiceTaken, Message: "service " + def.GetName() + " exists"}
 		}
 	}
 	if old != nil {
@@ -167,8 +169,8 @@ func (s *Supervisor) stopOne(svc *service) {
 	}
 
 	s.mu.Lock()
-	if s.services[svc.def.Name] == svc {
-		delete(s.services, svc.def.Name)
+	if s.services[svc.def.GetName()] == svc {
+		delete(s.services, svc.def.GetName())
 	}
 	s.mu.Unlock()
 }
@@ -176,10 +178,11 @@ func (s *Supervisor) stopOne(svc *service) {
 // writeDef writes the file whole or not at all: a temp file, synced, then
 // renamed over the old one. The temp name does not end in .json, so a crash
 // leaves nothing Load would start.
-func writeDef(fsys fsroot.FS, path string, def Def) error {
+func writeDef(fsys fsroot.FS, path string, def *Def) error {
 	// the file name is the name
-	def.Name = ""
-	b, err := json.MarshalIndent(def, "", "  ")
+	file := gproto.CloneOf(def)
+	file.Name = nil
+	b, err := protojson.MarshalOptions{Multiline: true, Indent: "  ", UseProtoNames: true}.Marshal(file)
 	if err != nil {
 		return err
 	}

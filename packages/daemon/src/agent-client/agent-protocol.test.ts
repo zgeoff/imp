@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { fromJson, toJson } from '@bufbuild/protobuf';
 import {
   KILL_GRACE_MAX_MS,
   SERVICE_LOG_MAX_LINES,
@@ -9,56 +10,55 @@ import {
 import { listAgentFixtures } from '@imp/test-utils/list-agent-fixtures';
 import { readAgentFixture } from '@imp/test-utils/read-agent-fixture';
 import { collectJsonKeyPaths } from '../test-utils/collect-json-key-paths';
-import { collectSchemaKeyPaths } from '../test-utils/collect-schema-key-paths';
+import { collectMessageKeyPaths } from '../test-utils/collect-message-key-paths';
+import { AGENT_ERROR_CODES } from './agent-error-codes';
 import {
-  AGENT_ERROR_CODES,
-  ActivityResponseSchema,
-  AgentErrorResponseSchema,
-  AgentExitSchema,
-  AgentRequestSchema,
-  AgentRequestSchemas,
-  AgentResizeSchema,
-  AgentSessionObjectSchema,
-  AgentSignalSchema,
+  ActivitySchema,
   ConnectionSchema,
   DetachedSchema,
-  InvalidResumeDataSchema,
-  ListenResponseSchema,
+  ErrorResponseSchema,
+  ExitSchema,
+  ListeningSchema,
   LogCursorSchema,
-  NoSessionDataSchema,
-  OkResponseSchema,
-  PingResponseSchema,
+  OKSchema,
+  PingSchema,
+  RequestSchema,
+  ResizeSchema,
   ServicesListSchema,
+  SignalSchema,
   StartedSchema,
 } from './agent-protocol';
+import { encodeAgentMessage } from './encode-agent-message';
 import { FRAME_TYPES, MAX_PAYLOAD } from './frame-codec';
 
 // testdata/guest is what the agent sends and testdata/host what impd sends
 // (docs/architecture/guest/protocol.md#contract-tests)
 
 test.each([
-  ['ping', PingResponseSchema],
-  ['ping-inner-up', PingResponseSchema],
-  ['ok', OkResponseSchema],
-  ['error', AgentErrorResponseSchema],
-  ['error-no-session', AgentErrorResponseSchema],
-  ['error-invalid-resume', AgentErrorResponseSchema],
-  ['listening-socket', ListenResponseSchema],
-  ['listening-port', ListenResponseSchema],
+  ['ping', PingSchema],
+  ['ping-inner-up', PingSchema],
+  ['ok', OKSchema],
+  ['error', ErrorResponseSchema],
+  ['error-no-session', ErrorResponseSchema],
+  ['error-invalid-resume', ErrorResponseSchema],
+  ['listening-socket', ListeningSchema],
+  ['listening-port', ListeningSchema],
   ['connection', ConnectionSchema],
-  ['activity', ActivityResponseSchema],
+  ['activity', ActivitySchema],
   ['started', StartedSchema],
   ['started-resume-gap', StartedSchema],
   ['started-resume-exact', StartedSchema],
-  ['exit', AgentExitSchema],
+  ['exit', ExitSchema],
   ['detached', DetachedSchema],
   ['services-list', ServicesListSchema],
   ['cursor', LogCursorSchema],
-] as const)('it parses the agent’s %s message with no field left over', (name, schema) => {
+] as const)('it decodes the agent’s %s message whole and writes it back alike', (name, schema) => {
   const fixture = readAgentFixture(`guest/${name}.json`);
-  const parsed: unknown = schema.parse(fixture);
+  const decoded = fromJson(schema, fixture);
 
-  expect(parsed).toStrictEqual(fixture);
+  expect(
+    toJson(schema, decoded, { useProtoFieldName: true, alwaysEmitImplicit: true }),
+  ).toStrictEqual(fixture);
 });
 
 test('it reads every fixture the agent writes', () => {
@@ -88,59 +88,21 @@ test('it reads every fixture the agent writes', () => {
 });
 
 test.each([
-  ['ping', PingResponseSchema, ['ping', 'ping-inner-up']],
-  ['ok', OkResponseSchema, ['ok']],
-  ['an error', AgentErrorResponseSchema, ['error', 'error-no-session', 'error-invalid-resume']],
-  ['listening', ListenResponseSchema, ['listening-socket', 'listening-port']],
+  ['ping', PingSchema, ['ping', 'ping-inner-up']],
+  ['ok', OKSchema, ['ok']],
+  ['an error', ErrorResponseSchema, ['error', 'error-no-session', 'error-invalid-resume']],
+  ['listening', ListeningSchema, ['listening-socket', 'listening-port']],
   ['connection', ConnectionSchema, ['connection']],
-  ['activity', ActivityResponseSchema, ['activity']],
+  ['activity', ActivitySchema, ['activity']],
   ['started', StartedSchema, ['started', 'started-resume-gap', 'started-resume-exact']],
-  ['exit', AgentExitSchema, ['exit']],
+  ['exit', ExitSchema, ['exit']],
   ['detached', DetachedSchema, ['detached']],
   ['the services list', ServicesListSchema, ['services-list']],
   ['a log cursor', LogCursorSchema, ['cursor']],
-] as const)(
-  'it finds each field it reads from %s in a message the agent sends',
-  (_label, schema, names) => {
-    const sent = names.flatMap((name) =>
-      collectJsonKeyPaths(readAgentFixture(`guest/${name}.json`)),
-    );
+] as const)('it finds each field of %s in a message the agent sends', (_label, schema, names) => {
+  const sent = names.flatMap((name) => collectJsonKeyPaths(readAgentFixture(`guest/${name}.json`)));
 
-    expect(sent).toIncludeAllMembers(collectSchemaKeyPaths(schema));
-  },
-);
-
-test('it finds each field it reads from a session in the activity the agent sends', () => {
-  const sent = collectJsonKeyPaths(readAgentFixture('guest/activity.json'));
-
-  expect(sent).toIncludeAllMembers(
-    collectSchemaKeyPaths(AgentSessionObjectSchema).map((path) => `sessions[].${path}`),
-  );
-});
-
-test('it parses the data of NO_SESSION whole, with every field it reads set', () => {
-  const fixture = AgentErrorResponseSchema.parse(readAgentFixture('guest/error-no-session.json'));
-  const parsed: unknown = NoSessionDataSchema.parse(fixture.error.data);
-
-  expect(parsed).toStrictEqual(fixture.error.data);
-
-  expect(collectJsonKeyPaths(fixture.error.data)).toIncludeAllMembers(
-    collectSchemaKeyPaths(NoSessionDataSchema),
-  );
-});
-
-test('it parses the data of INVALID_RESUME whole, with every field it reads set', () => {
-  const fixture = AgentErrorResponseSchema.parse(
-    readAgentFixture('guest/error-invalid-resume.json'),
-  );
-
-  const parsed: unknown = InvalidResumeDataSchema.parse(fixture.error.data);
-
-  expect(parsed).toStrictEqual(fixture.error.data);
-
-  expect(collectJsonKeyPaths(fixture.error.data)).toIncludeAllMembers(
-    collectSchemaKeyPaths(InvalidResumeDataSchema),
-  );
+  expect(sent).toIncludeAllMembers(collectMessageKeyPaths(schema));
 });
 
 test('it numbers the frame types as the agent does', () => {
@@ -181,43 +143,36 @@ test('it reads the tar tool’s total from the record the agent writes', () => {
 });
 
 test.each(listAgentFixtures('host/requests'))(
-  'it sends the agent a %s request it parses with no field left over',
+  'it writes the %s request as the agent’s fixture holds it',
   (op) => {
     const fixture = readAgentFixture(`host/requests/${op}.json`);
-    const parsed: unknown = AgentRequestSchema.parse(fixture);
+    const decoded = fromJson(RequestSchema, fixture);
 
-    expect(parsed).toStrictEqual(fixture);
+    expect(decoded.op).toBe(op);
+    expect(encodeAgentMessage(RequestSchema, decoded)).toStrictEqual(fixture);
   },
 );
 
-test('it keeps a host fixture for every op it sends', () => {
-  const ops: string[] = [];
+// the agent marks where a service came from; impd never says
+test('it sets each field of a request in a fixture the agent decodes', () => {
+  const sent = listAgentFixtures('host/requests').flatMap((op) =>
+    collectJsonKeyPaths(readAgentFixture(`host/requests/${op}.json`)),
+  );
 
-  for (const schema of Object.values(AgentRequestSchemas)) {
-    ops.push(...schema.shape.op.values);
-  }
-
-  expect(listAgentFixtures('host/requests')).toStrictEqual(ops.toSorted());
+  expect(sent).toIncludeAllMembers(
+    collectMessageKeyPaths(RequestSchema).filter((path) => path !== 'def.source'),
+  );
 });
-
-test.each(Object.entries(AgentRequestSchemas))(
-  'it sets each field of its %s requests in a fixture the agent decodes',
-  (_key, schema) => {
-    const sent = [...schema.shape.op.values].flatMap((op) =>
-      collectJsonKeyPaths(readAgentFixture(`host/requests/${op}.json`)),
-    );
-
-    expect(sent).toIncludeAllMembers(collectSchemaKeyPaths(schema));
-  },
-);
 
 test.each([
-  ['resize', AgentResizeSchema],
-  ['signal', AgentSignalSchema],
-] as const)('it sends the agent a %s frame it parses with every field set', (name, schema) => {
-  const fixture = readAgentFixture(`host/${name}.json`);
-  const parsed: unknown = schema.parse(fixture);
+  ['resize', ResizeSchema],
+  ['signal', SignalSchema],
+] as const)(
+  'it writes the %s frame as the agent’s fixture holds it, every field set',
+  (name, schema) => {
+    const fixture = readAgentFixture(`host/${name}.json`);
 
-  expect(parsed).toStrictEqual(fixture);
-  expect(collectJsonKeyPaths(fixture)).toStrictEqual(collectSchemaKeyPaths(schema));
-});
+    expect(encodeAgentMessage(schema, fromJson(schema, fixture))).toStrictEqual(fixture);
+    expect(collectJsonKeyPaths(fixture)).toStrictEqual(collectMessageKeyPaths(schema));
+  },
+);

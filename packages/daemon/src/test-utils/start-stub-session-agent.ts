@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import type { Socket } from 'node:net';
-import * as z from 'zod';
+import type { JsonValue } from '@bufbuild/protobuf';
+import { RequestSchema } from '../agent-client/agent-protocol';
+import type { Request, ResumeFrom } from '../agent-client/agent-protocol';
+import { decodeAgentMessage } from '../agent-client/decode-agent-message';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -9,24 +12,7 @@ import {
 } from '../agent-client/frame-codec';
 import { startStubAgent } from './start-stub-agent';
 
-const ResumeFromSchema = z.object({ execution_generation: z.string(), offset: z.number() });
-
-// what the agent reads of a request
-const RequestSchema = z.looseObject({
-  op: z.string(),
-  argv: z.array(z.string()).optional(),
-  env: z.array(z.string()).optional(),
-  tty: z.boolean().optional(),
-  cols: z.number().optional(),
-  rows: z.number().optional(),
-  session: z.string().optional(),
-  log: z.boolean().optional(),
-  resume_from: ResumeFromSchema.optional(),
-});
-
-export type StubSessionRequest = z.infer<typeof RequestSchema>;
-
-type StubResumeFrom = Readonly<z.infer<typeof ResumeFromSchema>>;
+type StubResumeFrom = Readonly<ResumeFrom>;
 
 // what a start reads of an exec with a session name
 type StubStart = Readonly<{
@@ -202,7 +188,7 @@ export async function startStubSessionAgent(
       return output;
     }
 
-    if (resume.execution_generation !== run.generation) {
+    if (resume.executionGeneration !== run.generation) {
       return {
         ...output,
         resume: {
@@ -292,7 +278,7 @@ export async function startStubSessionAgent(
 
     if (
       found !== undefined &&
-      (found.exit === null || found.generation === start.resume?.execution_generation)
+      (found.exit === null || found.generation === start.resume?.executionGeneration)
     ) {
       openViewer(socket, session, start.resume, false);
 
@@ -414,7 +400,7 @@ export async function startStubSessionAgent(
         return;
       }
 
-      const parsed = RequestSchema.parse(decodeJsonPayload(request));
+      const parsed = decodeAgentMessage(RequestSchema, decodeJsonPayload(request));
       const session = parsed.session ?? '';
 
       if (parsed.op === 'activity') {
@@ -440,7 +426,7 @@ export async function startStubSessionAgent(
       }
 
       if (parsed.op === 'session.tap') {
-        openTap(socket, session, parsed.resume_from);
+        openTap(socket, session, parsed.resumeFrom);
 
         return;
       }
@@ -448,7 +434,7 @@ export async function startStubSessionAgent(
       countConnection(socket);
 
       if (parsed.op === 'session.attach') {
-        openViewer(socket, session, parsed.resume_from, false);
+        openViewer(socket, session, parsed.resumeFrom, false);
 
         return;
       }
@@ -461,11 +447,11 @@ export async function startStubSessionAgent(
 
       startSession(socket, session, {
         ...(parsed.tty !== undefined && { tty: parsed.tty }),
-        ...(parsed.argv !== undefined && { argv: parsed.argv }),
+        argv: parsed.argv,
         ...(parsed.cols !== undefined && { cols: parsed.cols }),
         ...(parsed.rows !== undefined && { rows: parsed.rows }),
         ...(parsed.log !== undefined && { log: parsed.log }),
-        ...(parsed.resume_from !== undefined && { resume: parsed.resume_from }),
+        ...(parsed.resumeFrom !== undefined && { resume: parsed.resumeFrom }),
       });
     },
     closeWith,
@@ -475,10 +461,16 @@ export async function startStubSessionAgent(
     close: agent.close,
 
     // the exec requests the agent got, not its other requests
-    readExecs: (): StubSessionRequest[] =>
+    readExecs: (): Request[] =>
       agent.received
-        .map((frame) => RequestSchema.parse(decodeJsonPayload(frame)))
+        .map((frame) => decodeAgentMessage(RequestSchema, decodeJsonPayload(frame)))
         .filter((frame) => frame.op === 'exec'),
+
+    // the same requests' JSON as it came, with any field the schema lacks
+    readExecPayloads: (): JsonValue[] =>
+      agent.received
+        .map((frame) => decodeJsonPayload(frame))
+        .filter((payload) => isExecPayload(payload)),
 
     // a session's current run, or undefined before it started and once a
     // viewer got its EXIT
@@ -544,4 +536,13 @@ export async function startStubSessionAgent(
       previous.clear();
     },
   };
+}
+
+function isExecPayload(payload: JsonValue): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    !Array.isArray(payload) &&
+    payload['op'] === 'exec'
+  );
 }

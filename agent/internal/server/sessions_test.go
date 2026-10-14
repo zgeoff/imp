@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net"
 	"syscall"
 	"testing"
@@ -21,7 +20,7 @@ import (
 
 // request opens a connection to s, sends req and returns the first reply
 // frame, with the connection for more.
-func request(t *testing.T, s *Server, req proto.Request) (proto.Frame, net.Conn) {
+func request(t *testing.T, s *Server, req *proto.Request) (proto.Frame, net.Conn) {
 	t.Helper()
 	guest, conn := net.Pipe()
 	handled := make(chan struct{})
@@ -38,7 +37,7 @@ func request(t *testing.T, s *Server, req proto.Request) (proto.Frame, net.Conn)
 		}
 	})
 	assert.NilError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
-	assert.NilError(t, proto.NewWriter(conn).WriteJSON(proto.TypeRequest, req))
+	assert.NilError(t, proto.NewWriter(conn).WriteMessage(proto.TypeRequest, req))
 	f, err := proto.NewReader(conn).Next()
 	assert.NilError(t, err)
 	return f, conn
@@ -52,20 +51,20 @@ func newSessionServer(t *testing.T) *Server {
 
 // startSession runs an exec with a session name and returns its STARTED and
 // connection; the session's process group dies with the test.
-func startSession(t *testing.T, s *Server, name string) (proto.Started, net.Conn) {
+func startSession(t *testing.T, s *Server, name string) (*proto.Started, net.Conn) {
 	t.Helper()
-	f, conn := request(t, s, proto.Request{Op: proto.OpExec, Session: name, TTY: true, Argv: []string{"sleep", "30"}})
+	f, conn := request(t, s, &proto.Request{Op: proto.OpExec, Session: new(name), Tty: new(true), Argv: []string{"sleep", "30"}})
 	assert.Assert(t, cmp.Equal(f.Type, proto.TypeStarted), "%q", f.Payload)
-	var st proto.Started
-	assert.NilError(t, json.Unmarshal(f.Payload, &st))
-	t.Cleanup(func() { syscall.Kill(-st.Pid, syscall.SIGKILL) })
+	st := &proto.Started{}
+	assert.NilError(t, proto.Unmarshal(f.Payload, st))
+	t.Cleanup(func() { syscall.Kill(-int(st.Pid), syscall.SIGKILL) })
 	return st, conn
 }
 
 func TestSessionKillOfNoSessionIsNoSession(t *testing.T) {
 	s := newSessionServer(t)
 
-	f, _ := request(t, s, proto.Request{Op: proto.OpSessionKill, Session: "main"})
+	f, _ := request(t, s, &proto.Request{Op: proto.OpSessionKill, Session: new("main")})
 
 	assert.Equal(t, replyCode(t, f), proto.ErrNoSession)
 }
@@ -76,7 +75,7 @@ func TestExecWithASessionNameStartsThatSession(t *testing.T) {
 
 	st, _ := startSession(t, s, "main")
 
-	assert.Equal(t, st.Session, "main")
+	assert.Equal(t, st.GetSession(), "main")
 }
 
 func TestActivityCountsAnAttachedSessionAsAnExec(t *testing.T) {
@@ -86,7 +85,7 @@ func TestActivityCountsAnAttachedSessionAsAnExec(t *testing.T) {
 	act, err := s.activity()
 
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(act.ExecSessions, 1))
+	assert.Check(t, cmp.Equal(act.ExecSessions, uint32(1)))
 	assert.Assert(t, cmp.Len(act.Sessions, 1))
 	assert.Check(t, cmp.Equal(act.Sessions[0].Name, "main"))
 	assert.Check(t, act.Sessions[0].Attached)
@@ -106,7 +105,7 @@ func TestActivityListsADetachedSessionButCountsNoExec(t *testing.T) {
 	act, err := s.activity()
 
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(act.ExecSessions, 0))
+	assert.Check(t, cmp.Equal(act.ExecSessions, uint32(0)))
 	assert.Assert(t, cmp.Len(act.Sessions, 1))
 	assert.Check(t, !act.Sessions[0].Attached)
 }
@@ -115,7 +114,7 @@ func TestSessionKillOfARunningSessionRepliesOK(t *testing.T) {
 	s := newSessionServer(t)
 	startSession(t, s, "main")
 
-	f, _ := request(t, s, proto.Request{Op: proto.OpSessionKill, Session: "main"})
+	f, _ := request(t, s, &proto.Request{Op: proto.OpSessionKill, Session: new("main")})
 
 	assert.Check(t, cmp.Equal(f.Type, proto.TypeResponse))
 	assert.Check(t, cmp.Equal(string(f.Payload), `{"ok":true}`))

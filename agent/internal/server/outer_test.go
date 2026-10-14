@@ -89,7 +89,7 @@ func replyCode(t *testing.T, f proto.Frame) string {
 func TestPlainExecFindsTheInnerContainerDown(t *testing.T) {
 	s, _ := newOuterServer(t)
 
-	f, _ := request(t, s, proto.Request{Op: proto.OpExec, Argv: []string{"echo", "hi"}})
+	f, _ := request(t, s, &proto.Request{Op: proto.OpExec, Argv: []string{"echo", "hi"}})
 
 	assert.Equal(t, replyCode(t, f), proto.ErrInnerDown)
 }
@@ -107,7 +107,7 @@ func TestOuterExecRunsInACgroupLeafWithTheContainerDown(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, inCgroup := newOuterServer(t)
 
-			f, conn := request(t, s, proto.Request{Op: proto.OpExecOuter, Argv: []string{"echo", "outside"}, TTY: tc.tty})
+			f, conn := request(t, s, &proto.Request{Op: proto.OpExecOuter, Argv: []string{"echo", "outside"}, Tty: new(tc.tty)})
 
 			assert.Assert(t, cmp.Equal(f.Type, proto.TypeStarted), "%q", f.Payload)
 			assert.Check(t, <-inCgroup, "the outer exec started without a cgroup leaf")
@@ -131,10 +131,10 @@ func TestOuterExecRunsInACgroupLeafWithTheContainerDown(t *testing.T) {
 func TestOuterExecRefusesWhatOnlyAnInnerExecTakes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		req  proto.Request
+		req  *proto.Request
 	}{
-		{name: "a session", req: proto.Request{Op: proto.OpExecOuter, Argv: []string{"sh"}, TTY: true, Session: "main"}},
-		{name: "a user", req: proto.Request{Op: proto.OpExecOuter, Argv: []string{"id"}, User: "app"}},
+		{name: "a session", req: &proto.Request{Op: proto.OpExecOuter, Argv: []string{"sh"}, Tty: new(true), Session: new("main")}},
+		{name: "a user", req: &proto.Request{Op: proto.OpExecOuter, Argv: []string{"id"}, User: new("app")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := newOuterServer(t)
@@ -161,7 +161,7 @@ func TestOuterExecWithoutItsCgroupIsRefused(t *testing.T) {
 			image := imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}})
 			s.Outer = exec.NewStrictManager(launch.New(outsideRunner{direct: &proc.Direct{Reaper: testReaper}, inCgroup: inCgroup}, image, nil), nil)
 
-			f, _ := request(t, s, proto.Request{Op: proto.OpExecOuter, Argv: []string{"true"}, TTY: tc.tty})
+			f, _ := request(t, s, &proto.Request{Op: proto.OpExecOuter, Argv: []string{"true"}, Tty: new(tc.tty)})
 
 			assert.Check(t, cmp.Equal(replyCode(t, f), proto.ErrExecFailed))
 			assert.Check(t, cmp.Len(inCgroup, 0), "a refused exec reached the runner")

@@ -1,14 +1,8 @@
-import * as z from 'zod';
-import { AgentSessionObjectSchema } from '../agent-client/agent-protocol';
-import type { AgentSession } from '../agent-client/agent-protocol';
+import type { SessionInfo } from '../agent-client/agent-protocol';
 
-// a session as impd last saw it: `observed_unix_ms` is when, so its `end`
-// is a lower bound as of then; left out by an impd from before offsets
-export const SeenSessionSchema = AgentSessionObjectSchema.extend({
-  observed_unix_ms: z.int().optional(),
-}).readonly();
-
-export type SeenSession = z.infer<typeof SeenSessionSchema>;
+// a session as impd last saw it: `observedUnixMs` is when, so its `end` is a
+// lower bound as of then; unset by an impd from before offsets
+export type SeenSession = SessionInfo & { readonly observedUnixMs?: number };
 
 // The sessions of each awake imp as impd last saw them: the idle loop asks
 // every agent every pass, so `imp ls` counts sessions without a call into
@@ -38,6 +32,6 @@ export function createSessionCache(): SessionCache {
 }
 
 // the sessions an agent just listed, seen at `at`
-export function toSeenSessions(list: readonly AgentSession[], at: Date): SeenSession[] {
-  return list.map((session) => ({ ...session, observed_unix_ms: at.getTime() }));
+export function toSeenSessions(list: readonly SessionInfo[], at: Date): SeenSession[] {
+  return list.map((session) => ({ ...session, observedUnixMs: at.getTime() }));
 }

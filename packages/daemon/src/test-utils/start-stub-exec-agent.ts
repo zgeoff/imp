@@ -1,5 +1,7 @@
 import type { Socket } from 'node:net';
-import * as z from 'zod';
+import { RequestSchema, SignalSchema } from '../agent-client/agent-protocol';
+import type { Request } from '../agent-client/agent-protocol';
+import { decodeAgentMessage } from '../agent-client/decode-agent-message';
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
 import {
   FRAME_TYPES,
@@ -9,22 +11,6 @@ import {
 } from '../agent-client/frame-codec';
 import type { AgentFrame } from '../agent-client/frame-codec';
 import { startStubAgent } from './start-stub-agent';
-
-// the exec request as the agent's wire carries it
-const ExecRequestSchema = z.object({
-  op: z.string(),
-  argv: z.array(z.string()).default([]),
-  env: z.array(z.string()).optional(),
-  cwd: z.string().optional(),
-  tty: z.boolean().default(false),
-  cols: z.int().optional(),
-  rows: z.int().optional(),
-  user: z.string().optional(),
-  session: z.string().optional(),
-  kill_grace_ms: z.int().optional(),
-});
-
-const SignalSchema = z.object({ signal: z.int() });
 
 // the agent's maxKillGrace, as the host's API caps it too
 const MAX_KILL_GRACE_MS = 60_000;
@@ -65,18 +51,6 @@ export function startStubExecAgent(path: string, guest: StubExecTarget) {
     }
   };
 
-  const sendInput = async (pending: Promise<ExecStream>, frame: AgentFrame): Promise<void> => {
-    const stream = await pending;
-
-    if (frame.type === FRAME_TYPES.stdin) {
-      stream.writeStdin(frame.payload);
-    } else if (frame.type === FRAME_TYPES.stdinEof) {
-      stream.closeStdin();
-    } else if (frame.type === FRAME_TYPES.signal) {
-      stream.sendSignal(SignalSchema.parse(decodeJsonPayload(frame)).signal);
-    }
-  };
-
   return startStubAgent(path, (socket, request, frames) => {
     const pending = streams.get(socket);
     const last = frames.at(-1);
@@ -87,7 +61,7 @@ export function startStubExecAgent(path: string, guest: StubExecTarget) {
       return;
     }
 
-    const parsed = ExecRequestSchema.parse(decodeJsonPayload(request));
+    const parsed = decodeAgentMessage(RequestSchema, decodeJsonPayload(request));
 
     if (parsed.op !== 'exec') {
       socket.write(
@@ -101,14 +75,14 @@ export function startStubExecAgent(path: string, guest: StubExecTarget) {
 
     const opening = guest.openExec('', {
       argv: parsed.argv,
-      tty: parsed.tty,
-      ...(parsed.env !== undefined && { env: parsed.env }),
+      tty: parsed.tty ?? false,
+      ...(parsed.env.length > 0 && { env: parsed.env }),
       ...(parsed.cwd !== undefined && { cwd: parsed.cwd }),
       ...(parsed.cols !== undefined && { cols: parsed.cols }),
       ...(parsed.rows !== undefined && { rows: parsed.rows }),
       ...(parsed.user !== undefined && { user: parsed.user }),
       ...(parsed.session !== undefined && { session: parsed.session }),
-      ...(parsed.kill_grace_ms !== undefined && { killGraceMs: parsed.kill_grace_ms }),
+      ...(parsed.killGraceMs !== undefined && { killGraceMs: parsed.killGraceMs }),
     });
 
     streams.set(socket, opening);
@@ -119,6 +93,19 @@ export function startStubExecAgent(path: string, guest: StubExecTarget) {
 
     void sendEvents(socket, opening, readKillGraceMs(parsed));
   });
+}
+
+// stdin, its end and signals reach the stream
+async function sendInput(pending: Promise<ExecStream>, frame: AgentFrame): Promise<void> {
+  const stream = await pending;
+
+  if (frame.type === FRAME_TYPES.stdin) {
+    stream.writeStdin(frame.payload);
+  } else if (frame.type === FRAME_TYPES.stdinEof) {
+    stream.closeStdin();
+  } else if (frame.type === FRAME_TYPES.signal) {
+    stream.sendSignal(decodeAgentMessage(SignalSchema, decodeJsonPayload(frame)).signal);
+  }
 }
 
 function encodeEventFrame(event: Readonly<ExecEvent>): Uint8Array {
@@ -143,10 +130,10 @@ async function stopStream(pending: Promise<ExecStream>): Promise<void> {
 
 // the agent's killGrace (agent/internal/exec/group.go): off for a tty exec
 // or none asked, else capped at a minute
-function readKillGraceMs(request: Readonly<{ tty: boolean; kill_grace_ms?: number | undefined }>) {
-  if (request.tty || request.kill_grace_ms === undefined || request.kill_grace_ms <= 0) {
+function readKillGraceMs(request: Readonly<Request>) {
+  if (request.tty === true || request.killGraceMs === undefined || request.killGraceMs <= 0) {
     return 0;
   }
 
-  return Math.min(request.kill_grace_ms, MAX_KILL_GRACE_MS);
+  return Math.min(request.killGraceMs, MAX_KILL_GRACE_MS);
 }

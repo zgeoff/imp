@@ -1,10 +1,9 @@
-import type * as z from 'zod';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
 import type { AgentFeature } from './agent-outdated';
-import type { AgentRequestSchemas } from './agent-protocol';
-import { readFrameWithin, requireNoAgentError } from './agent-requests';
+import { readFrameWithin, requireNoAgentError, sendRequestFrame } from './agent-requests';
+import type { AgentRequest } from './agent-requests';
 import { FRAME_TYPES } from './frame-codec';
 
 // an address inside the guest: "host:port" for tcp, a socket path for unix
@@ -52,14 +51,14 @@ export function openDialStream(
 // agent.accept both use it.
 export async function openRelayStream(
   vsockPath: string,
-  request: Readonly<z.input<typeof AgentRequestSchemas.relay | typeof AgentRequestSchemas.accept>>,
+  request: AgentRequest,
   feature: AgentFeature,
   answerTimeoutMs: number,
 ): Promise<DialStream> {
   const connection = await openAgentConnection(vsockPath);
 
   try {
-    connection.sendJson(FRAME_TYPES.request, request);
+    sendRequestFrame(connection, request);
 
     const answer = await readFrameWithin(connection, answerTimeoutMs);
 
