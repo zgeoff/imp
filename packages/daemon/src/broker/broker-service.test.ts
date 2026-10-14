@@ -800,7 +800,7 @@ test('it lists only the sent requests in the audit, and only the refused ones as
   );
 
   const sent = await ctx.client.audit.list({ name: 'dev' });
-  const refused = await ctx.client.audit.refused({ name: 'dev' });
+  const refused: unknown = await ctx.client.audit.refused({ name: 'dev' });
 
   expect(sent.map((entry) => entry.path)).toStrictEqual(['/sent']);
 
