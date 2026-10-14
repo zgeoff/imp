@@ -52,9 +52,19 @@ export function buildStubUidProcesses() {
       const gate = Promise.withResolvers<void>();
       const reached = Promise.withResolvers<void>();
 
-      holds.set(nth, { gate, reached: () => reached.resolve() });
+      holds.set(nth, {
+        gate,
+        reached: () => {
+          reached.resolve();
+        },
+      });
 
-      return { reached: reached.promise, release: () => gate.resolve() };
+      return {
+        reached: reached.promise,
+        release: () => {
+          gate.resolve();
+        },
+      };
     },
 
     // the chroot at `root`, made by the jail of `uid`
