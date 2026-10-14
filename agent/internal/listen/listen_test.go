@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/fsroot"
@@ -552,7 +553,15 @@ func TestServeClosesTheLoopbackTCPPortWhenTheHostCloses(t *testing.T) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
 	assert.NilError(t, err)
 	t.Cleanup(func() { syscall.Close(fd) })
-	assert.NilError(t, syscall.Bind(fd, &syscall.SockaddrInet4{Port: int(resp.GetPort()), Addr: [4]byte{127, 0, 0, 1}}), "the port is still held")
+	// A helper that a parallel test forks holds a copy of every fd this
+	// process has, the listener's too, from its clone until its exec closes
+	// them, so the port comes free a moment after the close.
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		if err := syscall.Bind(fd, &syscall.SockaddrInet4{Port: int(resp.GetPort()), Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+			return poll.Continue("the port is still held: %v", err)
+		}
+		return poll.Success()
+	}, poll.WithTimeout(5*time.Second), poll.WithDelay(10*time.Millisecond))
 	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", resp.GetPort()))
 	if err == nil {
 		c.Close()
