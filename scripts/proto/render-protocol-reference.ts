@@ -82,7 +82,8 @@ function formatType(field: DescField): string {
     case 'list': {
       return `list of ${field.listKind === 'scalar' ? formatScalar(field.scalar) : formatListMember(field)}`;
     }
-    default: {
+    case 'enum':
+    case 'map': {
       throw new Error(`render-protocol-reference: ${field.name} is a ${field.fieldKind} field`);
     }
   }
@@ -92,9 +93,9 @@ function formatScalar(scalar: ScalarType): string {
   return scalar === ScalarType.BYTES ? 'bytes (base64)' : ScalarType[scalar].toLowerCase();
 }
 
-function formatListMember(field: DescField & { fieldKind: 'list' }): string {
-  if (field.listKind !== 'message') {
-    throw new Error(`render-protocol-reference: ${field.name} is a list of ${field.listKind}`);
+function formatListMember(field: DescField): string {
+  if (field.fieldKind !== 'list' || field.listKind !== 'message') {
+    throw new Error(`render-protocol-reference: ${field.name} is not a list of messages`);
   }
 
   return formatMessageLink(field.message);

@@ -32,9 +32,12 @@ export async function sendServicesList(
   return decodeAgentMessage(ServicesListSchema, response);
 }
 
+// a service definition for services.add, as impd builds one
+type ServiceDefInit = MessageInitShape<typeof ServiceDefSchema>;
+
 export async function sendServicesAdd(
   vsockPath: string,
-  def: MessageInitShape<typeof ServiceDefSchema>,
+  def: ServiceDefInit,
   replace: boolean,
 ): Promise<void> {
   const response = await sendAgentRequest(

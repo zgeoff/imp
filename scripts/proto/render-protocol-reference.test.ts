@@ -10,7 +10,9 @@ import { renderProtocolReference } from './render-protocol-reference';
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'protocol-reference-'));
 
-  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   return { dir };
 }

@@ -12,8 +12,6 @@ import {
 } from '../agent-client/frame-codec';
 import { startStubAgent } from './start-stub-agent';
 
-type StubResumeFrom = Readonly<ResumeFrom>;
-
 // what a start reads of an exec with a session name
 type StubStart = Readonly<{
   tty?: boolean;
@@ -21,7 +19,7 @@ type StubStart = Readonly<{
   cols?: number;
   rows?: number;
   log?: boolean;
-  resume?: StubResumeFrom;
+  resume?: ResumeFrom;
 }>;
 
 interface StubExit {
@@ -167,7 +165,7 @@ export async function startStubSessionAgent(
   // where a connection to the session's run starts: the whole output
   // without a resume, or from the offset a resume names; null for an offset
   // past the end
-  const readPlace = (session: string, resume: StubResumeFrom | undefined) => {
+  const readPlace = (session: string, resume: ResumeFrom | undefined) => {
     const run = runs.get(session);
 
     if (run === undefined) {
@@ -211,7 +209,7 @@ export async function startStubSessionAgent(
   const openViewer = (
     socket: Socket,
     session: string,
-    resume: StubResumeFrom | undefined,
+    resume: ResumeFrom | undefined,
     created: boolean,
   ): void => {
     const run = runs.get(session);
@@ -308,7 +306,7 @@ export async function startStubSessionAgent(
 
   // session.tap: STARTED and the raw output from the resume or the start,
   // then live output; a tap is never the viewer
-  const openTap = (socket: Socket, session: string, resume: StubResumeFrom | undefined): void => {
+  const openTap = (socket: Socket, session: string, resume: ResumeFrom | undefined): void => {
     const run = runs.get(session);
 
     if (run === undefined) {

@@ -87,6 +87,8 @@
               "Previous",
               "Request",
               "Resume",
+              "ResumeFrom",
+              "ServiceDef",
               "ServiceStatus",
               "ServicesList",
               "SessionInfo",
@@ -105,6 +107,16 @@
             "from": "file",
             "name": "SeenSession",
             "path": "packages/daemon/src/sessions/session-cache.ts"
+          },
+          {
+            "from": "file",
+            "name": "ServiceDefInit",
+            "path": "packages/daemon/src/agent-client/service-requests.ts"
+          },
+          {
+            "from": "file",
+            "name": "MockSessionOverrides",
+            "path": "packages/daemon/src/test-utils/build-mock-agent-session.ts"
           },
           // tar-stream's live pack and extract streams, which `imp cp` drives
           { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },
