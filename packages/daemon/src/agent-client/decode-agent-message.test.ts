@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test';
 import { create } from '@bufbuild/protobuf';
-import { ActivitySchema, ListeningSchema, PingSchema, StartedSchema } from './agent-protocol';
+import {
+  ActivitySchema,
+  ListeningSchema,
+  OKSchema,
+  PingSchema,
+  StartedSchema,
+} from './agent-protocol';
 import { decodeAgentMessage } from './decode-agent-message';
 
 test('it decodes a message from the agent’s JSON', () => {
@@ -23,6 +29,16 @@ test('it reads a 64-bit count an agent writes as a string', () => {
 
 test('it throws for a field of the wrong type', () => {
   expect(() => decodeAgentMessage(PingSchema, { ok: 'yes', version: '0.18.0' })).toThrow();
+});
+
+test.each([
+  ['ok false', { ok: false }],
+  ['no ok', {}],
+])('it throws for an answer with %s', (_label, json) => {
+  expect(() => decodeAgentMessage(OKSchema, json)).toThrowWithMessage(
+    Error,
+    'imp.agent.v1.OK: the agent did not acknowledge the op',
+  );
 });
 
 test.each([

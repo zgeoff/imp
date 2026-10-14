@@ -6,7 +6,13 @@ import { create } from '@bufbuild/protobuf';
 import { invariant } from '@imp/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { ErrorDataSchema, PingSchema, SessionInfoSchema } from './agent-protocol';
-import { sendActivity, sendAgentRequest, sendPing, sendSessionKill } from './agent-requests';
+import {
+  sendActivity,
+  sendAgentRequest,
+  sendFreeze,
+  sendPing,
+  sendSessionKill,
+} from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
 
 function setupTest() {
@@ -146,6 +152,32 @@ test('#sendAgentRequest keeps an error’s code when its data is not readable', 
     detail: 'offset 9999 is past the end',
     data: undefined,
   });
+});
+
+test.each([
+  ['ok false', { ok: false }],
+  ['no ok', {}],
+])('#sendFreeze rejects an answer with %s', async (_label, answer) => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.response, answer));
+  });
+
+  expect(sendFreeze(ctx.vsockPath, 1000)).rejects.toThrowWithMessage(
+    Error,
+    'imp.agent.v1.OK: the agent did not acknowledge the op',
+  );
+});
+
+test('#sendFreeze resolves when the agent acknowledges the freeze', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true }));
+  });
+
+  await expect(sendFreeze(ctx.vsockPath, 1000)).toResolve();
 });
 
 test('#sendActivity lists no sessions for an agent from before sessions', async () => {

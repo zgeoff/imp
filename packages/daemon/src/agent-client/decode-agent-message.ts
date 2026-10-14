@@ -9,6 +9,13 @@ export function decodeAgentMessage<Desc extends DescMessage>(
   json: JsonValue,
 ): MessageShape<Desc> {
   const message = fromJson(schema, json, { ignoreUnknownFields: true });
+
+  // an answer with `ok` acknowledges its op only when ok is true; false, or
+  // left out, is no acknowledgement, and a freeze must not pass on one
+  if (schema.field['ok'] !== undefined && Reflect.get(message, 'ok') !== true) {
+    throw new Error(`${schema.typeName}: the agent did not acknowledge the op`);
+  }
+
   const bad = findBadCount(schema, message);
 
   if (bad !== undefined) {
