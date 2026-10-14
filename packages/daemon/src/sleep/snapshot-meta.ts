@@ -133,9 +133,21 @@ export function writeSnapshotMeta(
   paths: Pick<ImpPaths, 'snapshotMeta'>,
   meta: Readonly<SnapshotMeta>,
 ): void {
+  writeFileDurably(paths.snapshotMeta, `${JSON.stringify(encodeSnapshotMeta(meta), null, 2)}\n`);
+}
+
+// the record with its sessions and services in the agent's JSON form
+export type SnapshotMetaJson = Omit<SnapshotMeta, 'sessions' | 'services'> & {
+  readonly sessions?: readonly JsonValue[];
+  readonly services?: JsonValue;
+};
+
+// The record as JSON, as meta.json and a warm move's header carry it: what
+// SnapshotMetaSchema reads back, and what an older impd reads too
+export function encodeSnapshotMeta(meta: Readonly<SnapshotMeta>): SnapshotMetaJson {
   const { sessions, services, ...identity } = meta;
 
-  const json = {
+  return {
     ...identity,
     ...(sessions !== undefined && {
       sessions: sessions.map((session) => encodeSeenSession(session)),
@@ -144,8 +156,6 @@ export function writeSnapshotMeta(
       services: toJson(ServicesListSchema, services, AGENT_RECORD_JSON),
     }),
   };
-
-  writeFileDurably(paths.snapshotMeta, `${JSON.stringify(json, null, 2)}\n`);
 }
 
 function encodeSeenSession(session: SeenSession): JsonValue {

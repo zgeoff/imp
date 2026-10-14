@@ -1,13 +1,17 @@
 // oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { create } from '@bufbuild/protobuf';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
+import * as z from 'zod';
+import { ServicesListSchema } from '../agent-client/agent-protocol';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { JAIL_UIDS, findImpByName, isSlotFree, updateImpDisk } from '../db/imps';
 import { writeMember, writeNetwork } from '../db/networks';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
+import { buildMockAgentSession } from '../test-utils/build-mock-agent-session';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import {
   buildJsonMoveFrame,
@@ -69,6 +73,136 @@ test('it wakes a warm-moved imp from its memory on the target', async () => {
 
   expect(woken.state).toBe('running');
   expect(ctx.target.fake.wakes).toHaveLength(1);
+});
+
+test('it sends the sessions and services of a warm move in the form an older impd reads', async () => {
+  const headers: unknown[] = [];
+
+  const ctx = await setupTest({
+    isShared: true,
+
+    // passes the stream on as sent, and keeps its header's JSON
+    hook: buildStubMoveStreamRewrite((frames) => {
+      const header = frames.find((frame) => frame.type === MOVE_FRAMES.header);
+
+      invariant(header);
+
+      headers.push(readJsonPayload(header.payload));
+
+      return frames;
+    }),
+  });
+
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const paths = ctx.source.storage.resolveImpPaths(created.id);
+  const meta = readSnapshotMeta(paths);
+
+  invariant(meta);
+
+  writeSnapshotMeta(paths, {
+    ...meta,
+    sessions: [
+      {
+        ...buildMockAgentSession({
+          name: 'nightly-sync',
+          pid: 412,
+          argv: ['rsync', '-a', 'src/', 'dst/'],
+          state: 'running',
+          attached: false,
+          cols: 120,
+          rows: 40,
+          startedUnixMs: 1_760_000_000_000,
+        }),
+        observedUnixMs: 1_760_000_090_000,
+      },
+    ],
+    services: create(ServicesListSchema, {
+      services: [{ name: 'web', state: 'running', pid: 77, restarts: 2 }],
+      imageUser: 'app',
+    }),
+  });
+
+  await ctx.runMove('dev');
+
+  // the sessions and services as the impd before the protobuf agent
+  // protocol parsed them, which drops the fields it does not name
+  const OlderSessionSchema = z.object({
+    name: z.string(),
+    pid: z.int(),
+    argv: z.array(z.string()),
+    state: z.enum(['running', 'exited']),
+    attached: z.boolean(),
+    cols: z.int(),
+    rows: z.int(),
+    started_unix_ms: z.int(),
+    observed_unix_ms: z.int().optional(),
+  });
+
+  const OlderServiceSchema = z.object({
+    name: z.string(),
+    state: z.enum(['starting', 'running', 'backoff', 'stopped', 'exited']),
+    pid: z.int().optional(),
+    restarts: z.int().nonnegative(),
+  });
+
+  const OlderMetaSchema = z.object({
+    sessions: z.array(OlderSessionSchema),
+    services: z.object({
+      services: z.array(OlderServiceSchema),
+      image_user: z.string().optional(),
+    }),
+  });
+
+  const older = z.object({ warm: z.object({ meta: OlderMetaSchema }) }).parse(headers[0]);
+
+  expect(headers).toHaveLength(1);
+
+  expect(older.warm.meta.sessions).toStrictEqual([
+    {
+      name: 'nightly-sync',
+      pid: 412,
+      argv: ['rsync', '-a', 'src/', 'dst/'],
+      state: 'running',
+      attached: false,
+      cols: 120,
+      rows: 40,
+      started_unix_ms: 1_760_000_000_000,
+      observed_unix_ms: 1_760_000_090_000,
+    },
+  ]);
+
+  expect(older.warm.meta.services).toStrictEqual({
+    services: [{ name: 'web', state: 'running', pid: 77, restarts: 2 }],
+    image_user: 'app',
+  });
+});
+
+test("it keeps each session's observed time through a warm move", async () => {
+  const ctx = await setupTest({ isShared: true });
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  await ctx.sourceApp.client.imps.sleep({ name: 'dev' });
+
+  const paths = ctx.source.storage.resolveImpPaths(created.id);
+  const meta = readSnapshotMeta(paths);
+
+  invariant(meta);
+
+  const sessions = [
+    { ...buildMockAgentSession(), observedUnixMs: 1_760_000_090_000 },
+    { ...buildMockAgentSession(), observedUnixMs: 1_760_000_095_000 },
+  ];
+
+  writeSnapshotMeta(paths, { ...meta, sessions });
+
+  await ctx.runMove('dev');
+
+  const moved = readSnapshotMeta(ctx.target.storage.resolveImpPaths(created.id));
+
+  expect(moved?.sessions).toStrictEqual(sessions);
 });
 
 test('it moves an elastic imp warm with its max memory', async () => {
