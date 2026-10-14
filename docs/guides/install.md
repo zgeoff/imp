@@ -112,7 +112,7 @@ to the server and run it as root. Take it from a release tag: it runs the image 
 <!-- x-release-please-start-version -->
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/zgeoff/imp/v1.4.3/deploy/bootstrap.sh
+curl -fsSLO https://raw.githubusercontent.com/zgeoff/imp/v1.4.4/deploy/bootstrap.sh
 install -m 0600 /dev/null /root/ts-key && vi /root/ts-key        # the auth key, one line
 bash bootstrap.sh --dry-run --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
 bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
@@ -418,7 +418,7 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:<version> -R zgeoff/imp
 <!-- x-release-please-start-version -->
 
 ```sh
-docker pull ghcr.io/zgeoff/imp-host:1.4.3
+docker pull ghcr.io/zgeoff/imp-host:1.4.4
 gh release download -R zgeoff/imp -p 'imp-linux-x64' -p SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 imp-linux-x64 ~/.local/bin/imp
 ```
