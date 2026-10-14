@@ -74,11 +74,11 @@ func (s *Store) Write(p string, data []byte) error {
 		return err
 	}
 	if err := writeStaged(root, staged, data); err != nil {
-		root.Remove(staged)
+		_ = root.Remove(staged)
 		return mapErr(err)
 	}
 	if err := root.Rename(staged, p); err != nil {
-		root.Remove(staged)
+		_ = root.Remove(staged)
 		return mapErr(err)
 	}
 	return nil
