@@ -125,6 +125,29 @@ test('#sendAgentRequest drops the fields of an error’s data it does not know',
   });
 });
 
+test('#sendAgentRequest keeps an error’s code when its data is not readable', async () => {
+  const ctx = setupTest();
+
+  await startStubAgent(ctx.vsockPath, (socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: {
+          code: 'INVALID_RESUME',
+          message: 'offset 9999 is past the end',
+          data: { end: -1, buffer_start: 512 },
+        },
+      }),
+    );
+  });
+
+  expect(sendAgentRequest(ctx.vsockPath, { op: 'ping' })).rejects.toMatchObject({
+    name: 'AgentError',
+    code: 'INVALID_RESUME',
+    detail: 'offset 9999 is past the end',
+    data: undefined,
+  });
+});
+
 test('#sendActivity lists no sessions for an agent from before sessions', async () => {
   const ctx = setupTest();
 

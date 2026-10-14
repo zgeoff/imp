@@ -1,10 +1,10 @@
-import type { JsonValue, MessageInitShape } from '@bufbuild/protobuf';
+import type { JsonObject, JsonValue, MessageInitShape } from '@bufbuild/protobuf';
 import { requireWithin } from '../process/require-within';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
 import { ErrorResponseSchema, OKSchema, PingSchema, RequestSchema } from './agent-protocol';
-import type { Activity, Ping } from './agent-protocol';
+import type { Activity, ErrorResponse, Ping } from './agent-protocol';
 import { decodeAgentMessage } from './decode-agent-message';
 import { encodeAgentMessage } from './encode-agent-message';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
@@ -28,15 +28,32 @@ export function requireNoAgentError(frame: AgentFrame): void {
 
   const payload = decodeJsonPayload(frame);
 
-  if (typeof payload !== 'object' || payload === null || !('error' in payload)) {
+  if (!isJsonObject(payload) || !('error' in payload)) {
     return;
   }
 
-  const error = decodeAgentMessage(ErrorResponseSchema, payload).error;
+  const error = decodeErrorResponse(payload).error;
 
   if (error !== undefined) {
     throw new AgentError(error.code, error.message, error.data);
   }
+}
+
+// An error whose data impd cannot read keeps its code and message without
+// the data, so the caller still sees the agent's error.
+function decodeErrorResponse(payload: JsonObject): ErrorResponse {
+  try {
+    return decodeAgentMessage(ErrorResponseSchema, payload);
+  } catch {
+    const error = payload['error'];
+    const bare = isJsonObject(error) ? { ...error, data: null } : error;
+
+    return decodeAgentMessage(ErrorResponseSchema, { ...payload, error: bare ?? null });
+  }
+}
+
+function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // sends the REQUEST frame that opens every connection

@@ -69,6 +69,7 @@
               "DescMessage",
               "DescFile",
               "DescField",
+              "JsonObject",
               "JsonValue",
               "Message",
               "MessageInit",
