@@ -20,6 +20,7 @@ import type { ExecSocket } from './exec/open-exec-session';
 import { requireAwake } from './require-awake';
 import type { RequireAwakeOptions } from './require-awake';
 import { resolveImpdUrl } from './resolve-impd-url';
+import { UnknownProcedureError } from './unknown-procedure-error';
 
 type RpcClient = ContractRouterClient<ImpContract>;
 
@@ -83,7 +84,18 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
   const link = new RPCLink({
     url: resolveImpdUrl(options.url, '/rpc').href,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
-    ...(customFetch !== undefined && { fetch: (request: Request) => customFetch(request) }),
+    fetch: async (request, init, _options, path) => {
+      const response =
+        customFetch === undefined ? await fetch(request, init) : await customFetch(request);
+
+      if (isUnknownProcedure(response)) {
+        await response.body?.cancel();
+
+        throw new UnknownProcedureError(path.join('.'));
+      }
+
+      return response;
+    },
   });
 
   const rpc: RpcClient = createORPCClient(link);
@@ -130,4 +142,13 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
     checkServer: () => checkServer(rpc),
     buildImage: (name, context, buildOptions) => buildImage(execDeps, name, context, buildOptions),
   };
+}
+
+// oRPC answers every error, a missing imp's NOT_FOUND among them, as JSON;
+// impd's own 404 for a path no procedure matches is plain text
+function isUnknownProcedure(response: Readonly<Response>): boolean {
+  return (
+    response.status === 404 &&
+    !(response.headers.get('content-type') ?? '').startsWith('application/json')
+  );
 }

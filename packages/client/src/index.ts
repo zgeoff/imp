@@ -35,6 +35,7 @@ export type { ImpClient, ImpClientOptions } from './create-imp-client';
 export type { BuildContext, BuildImageOptions } from './build-image';
 export type { RequireAwakeOptions } from './require-awake';
 export { openExecSession } from './exec/open-exec-session';
+export { UnknownProcedureError } from './unknown-procedure-error';
 
 export type {
   ExecOutcome,

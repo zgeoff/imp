@@ -1,5 +1,5 @@
 import type { ImpEvent } from '@imp/api';
-import { ORPCError } from '@zgeoff/imp-client';
+import { ORPCError, UnknownProcedureError } from '@zgeoff/imp-client';
 import type { ServerCheck } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
 import { runAction } from '../run-action';
@@ -75,12 +75,9 @@ async function readStream(
 
     return 'impd closed it';
   } catch (error) {
-    if (!(error instanceof ORPCError) || error.status < 400 || error.status >= 500) {
-      return error instanceof Error ? error.message : String(error);
-    }
-
-    // an impd from before the stream answers NOT_FOUND; say which to upgrade
-    if (error.status === 404) {
+    // an impd from before the stream has no such procedure; say which to
+    // upgrade
+    if (isMissingStream(error)) {
       const check = await source.checkServer();
 
       throw new Error(
@@ -89,8 +86,20 @@ async function readStream(
       );
     }
 
+    if (!(error instanceof ORPCError) || error.status < 400 || error.status >= 500) {
+      return error instanceof Error ? error.message : String(error);
+    }
+
     throw error;
   }
+}
+
+// impd's own plain-text 404 for a path no procedure matches, or the
+// NOT_FOUND an oRPC router sends for one
+function isMissingStream(error: unknown): boolean {
+  return (
+    error instanceof UnknownProcedureError || (error instanceof ORPCError && error.status === 404)
+  );
 }
 
 function readImpName(event: Readonly<ImpEvent>): string {

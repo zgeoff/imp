@@ -18,8 +18,9 @@ import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-c
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@imp/test-utils/invariant';
-import { ORPCError, createImpClient } from '@zgeoff/imp-client';
+import { CLIENT_VERSION, ORPCError, createImpClient } from '@zgeoff/imp-client';
 import { buildStubBackoffClock } from '../test-utils/build-stub-backoff-clock';
+import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { printEvents } from './events';
 
 // impd's real app, listening on a loopback port for the spawned CLI, and an
@@ -388,9 +389,45 @@ test('it rethrows impd’s refusal of a token it does not know, without retrying
   expect(wait).not.toHaveBeenCalled();
 });
 
-// impd answers a procedure it does not have with a plain-text 404 that the
-// client cannot parse, so no real impd, older or current, reaches this
-// branch; its input here is the NOT_FOUND an oRPC router sends
+test('it says to upgrade an impd that has no stream procedure, without retrying', async () => {
+  const ctx = await setupTest();
+
+  // impd answers the procedure an older release lacked with its own
+  // plain-text not-found
+  const older = createImpClient({
+    url: 'http://impd.test',
+    token: ctx.rootToken,
+    fetch: buildStubOlderImpdFetch(ctx.sendRequest, { withoutProcedures: ['events/stream'] }).fetch,
+  });
+
+  const info = await ctx.client.system.info();
+
+  const wait = mock<(ms: number) => Promise<void>>(() => Promise.resolve());
+  const warn = mock<(line: string) => void>();
+
+  const printing = printEvents(
+    {
+      openStream: () => older.events.stream(),
+      checkServer: () => older.checkServer(),
+      now: Date.now,
+      wait,
+      warn,
+    },
+    null,
+    () => {},
+  );
+
+  expect(printing).rejects.toThrowWithMessage(
+    Error,
+    `impd ${info.version} has no event stream; upgrade it to ${CLIENT_VERSION}`,
+  );
+
+  expect(wait).not.toHaveBeenCalled();
+  expect(warn).not.toHaveBeenCalled();
+});
+
+// no impd sends this, as the test above shows; its input is the NOT_FOUND an
+// oRPC router sends for a procedure it does not have
 test('it says to upgrade an impd that answers NOT_FOUND for the stream', () => {
   const printing = printEvents(
     {
