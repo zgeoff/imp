@@ -105,7 +105,12 @@ func (s *Store) Remove(p string) (bool, error) {
 	if !fi.Mode().IsRegular() {
 		return false, badRequest("%s is not a regular file", p)
 	}
-	if err := root.Remove("/" + p); err != nil {
+	// a remove beside this one may take the file first
+	err = root.Remove("/" + p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
 	return true, nil
