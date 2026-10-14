@@ -111,6 +111,10 @@ const SystemFeaturesSchema = z.object({
   // grants.add takes `filter` and grants.details lists it; an older impd
   // drops the filter unread and would grant the whole host
   grantFilters: z.boolean().optional(),
+
+  // files.write and files.remove, the read-only files in the guest
+  // (docs/architecture/guest/agent.md#read-only-files)
+  readOnlyFiles: z.boolean().optional(),
 });
 
 export const SystemInfoSchema = z.object({

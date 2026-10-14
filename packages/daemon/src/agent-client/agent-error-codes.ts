@@ -16,6 +16,9 @@ export const AGENT_ERROR_CODES = [
   'NO_CONNECTION',
   'NO_SERVICE',
   'NO_SESSION',
+
+  // the read-only files have no room for a write
+  'NO_SPACE',
   'POWERING_OFF',
   'SERVICE_EXISTS',
   'SESSION_LIMIT',

@@ -12,6 +12,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/zgeoff/imp/agent/internal/exec"
+	"github.com/zgeoff/imp/agent/internal/files"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/services"
 	"github.com/zgeoff/imp/agent/internal/session"
@@ -73,7 +74,8 @@ func guestMessages() map[string]any {
 		"services-list": &proto.ServicesList{ImageUser: "dev", Services: []*proto.ServiceStatus{{
 			Name: "web", State: "backoff", Pid: new(int32(901)), Restarts: 2, LastExit: &proto.Exit{Code: 1},
 			Def: def, Root: new(true)}}},
-		"cursor": &proto.LogCursor{Inode: 131074, Offset: 65536},
+		"cursor":        &proto.LogCursor{Inode: 131074, Offset: 65536},
+		"files-removed": &proto.FilesRemoved{Removed: true},
 	}
 }
 
@@ -90,6 +92,8 @@ func guestFixtures(t *testing.T) map[string]any {
 		"max_log_lines":        services.MaxLogLines,
 		"session_name_pattern": session.NamePattern.String(),
 		"service_name_pattern": services.NameRule.String(),
+		"max_file_data":        files.MaxData,
+		"file_segment_pattern": files.SegmentRule.String(),
 	}
 	fixtures["tar"] = map[string]any{"total_record": tartool.TotalRecord}
 	return fixtures

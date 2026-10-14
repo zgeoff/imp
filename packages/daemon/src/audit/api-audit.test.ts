@@ -26,6 +26,7 @@ async function setupTest() {
 test.each([
   ['imps.stop', { name: 'dev' }, {}, 'dev'],
   ['checkpoints.create', { name: 'dev', label: 'before' }, {}, 'dev'],
+  ['files.write', { name: 'dev', path: 'notes/today.json', content: '{}' }, {}, 'dev'],
   ['imps.create', {}, { name: 'fresh' }, 'fresh'],
   ['images.add', { name: 'snap', imp: 'dev' }, {}, 'dev'],
   ['images.addStream', { name: 'snap', imp: 'dev' }, {}, 'dev'],

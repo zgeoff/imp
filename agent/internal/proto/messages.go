@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.18.0"
+const Version = "0.19.0"
 
 // Op names.
 const (
@@ -50,6 +50,12 @@ const (
 	// claim gives a guest restored from a boot template its own identity;
 	// only an agent parked in a boot template answers it
 	OpClaim = "claim"
+
+	// files: write replaces a file in the read-only files tree, which the
+	// inner container sees read-only, and remove deletes one; an older
+	// agent answers UNKNOWN_OP
+	OpFilesWrite  = "files.write"
+	OpFilesRemove = "files.remove"
 )
 
 // The message types are generated from proto/imp/agent/v1/agent.proto into
@@ -75,6 +81,8 @@ const (
 	ErrListenFailed  = "LISTEN_FAILED"
 	ErrNoService     = "NO_SERVICE"
 	ErrServiceTaken  = "SERVICE_EXISTS"
+	// the read-only files tree has no room for a write
+	ErrNoSpace = "NO_SPACE"
 )
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }

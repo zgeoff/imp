@@ -63,6 +63,7 @@ test('it builds a default system info', () => {
       backupOptOut: true,
       brokerRefusals: true,
       grantFilters: true,
+      readOnlyFiles: true,
     },
   });
 
@@ -133,6 +134,7 @@ test('it applies overrides on top of the defaults', () => {
       backupOptOut: true,
       brokerRefusals: true,
       grantFilters: true,
+      readOnlyFiles: true,
     },
   });
 });

@@ -696,6 +696,14 @@ export function buildRouter(deps: RouterDeps) {
         }),
       ),
     },
+    files: {
+      write: os.files.write.handler((context) =>
+        deps.imps.writeFile(context.input.name, context.input.path, context.input.content),
+      ),
+      remove: os.files.remove.handler((context) =>
+        deps.imps.removeFile(context.input.name, context.input.path),
+      ),
+    },
     secrets: {
       add: os.secrets.add.handler((context) => deps.broker.addSecret(context.input)),
 

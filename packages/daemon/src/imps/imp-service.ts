@@ -3,6 +3,8 @@ import type { ImpRecord } from '../db/imps';
 import { createEventBus } from '../events/event-bus';
 import type { EventBus } from '../events/event-bus';
 import { startImpEventPublisher } from '../events/imp-event-publisher';
+import { createFileApi } from '../files/file-api';
+import type { FileApi } from '../files/file-api';
 import { createServiceApi } from '../services/service-api';
 import type { ServiceApi } from '../services/service-api';
 import { countSessions } from '../sessions/count-sessions';
@@ -36,6 +38,7 @@ export type ImpService = ImpCommands &
   ImpLeases &
   SessionService &
   ServiceApi &
+  FileApi &
   Pick<
     ImpRuntime,
     | 'openExec'
@@ -138,6 +141,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
       events,
       readSleptServices: (imp) => readSnapshotMeta(context.findPaths(imp.id))?.services,
     }),
+    ...createFileApi({ runtime }),
     countSessions: (imp) => countSessions(context, imp),
     readBootStatus: (imp) => readBootStatus(imp, context.findPaths(imp.id), context.identity),
     isUnmergeable: (id) => context.mergeFlags.isLost(id),

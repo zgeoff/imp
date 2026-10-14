@@ -11,6 +11,7 @@ const IMP_NAMESPACES: ReadonlySet<string> = new Set([
   'backups',
   'sessions',
   'grants',
+  'files',
 ]);
 
 export interface AuditedCall {

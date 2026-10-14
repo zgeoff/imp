@@ -14,6 +14,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
+	"github.com/zgeoff/imp/agent/internal/files"
 	"github.com/zgeoff/imp/agent/internal/listen"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
@@ -36,6 +37,8 @@ type Server struct {
 	Services *services.Supervisor
 	Listen   *listen.Manager
 	Dial     *dial.Dialer
+	// Files holds the read-only files the inner container sees
+	Files *files.Store
 	// Shutdown powers the guest off. It runs after the reply is sent.
 	Shutdown func()
 	// IdentityReset is what this boot's identity reset reported, or "".
@@ -234,6 +237,11 @@ func (s *Server) unary(req *proto.Request) (protoreflect.ProtoMessage, error) {
 		return &proto.OK{Ok: true}, s.Services.Restart(req.GetService())
 	case proto.OpSessionKill:
 		return &proto.OK{Ok: true}, s.Sessions.Kill(req.GetSession())
+	case proto.OpFilesWrite:
+		return &proto.OK{Ok: true}, s.Files.Write(req.GetPath(), req.GetData())
+	case proto.OpFilesRemove:
+		removed, err := s.Files.Remove(req.GetPath())
+		return &proto.FilesRemoved{Removed: removed}, err
 	case proto.OpShutdown:
 		return &proto.OK{Ok: true}, nil
 	default:

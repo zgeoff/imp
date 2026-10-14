@@ -67,6 +67,34 @@ The container is not a security boundary. Root inside holds every capability in 
 namespace: it can open its own disk device, change sysctls and mount what it likes. The guest is the
 user's own, and the VM is the boundary ([isolation](../isolation.md)).
 
+## Read-only files
+
+impd can place a file in the guest that no process inside can change, root included. The agent keeps
+these files in a small tmpfs of its own, outside the inner container, and the inner init binds that
+tmpfs read-only at `/run/imp/files` on each container start. Root inside holds every capability, so
+the bind is what refuses the write: a write, a remove, a chmod or a new file under it fails with
+`EROFS`, where a file of mode 0444 on the user's disk would only ask root to leave it alone. A
+caller such as atc uses one to hand a session a record it can read and not forge.
+
+impd writes and removes a file through the agent's `files.write` and `files.remove` ops, which the
+API's `files` calls reach, with the same scope as an exec. The agent writes the new content to a
+staged file beside the old one and renames it into place, so a reader inside sees the old file or
+the new, never part of either. It checks each path against one rule, which impd checks before the
+call as well: a few plain segments with no `..` and no leading dot, so no path names a staged file
+or leaves the tree. A full tmpfs refuses the write with `NO_SPACE` and leaves the old file as it
+was.
+
+The files live in guest memory. A sleep keeps them in the snapshot, and a container restart binds
+the same tmpfs again, so both find them in place. A cold boot ends them, and no checkpoint, fork,
+template or backup carries them, since none of those copies memory. A caller that needs a file after
+a boot writes it again before it starts what reads it.
+
+The bind refuses writes; it is no boundary. Root in the container may unmount it with the
+`CAP_SYS_ADMIN` it holds, and then sees the container's own `/run` at that path, where it can put a
+file of its own. The agent's copy stays as impd wrote it, and impd's next write still lands there. A
+reader that must hold against a process willing to remount reads the value from its source over the
+API instead.
+
 ## Execs and services
 
 An exec starts a process in the container with the image's default environment, on pipes or a pty.

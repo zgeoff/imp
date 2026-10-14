@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/files"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 )
@@ -24,6 +25,9 @@ const (
 	// SysMount is where the system drive shows inside, read-only: images and
 	// impd run /run/imp/sys/imp-agent sftp and the like.
 	SysMount = "/run/imp/sys"
+	// FilesMount is where the read-only files show inside: impd writes them
+	// through the agent, and every write from inside fails with EROFS.
+	FilesMount = "/run/imp/files"
 	// AgentBinary is the agent on the system drive.
 	AgentBinary = "/imp-agent"
 )
@@ -150,10 +154,25 @@ func setupRoot(runSize string) (*os.File, error) {
 	if err := unix.Mount("", n+SysMount, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
 		return nil, fmt.Errorf("remount the system drive read-only: %w", err)
 	}
+	if err := bindReadOnly(files.Dir, n+FilesMount); err != nil {
+		return nil, fmt.Errorf("bind the read-only files: %w", err)
+	}
 	if err := pivot(n); err != nil {
 		return nil, err
 	}
 	return agent, nil
+}
+
+// bindReadOnly binds src at target, then makes the bind read-only, which a
+// bind takes only as a remount.
+func bindReadOnly(src, target string) error {
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	if err := unix.Mount(src, target, "", unix.MS_BIND, ""); err != nil {
+		return err
+	}
+	return unix.Mount("", target, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "")
 }
 
 // pivot makes dir the root and drops the old one, so nothing of the agent's

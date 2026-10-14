@@ -142,6 +142,13 @@ export type {
 } from './schemas/secret-schema';
 
 export {
+  FILE_DATA_MAX_BYTES,
+  FILE_SEGMENT_PATTERN,
+  FILES_GUEST_DIR,
+  FilePathSchema,
+} from './schemas/file-schema';
+
+export {
   SERVICE_LOG_MAX_LINES,
   SERVICE_NAME_PATTERN,
   ServiceRestartSchema,

@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import { fromJson, toJson } from '@bufbuild/protobuf';
 import {
+  FILE_DATA_MAX_BYTES,
+  FILE_SEGMENT_PATTERN,
   KILL_GRACE_MAX_MS,
   SERVICE_LOG_MAX_LINES,
   SERVICE_NAME_PATTERN,
@@ -18,6 +20,7 @@ import {
   DetachedSchema,
   ErrorResponseSchema,
   ExitSchema,
+  FilesRemovedSchema,
   ListeningSchema,
   LogCursorSchema,
   OKSchema,
@@ -52,6 +55,7 @@ test.each([
   ['detached', DetachedSchema],
   ['services-list', ServicesListSchema],
   ['cursor', LogCursorSchema],
+  ['files-removed', FilesRemovedSchema],
 ] as const)('it decodes the agent’s %s message whole and writes it back alike', (name, schema) => {
   const fixture = readAgentFixture(`guest/${name}.json`);
   const decoded = fromJson(schema, fixture);
@@ -72,6 +76,7 @@ test('it reads every fixture the agent writes', () => {
     'error-invalid-resume',
     'error-no-session',
     'exit',
+    'files-removed',
     'frame-types',
     'limits',
     'listening-port',
@@ -99,6 +104,7 @@ test.each([
   ['detached', DetachedSchema, ['detached']],
   ['the services list', ServicesListSchema, ['services-list']],
   ['a log cursor', LogCursorSchema, ['cursor']],
+  ['a files remove', FilesRemovedSchema, ['files-removed']],
 ] as const)('it finds each field of %s in a message the agent sends', (_label, schema, names) => {
   const sent = names.flatMap((name) => collectJsonKeyPaths(readAgentFixture(`guest/${name}.json`)));
 
@@ -135,6 +141,8 @@ test('it holds the limits the agent holds', () => {
     max_log_lines: SERVICE_LOG_MAX_LINES,
     session_name_pattern: SESSION_NAME_PATTERN.source,
     service_name_pattern: SERVICE_NAME_PATTERN.source,
+    max_file_data: FILE_DATA_MAX_BYTES,
+    file_segment_pattern: FILE_SEGMENT_PATTERN.source,
   });
 });
 
