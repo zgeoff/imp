@@ -314,7 +314,6 @@ test('it records an audit row for a forwarded request', async () => {
       requestBytes: 0,
       responseBytes: 'from upstream'.length,
       durationMs: expect.toBeNumber() as unknown,
-      reason: null,
     },
   ]);
 });
@@ -476,7 +475,7 @@ test('it audits a tunnel the egress policy refuses, with the imp, the host and t
   await guest.reply;
 
   const audit: unknown = await waitFor(async () => {
-    const entries = await ctx.client.audit.list({ name: 'dev' });
+    const entries = await ctx.client.audit.refused({ name: 'dev' });
 
     expect(entries).toHaveLength(1);
 
@@ -487,13 +486,10 @@ test('it audits a tunnel the egress policy refuses, with the imp, the host and t
     {
       at: expect.toBeValidDate() as unknown,
       imp: 'dev',
-      secret: null,
       method: 'CONNECT',
       host: 'plain.test',
       path: null,
       status: 403,
-      requestBytes: 0,
-      responseBytes: 0,
       durationMs: expect.toBeNumber() as unknown,
       reason: 'egress-policy',
     },

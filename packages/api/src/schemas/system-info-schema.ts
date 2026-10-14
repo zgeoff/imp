@@ -104,6 +104,9 @@ const SystemFeaturesSchema = z.object({
   // imps.create takes `backup`; an older impd drops it unread and would
   // back the imp up
   backupOptOut: z.boolean().optional(),
+
+  // audit.refused, the requests the broker refused
+  brokerRefusals: z.boolean().optional(),
 });
 
 export const SystemInfoSchema = z.object({

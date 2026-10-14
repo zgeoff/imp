@@ -4,6 +4,7 @@ import {
   BrokerHostSchema,
   BrokerRuleSchema,
   OAuthConfigSchema,
+  RefusedRequestSchema,
   SecretAddedSchema,
   SecretKindSchema,
   SecretNameSchema,
@@ -434,70 +435,11 @@ test('#AuditEntrySchema accepts a request the broker sent', () => {
     requestBytes: 0,
     responseBytes: 1024,
     durationMs: 120,
-    reason: null,
   } as const;
 
   const result = AuditEntrySchema.safeParse(payload);
 
   expect(result.data).toStrictEqual(payload);
-});
-
-test('#AuditEntrySchema accepts a tunnel the broker refused, to an IP address', () => {
-  const payload = {
-    at: new Date('2026-01-02T03:04:05.000Z'),
-    imp: 'dev',
-    secret: null,
-    method: 'CONNECT',
-    host: '10.0.0.1',
-    path: null,
-    status: 403,
-    requestBytes: 0,
-    responseBytes: 0,
-    durationMs: 3,
-    reason: 'address-refused',
-  } as const;
-
-  const result = AuditEntrySchema.safeParse(payload);
-
-  expect(result.data).toStrictEqual(payload);
-});
-
-test('#AuditEntrySchema accepts a refused head that named no method or host', () => {
-  const payload = {
-    at: new Date('2026-01-02T03:04:05.000Z'),
-    imp: 'dev',
-    secret: null,
-    method: null,
-    host: null,
-    path: null,
-    status: 400,
-    requestBytes: 0,
-    responseBytes: 0,
-    durationMs: 1,
-    reason: 'not-http',
-  } as const;
-
-  const result = AuditEntrySchema.safeParse(payload);
-
-  expect(result.data).toStrictEqual(payload);
-});
-
-test('#AuditEntrySchema rejects a reason it does not know', () => {
-  const result = AuditEntrySchema.safeParse({
-    at: new Date('2026-01-02T03:04:05.000Z'),
-    imp: 'dev',
-    secret: null,
-    method: 'CONNECT',
-    host: 'example.com',
-    path: null,
-    status: 403,
-    requestBytes: 0,
-    responseBytes: 0,
-    durationMs: 3,
-    reason: 'because',
-  });
-
-  expect(result.error?.issues).toPartiallyContain({ path: ['reason'], code: 'invalid_value' });
 });
 
 test('#AuditEntrySchema rejects an imp name that is not a name', () => {
@@ -512,7 +454,6 @@ test('#AuditEntrySchema rejects an imp name that is not a name', () => {
     requestBytes: 0,
     responseBytes: 1024,
     durationMs: 120,
-    reason: null,
   });
 
   expect(result.error?.issues).toPartiallyContain({ path: ['imp'], code: 'invalid_format' });
@@ -530,28 +471,26 @@ test('#AuditEntrySchema rejects a secret name that is not a secret name', () => 
     requestBytes: 0,
     responseBytes: 1024,
     durationMs: 120,
-    reason: null,
   });
 
   expect(result.error?.issues).toPartiallyContain({ path: ['secret'], code: 'invalid_format' });
 });
 
-test('#AuditEntrySchema rejects a host longer than 253 characters', () => {
+test('#AuditEntrySchema rejects a host that is not a hostname', () => {
   const result = AuditEntrySchema.safeParse({
     at: new Date('2026-01-02T03:04:05.000Z'),
     imp: 'dev',
     secret: 'github-token',
     method: 'GET',
-    host: 'a'.repeat(254),
+    host: '10.0.0.1',
     path: '/user',
     status: 200,
     requestBytes: 0,
     responseBytes: 1024,
     durationMs: 120,
-    reason: null,
   });
 
-  expect(result.error?.issues).toPartiallyContain({ path: ['host'], code: 'too_big' });
+  expect(result.error?.issues).toPartiallyContain({ path: ['host'], code: 'invalid_format' });
 });
 
 test('#AuditEntrySchema rejects a fractional status', () => {
@@ -566,7 +505,6 @@ test('#AuditEntrySchema rejects a fractional status', () => {
     requestBytes: 0,
     responseBytes: 1024,
     durationMs: 120,
-    reason: null,
   });
 
   expect(result.error?.issues).toPartiallyContain({ path: ['status'], code: 'invalid_type' });
@@ -586,10 +524,73 @@ test.each(['requestBytes', 'responseBytes', 'durationMs'])(
       requestBytes: 0,
       responseBytes: 1024,
       durationMs: 120,
-      reason: null,
       [field]: -1,
     });
 
     expect(result.error?.issues).toPartiallyContain({ path: [field], code: 'too_small' });
   },
 );
+
+test('#RefusedRequestSchema accepts a tunnel the broker refused, to an IP address', () => {
+  const payload = {
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: 'CONNECT',
+    host: '10.0.0.1',
+    path: null,
+    status: 403,
+    durationMs: 3,
+    reason: 'address-refused',
+  } as const;
+
+  const result = RefusedRequestSchema.safeParse(payload);
+
+  expect(result.data).toStrictEqual(payload);
+});
+
+test('#RefusedRequestSchema accepts a refused head that named no method or host', () => {
+  const payload = {
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: null,
+    host: null,
+    path: null,
+    status: 400,
+    durationMs: 1,
+    reason: 'not-http',
+  } as const;
+
+  const result = RefusedRequestSchema.safeParse(payload);
+
+  expect(result.data).toStrictEqual(payload);
+});
+
+test('#RefusedRequestSchema rejects a reason it does not know', () => {
+  const result = RefusedRequestSchema.safeParse({
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: 'CONNECT',
+    host: 'example.com',
+    path: null,
+    status: 403,
+    durationMs: 3,
+    reason: 'because',
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['reason'], code: 'invalid_value' });
+});
+
+test('#RefusedRequestSchema rejects a host longer than 253 characters', () => {
+  const result = RefusedRequestSchema.safeParse({
+    at: new Date('2026-01-02T03:04:05.000Z'),
+    imp: 'dev',
+    method: 'CONNECT',
+    host: 'a'.repeat(254),
+    path: null,
+    status: 403,
+    durationMs: 3,
+    reason: 'egress-policy',
+  });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['host'], code: 'too_big' });
+});

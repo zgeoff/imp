@@ -240,6 +240,7 @@ test('it serves system.info from config and the database', async () => {
       oauthSecrets: true,
       secretUpstream: true,
       backupOptOut: true,
+      brokerRefusals: true,
     },
     ksm: null,
   });

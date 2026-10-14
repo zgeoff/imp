@@ -28,13 +28,11 @@ export function buildSlotGateway(slot: number): string {
 
 const BrokerAuditSchema = z.array(
   z.object({
-    // null, as the secret is, on a request the broker refused
-    host: z.string().nullable(),
-    path: z.string().nullable(),
+    host: z.string(),
+    path: z.string(),
     status: z.number(),
-    secret: z.string().nullable(),
+    secret: z.string(),
     requestBytes: z.number(),
-    reason: z.string().nullable(),
   }),
 );
 
@@ -53,7 +51,7 @@ export async function removeBrokerUpstreams(): Promise<void> {
   await rm(readUpstreamsPath(), { force: true });
 }
 
-// the broker's requests for the imp, sent and refused, as `imp audit` lists them
+// the broker's requests for the imp, as `imp audit` lists them
 export async function readBrokerAudit(name: string) {
   const stdout = await runImp('audit', name, '--json');
 

@@ -13,6 +13,7 @@ import type {
   OAuthClient,
   OAuthGrant,
   OrphanStorage,
+  RefusedRequest,
   Secret,
   Service,
   Session,
@@ -593,20 +594,33 @@ function formatGrantable(
 
 export function formatAudit(entries: readonly AuditEntry[]): string {
   return formatTable(
-    ['TIME', 'IMP', 'SECRET', 'METHOD', 'HOST', 'PATH', 'STATUS', 'BYTES', 'MS', 'REFUSED'],
+    ['TIME', 'IMP', 'SECRET', 'METHOD', 'HOST', 'PATH', 'STATUS', 'BYTES', 'MS'],
     entries.map((entry) => [
       entry.at.toISOString(),
       entry.imp,
-      entry.secret ?? '-',
+      entry.secret,
+      entry.method,
+      entry.host,
+      entry.path,
+      String(entry.status),
+      `${String(entry.requestBytes)}/${String(entry.responseBytes)}`,
+      String(entry.durationMs),
+    ]),
+  );
+}
+
+export function formatRefusedRequests(refused: readonly RefusedRequest[]): string {
+  return formatTable(
+    ['TIME', 'IMP', 'METHOD', 'HOST', 'PATH', 'STATUS', 'MS', 'REASON'],
+    refused.map((entry) => [
+      entry.at.toISOString(),
+      entry.imp,
       entry.method ?? '-',
       entry.host ?? '-',
       entry.path ?? '-',
       String(entry.status),
-      `${String(entry.requestBytes)}/${String(entry.responseBytes)}`,
       String(entry.durationMs),
-
-      // an older impd sends no reason
-      entry.reason ?? '-',
+      entry.reason,
     ]),
   );
 }

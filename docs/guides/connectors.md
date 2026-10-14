@@ -21,17 +21,18 @@ put secrets into the sandbox as environment variables.
 
 ## Secrets and grants
 
-| Command                               | What it does                                                                                                                                                                                  |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `imp secret add <name> --kind <kind>` | Stores a secret. The value comes from stdin or a prompt that does not echo, never from a flag.                                                                                                |
-| `imp secret add <name> ... --replace` | Replaces the value of a secret that exists, for a rotation. Other hosts or headers need `--rebind` too ([rotate or rebind](#rotate-or-rebind)).                                               |
-| `imp secret ls`                       | Lists each secret's kind, state, hosts and imps. It never shows a value.                                                                                                                      |
-| `imp secret refresh <name>`           | Refreshes an [oauth secret](#oauth-secrets) now, and exits 1 unless it is ready after it.                                                                                                     |
-| `imp secret rm <name>`                | Deletes a secret and revokes it from every imp.                                                                                                                                               |
-| `imp grant <imp> <secret>`            | Lets the imp use the secret.                                                                                                                                                                  |
-| `imp revoke <imp> <secret>`           | Takes it away. A request under way finishes; every later one fails, on any connection.                                                                                                        |
-| `imp grants <imp>`                    | Lists the secrets granted to the imp.                                                                                                                                                         |
-| `imp audit [imp] [--limit n]`         | Lists the requests the broker sent with a credential and the ones it refused, newest first. `--kind api` lists the calls that changed impd instead ([events](./events.md#the-api-audit-log)). |
+| Command                               | What it does                                                                                                                                                          |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `imp secret add <name> --kind <kind>` | Stores a secret. The value comes from stdin or a prompt that does not echo, never from a flag.                                                                        |
+| `imp secret add <name> ... --replace` | Replaces the value of a secret that exists, for a rotation. Other hosts or headers need `--rebind` too ([rotate or rebind](#rotate-or-rebind)).                       |
+| `imp secret ls`                       | Lists each secret's kind, state, hosts and imps. It never shows a value.                                                                                              |
+| `imp secret refresh <name>`           | Refreshes an [oauth secret](#oauth-secrets) now, and exits 1 unless it is ready after it.                                                                             |
+| `imp secret rm <name>`                | Deletes a secret and revokes it from every imp.                                                                                                                       |
+| `imp grant <imp> <secret>`            | Lets the imp use the secret.                                                                                                                                          |
+| `imp revoke <imp> <secret>`           | Takes it away. A request under way finishes; every later one fails, on any connection.                                                                                |
+| `imp grants <imp>`                    | Lists the secrets granted to the imp.                                                                                                                                 |
+| `imp audit [imp] [--limit n]`         | Lists the requests the broker sent with a credential, newest first. `--kind api` lists the calls that changed impd instead ([events](./events.md#the-api-audit-log)). |
+| `imp audit [imp] --kind refused`      | Lists the requests the broker refused, newest first, each with its reason.                                                                                            |
 
 A secret name has the same form as an imp name. The value must be printable ASCII without spaces,
 which every API token is. An imp may hold one credential per host, so two grants that cover the same
@@ -371,18 +372,18 @@ an impd that checks. A client that sends the `start` itself must check the same.
 | The database                     | The name, kind, hosts and grants, and an oauth secret's token URL and client id. Never a value.                                                                                            |
 | The API, the CLI, logs           | Never a value. A failed `imp secret add` logs the error but not the value.                                                                                                                 |
 | The guest, its snapshots         | The placeholder and the public CA bundle only.                                                                                                                                             |
-| `imp audit`                      | Time, imp, secret, method, host, path without the query, status, bytes, time, and the reason for a refusal. Never a header or a body.                                                      |
+| `imp audit`                      | Time, imp, secret, method, host, path without the query, status, bytes, time. Never a header or a body.                                                                                    |
 
 Values are not encrypted at rest: the key would sit on the same disk.
 
 The audit log also records each request the broker refuses: a CONNECT the egress policy or the
 tunnel check turns away, a head that is not a CONNECT, a connection past the imp's cap, and a
 request on a granted connection for another host, for a WebSocket, or after a revoke. The broker
-refuses before it reads any credential, so a refused row has no secret, and its `REFUSED` column
-holds the reason, such as `egress-policy`. A head without a host leaves the host empty. The log
-keeps the newest 1000 rows of each kind per imp, sent and refused, so a guest's refusals never push
-out the requests sent with its credentials. It records at most 20 refusals per imp in one second,
-because a refusal costs the guest almost nothing.
+refuses before it reads any credential, so a refused row has no secret. `imp audit --kind refused`
+lists each with its reason, such as `egress-policy`. A head without a host leaves the host empty.
+The log keeps the newest 1000 rows of each kind per imp, sent and refused, so a guest's refusals
+never push out the requests sent with its credentials. It records at most 20 refusals per imp in one
+second, because a refusal costs the guest almost nothing.
 
 ## Limits
 

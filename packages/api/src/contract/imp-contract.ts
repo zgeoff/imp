@@ -38,6 +38,7 @@ import {
   AuditEntrySchema,
   BrokerRuleSchema,
   OAuthConfigSchema,
+  RefusedRequestSchema,
   SecretAddedSchema,
   SecretKindSchema,
   SecretNameSchema,
@@ -547,6 +548,16 @@ export const impContract = {
         }),
       )
       .output(z.array(AuditEntrySchema)),
+
+    // the requests the broker refused, newest first; one imp's, or every imp's
+    refused: base
+      .input(
+        z.object({
+          name: NameSchema.optional(),
+          limit: z.int().min(1).max(1000).optional(),
+        }),
+      )
+      .output(z.array(RefusedRequestSchema)),
 
     // API calls that changed something and sessions opened, newest first;
     // those that named one imp, or all of them

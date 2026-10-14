@@ -132,6 +132,7 @@ export type {
   AuditRefusal,
   BrokerRule,
   OAuthConfig,
+  RefusedRequest,
   Secret,
   SecretAdded,
   SecretKind,

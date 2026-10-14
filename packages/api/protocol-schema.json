@@ -9901,15 +9901,85 @@
               "pattern": "^[a-z][a-z0-9-]{0,30}$"
             },
             "secret": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[a-z][a-z0-9-]{0,30}$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,30}$"
+            },
+            "method": {
+              "type": "string"
+            },
+            "host": {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^(?:[a-z0-9][a-z0-9-]{0,62}\\.)+[a-z][a-z0-9-]{0,62}$"
+            },
+            "path": {
+              "type": "string"
+            },
+            "status": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "requestBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "responseBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "durationMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "at",
+            "imp",
+            "secret",
+            "method",
+            "host",
+            "path",
+            "status",
+            "requestBytes",
+            "responseBytes",
+            "durationMs"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "stream": false
+    },
+    "audit.refused": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,30}$"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        }
+      },
+      "output": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "imp": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,30}$"
             },
             "method": {
               "anyOf": [
@@ -9947,53 +10017,33 @@
               "minimum": -9007199254740991,
               "maximum": 9007199254740991
             },
-            "requestBytes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "responseBytes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
             "durationMs": {
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
             },
             "reason": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "enum": [
-                    "not-http",
-                    "not-connect",
-                    "bad-target",
-                    "connection-limit",
-                    "egress-policy",
-                    "address-refused",
-                    "wrong-host",
-                    "websocket",
-                    "no-grant"
-                  ]
-                },
-                {
-                  "type": "null"
-                }
+              "type": "string",
+              "enum": [
+                "not-http",
+                "not-connect",
+                "bad-target",
+                "connection-limit",
+                "egress-policy",
+                "address-refused",
+                "wrong-host",
+                "websocket",
+                "no-grant"
               ]
             }
           },
           "required": [
             "at",
             "imp",
-            "secret",
             "method",
             "host",
             "path",
             "status",
-            "requestBytes",
-            "responseBytes",
             "durationMs",
             "reason"
           ],
@@ -12169,6 +12219,9 @@
                 "type": "boolean"
               },
               "backupOptOut": {
+                "type": "boolean"
+              },
+              "brokerRefusals": {
                 "type": "boolean"
               }
             },

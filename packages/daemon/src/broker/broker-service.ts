@@ -6,6 +6,7 @@ import type {
   EgressMode,
   GrantNotCopied,
   OAuthConfig,
+  RefusedRequest,
   Secret,
   SecretAdded,
   SecretKind,
@@ -18,7 +19,7 @@ import {
   buildNotFoundError,
 } from '../api-errors';
 import type { Config } from '../config';
-import { listAuditEntries, writeAuditEntry } from '../db/broker-audit';
+import { listAuditEntries, listRefusedRequests, writeAuditEntry } from '../db/broker-audit';
 import type { NewAuditEntry } from '../db/broker-audit';
 import { findImpByName, listImps } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -150,6 +151,13 @@ export interface Broker {
     limit: number,
     patterns: readonly string[] | null,
   ) => Promise<AuditEntry[]>;
+
+  // the requests it refused, by the same rules as listAudit
+  readonly listRefused: (
+    impName: string | null,
+    limit: number,
+    patterns: readonly string[] | null,
+  ) => Promise<RefusedRequest[]>;
 
   // as db createForkGrants; a skip or a failure is logged and reported,
   // not thrown, as the fork exists by then
@@ -711,6 +719,12 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       const imp = impName === null ? null : await requireImp(impName);
 
       return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000), patterns);
+    },
+
+    listRefused: async (impName, limit, patterns) => {
+      const imp = impName === null ? null : await requireImp(impName);
+
+      return listRefusedRequests(db, imp?.id ?? null, Math.min(limit, 1000), patterns);
     },
 
     createForkGrants: async (source, fork, authority) => {

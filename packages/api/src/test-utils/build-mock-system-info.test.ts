@@ -61,6 +61,7 @@ test('it builds a default system info', () => {
       oauthSecrets: true,
       secretUpstream: true,
       backupOptOut: true,
+      brokerRefusals: true,
     },
   });
 
@@ -129,6 +130,7 @@ test('it applies overrides on top of the defaults', () => {
       oauthSecrets: true,
       secretUpstream: true,
       backupOptOut: true,
+      brokerRefusals: true,
     },
   });
 });

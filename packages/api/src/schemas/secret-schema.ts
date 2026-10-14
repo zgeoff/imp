@@ -153,34 +153,45 @@ const AuditRefusalSchema = z.enum([
 
 export type AuditRefusal = z.infer<typeof AuditRefusalSchema>;
 
-// One request the broker sent upstream with a credential, or one it refused.
-// The path has no query string, and no header or body is kept.
+// One request the broker sent upstream with a credential. The path has no
+// query string, and no header is kept.
 export const AuditEntrySchema = z.object({
   at: z.date(),
   imp: NameSchema,
+  secret: SecretNameSchema,
+  method: z.string(),
+  host: BrokerHostSchema,
+  path: z.string(),
 
-  // null for a refused request: it got no credential
-  secret: SecretNameSchema.nullable(),
+  // 502 when the upstream could not be reached
+  status: z.int(),
+  requestBytes: z.int().nonnegative(),
+  responseBytes: z.int().nonnegative(),
+  durationMs: z.int().nonnegative(),
+});
 
-  // null when a refused head named none
+export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+
+// One request the broker refused, which got no credential. Nothing from a
+// header, the query or a body is kept.
+export const RefusedRequestSchema = z.object({
+  at: z.date(),
+  imp: NameSchema,
+
+  // null when the head named none
   method: z.string().nullable(),
 
-  // the host as the guest named it, an IP address included; null when a
-  // refused head named none
+  // the host as the guest named it, an IP address included; null when the
+  // head named none
   host: z.string().max(253).nullable(),
 
   // null for a CONNECT, which has none
   path: z.string().nullable(),
 
-  // 502 when the upstream could not be reached; for a refusal, the status the
-  // guest got
+  // the status the guest got
   status: z.int(),
-  requestBytes: z.int().nonnegative(),
-  responseBytes: z.int().nonnegative(),
   durationMs: z.int().nonnegative(),
-
-  // null for a request the broker sent upstream
-  reason: AuditRefusalSchema.nullable(),
+  reason: AuditRefusalSchema,
 });
 
-export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+export type RefusedRequest = z.infer<typeof RefusedRequestSchema>;
