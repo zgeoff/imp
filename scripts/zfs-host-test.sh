@@ -150,7 +150,13 @@ holders() {
   ls /sys/block | grep '^zd' || true
   sudo losetup -a || true
   echo "-- newest processes"
-  ps -eo pid,ppid,stat,etimes,args --sort=etimes | cut -c1-200 | head -40
+  ps -eo pid,ppid,stat,etimes,args --sort=etimes | grep -v ' \[' | cut -c1-200 | sed -n 1,80p || true
+  echo "-- process fds, cwd, root and maps on zfs"
+  sudo find /proc/[0-9]*/fd /proc/[0-9]*/cwd /proc/[0-9]*/root /proc/[0-9]*/map_files -maxdepth 1 \
+    -exec stat -L -f -c '%T %n' {} \; 2>/dev/null | grep '^zfs' | sed -n 1,40p || true
+  echo "-- mount ns held by fd or nsfs"
+  sudo find /proc/[0-9]*/fd -maxdepth 1 -lname 'mnt:*' -printf '%p -> %l\n' 2>/dev/null | sed -n 1,20p || true
+  grep nsfs /proc/self/mountinfo || true
   echo "-- dmesg"
   sudo dmesg | tail -20 || true
   echo "-- spa"
