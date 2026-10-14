@@ -165,11 +165,48 @@ holders() {
   echo "::endgroup::"
 }
 
+# DIAGNOSTIC (GEO-832): every 3s, the pool's open objsets against the zfs
+# mounts of every mount ns; an open one mounted nowhere gets its holders logged
+watch_pool() {
+  local log=$work/pool-watch.log seen=" " open mounted orphans o id
+  set +e +o pipefail
+  while sleep 3; do
+    open=$(for f in /proc/spl/kstat/zfs/"$pool"/objset-*; do sudo awk '$1 == "dataset_name" { print $3 }' "$f"; done 2>/dev/null | sort -u)
+    mounted=$(sudo sh -c 'cat /proc/[0-9]*/mountinfo' 2>/dev/null |
+      awk '{ for (i = 1; i <= NF; i++) if ($i == "-") { if ($(i + 1) == "zfs") print $(i + 2); break } }' | sort -u)
+    orphans=$(comm -23 <(echo "$open") <(echo "$mounted") | grep . || true)
+    echo "$(date +%T.%3N) open=$(echo "$open" | grep -c . || true) mounted=$(echo "$mounted" | grep -c . || true) orphans: $(echo $orphans)" >>"$log"
+    for o in $orphans; do
+      case "$seen" in *" $o "*) continue ;; esac
+      seen="$seen$o "
+      id=${o##*/}
+      {
+        echo "== orphan $o at $(date +%T.%3N)"
+        echo "-- fds, cwd, root, exe and maps naming $id"
+        sudo find /proc/[0-9]*/fd /proc/[0-9]*/cwd /proc/[0-9]*/root /proc/[0-9]*/exe /proc/[0-9]*/map_files -maxdepth 1 \
+          -printf '%p -> %l\n' 2>/dev/null | grep -F -- "$id" | sed -n 1,40p || true
+        echo "-- processes"
+        ps -eo pid,ppid,stat,etimes,args --sort=etimes | grep -v ' \[' | cut -c1-200 | sed -n 1,60p || true
+        echo "-- unix sockets naming $id or imps"
+        sudo ss -xap 2>/dev/null | grep -E -- "$id|/imps/" | sed -n 1,20p || true
+        echo "-- dmesg"
+        sudo dmesg | tail -15 || true
+      } >>"$log" 2>&1
+    done
+  done
+}
+
 # In reverse order; the results stay in $work. A pool that will not go keeps
 # its file, so it can still be imported and destroyed by hand, and the run
 # fails.
 cleanup() {
   local status=$?
+  if [ -n "${watcher:-}" ]; then
+    kill "$watcher" 2>/dev/null || true
+    echo "::group::pool watch"
+    cat "$work/pool-watch.log" 2>/dev/null || true
+    echo "::endgroup::"
+  fi
   if [ -n "$child" ]; then
     kill -TERM "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
@@ -277,6 +314,8 @@ report() {
 # whose own exit is awaited so the log is whole before the report reads it.
 # A failed suite still gets its report; the script then exits with the
 # suites' status.
+watch_pool &
+watcher=$!
 started_instance=1
 exec 3> >(tee "$work/e2e.log")
 tee_pid=$!
