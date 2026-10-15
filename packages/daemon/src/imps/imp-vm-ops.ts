@@ -1,6 +1,4 @@
-import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { ColdBootCause, ImpEventDetail } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { sendActivity } from '../agent-client/agent-requests';
@@ -11,8 +9,6 @@ import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold
 import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { shrinkGuest } from '../memory/shrink-guest';
-import type { SlotAddress } from '../net/addressing';
-import { GATEWAY_IP6 } from '../net/addressing6';
 import { createSemaphore } from '../process/semaphore';
 import { readErrorMessage } from '../read-error-message';
 import { findSessionLogImp } from '../session-logs/find-session-log-imp';
@@ -32,9 +28,8 @@ import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import type { VmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
 import type { ImpCgroup } from '../vmm/cpu-cgroups';
-import { TemplateRestoreError } from '../vmm/template-vm';
-import type { StartedVm } from '../vmm/vm-runner';
 import { checkMergeFlag } from './check-merge-flag';
+import { formatTimings } from './format-timings';
 import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
@@ -43,6 +38,7 @@ import { KERNEL_OOPS_TRIGGER } from './kernel-oops-watch';
 import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
 import { startCounting } from './read-running-imp-usage';
 import type { ShutdownGate } from './shutdown-gate';
+import { startColdVm } from './start-cold-vm';
 
 // what a sleep waits under the imp's lock for an elastic guest to unplug
 const SLEEP_SHRINK_LIMIT_MS = 2000;
@@ -50,9 +46,6 @@ const SLEEP_SHRINK_LIMIT_MS = 2000;
 // snapshot writes put the whole mem file through the page cache
 // (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
-
-// the claim's seed for the guest's entropy pool; the agent wants 32 or more
-const CLAIM_SEED_BYTES = 64;
 
 // how long a sleep waits for the services list it records
 const SERVICES_FOR_SLEEP_MS = 1000;
@@ -182,125 +175,6 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return cgroup;
   };
 
-  // A cold boot: a restore of the shape's boot template when one is ready,
-  // else the kernel's boot. A template that fails to restore goes, and the
-  // imp boots the kernel (docs/architecture/boot-templates.md#restore).
-  const startColdVm = async (
-    imp: LockedImp,
-    paths: ImpPaths,
-    address: SlotAddress,
-    hostSteps: Readonly<Record<string, number>>,
-    diskReady: Promise<unknown>,
-  ): Promise<StartedVm> => {
-    // a fresh guest holds nothing plugged; the cgroup keeps a size from
-    // before a sleep, which a wake that boots cold must not inherit
-    context.memoryLimit.setGuestMib(imp.id, imp.memoryMib);
-
-    const cgroup = setupVmCgroup(imp);
-
-    // a template has no hot-plug region: an elastic imp boots the kernel
-    // (docs/architecture/memory.md#limits)
-    const template =
-      imp.maxMemoryMib > imp.memoryMib
-        ? null
-        : context.templates?.find({ vcpus: imp.vcpus, memoryMib: imp.memoryMib });
-
-    // a disk that fails is the create's failure, not the template's
-    const disk = { isFailed: false };
-
-    const readDiskBytes = async () => {
-      try {
-        await diskReady;
-      } catch (error) {
-        disk.isFailed = true;
-        throw error;
-      }
-
-      return statSync(paths.disk).size;
-    };
-
-    const diskBytes = readDiskBytes();
-
-    // handled now: a restore that fails first never awaits it
-    void Promise.allSettled([diskBytes]);
-
-    if (template !== null && template !== undefined) {
-      try {
-        const vm = await context.vms.loadTemplateVm({
-          firecrackerBin: context.config.firecrackerBin,
-          paths,
-          vmstate: template.vmstate,
-          memFile: template.memFile,
-          systemDrivePath: template.systemDrivePath,
-          placeholderPath: template.placeholderPath,
-          jail: context.findJailUser(imp),
-          diskPath: resolve(paths.disk),
-          tap: address.tap,
-          cgroup,
-          diskReady: diskBytes,
-          claim: {
-            id: imp.id,
-            hostname: imp.name,
-            ip: `${address.guestIp}/${String(address.prefixLength)}`,
-            gw: address.hostIp,
-            ip6: address.guestIp6 === null ? null : `${address.guestIp6}/128`,
-            gw6: address.guestIp6 === null ? null : GATEWAY_IP6,
-            dns: context.config.dns,
-            mac: address.guestMac,
-            seed: randomBytes(CLAIM_SEED_BYTES),
-            isIdentityReset: imp.isIdentityResetPending,
-          },
-        });
-
-        context.templates?.reportRestored(template);
-
-        context.log(
-          `impd: ${imp.name}: restored boot template ${template.key.slice(0, 12)} as pid ${String(vm.pid)} ${formatTimings({ ...hostSteps, ...vm.timings })}`,
-        );
-
-        return vm;
-      } catch (error) {
-        if (disk.isFailed) {
-          await diskBytes;
-        }
-
-        context.log(
-          `impd: ${imp.name}: boot template ${template.key.slice(0, 12)} failed, booting the kernel: ${readErrorMessage(error)}`,
-        );
-
-        // a failure of the imp's own (its disk, its claim) leaves the template
-        const isTemplateFault = error instanceof TemplateRestoreError && error.isTemplateFault;
-
-        context.templates?.reportFailure(template, isTemplateFault);
-      }
-    }
-
-    await diskBytes;
-
-    const vm = await context.vms.startVm({
-      firecrackerBin: context.config.firecrackerBin,
-      kernelPath: context.config.kernelPath,
-      systemDrivePath: context.identity.systemDrivePath,
-      paths,
-      address,
-      impId: imp.id,
-      hostname: imp.name,
-      vcpus: imp.vcpus,
-      memoryMib: imp.memoryMib,
-      maxMemoryMib: imp.maxMemoryMib,
-      dns: context.config.dns,
-      cgroup,
-      isIdentityReset: imp.isIdentityResetPending,
-      jail: context.findJailUser(imp),
-    });
-
-    context.log(
-      `impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings({ ...hostSteps, ...vm.timings })}`,
-    );
-
-    return vm;
-  };
-
   // `reason` says why a wake booted cold instead; null for a create or a start
   // `cause` is the typed reason the boot records; a wake_fallback counts as
   // the wake it stands in for
@@ -356,7 +230,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         setup: Math.round(performance.now() - setupStarted),
       };
 
-      const vm = await startColdVm(imp, paths, address, hostSteps, diskReady);
+      // a fresh guest holds nothing plugged; the cgroup keeps a size from
+      // before a sleep, which a wake that boots cold must not inherit
+      context.memoryLimit.setGuestMib(imp.id, imp.memoryMib);
+
+      const cgroup = setupVmCgroup(imp);
+
+      const vm = await startColdVm(context, { imp, paths, address, cgroup, hostSteps, diskReady });
 
       startCounting(context, imp, vm.pid);
 
@@ -932,12 +812,6 @@ function readDiskMib(path: string): number {
 
 function countStepsMs(timings: Readonly<Record<string, number>>): number {
   return Object.values(timings).reduce((total, ms) => total + ms, 0);
-}
-
-function formatTimings(timings: Readonly<Record<string, number>>): string {
-  return Object.entries(timings)
-    .map(([step, ms]) => `${step}=${String(ms)}ms`)
-    .join(' ');
 }
 
 // a sleeping imp has no client attached: the sleep closed every connection

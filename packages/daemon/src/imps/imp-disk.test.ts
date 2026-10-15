@@ -1,13 +1,17 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { statSync, truncateSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createImp, findImpByName } from '../db/imps';
 import { runChecked } from '../process/run-command';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { buildStubDiskTools } from '../test-utils/build-stub-disk-tools';
+import { growFilesystem } from './imp-disk';
 import { buildTestApp, createImpTest } from './test-imps';
 
-// impd over the stub VMM, and a client of its API
+// impd over the stub VMM, a client of its API, and an empty disk file of
+// its own for the host's grow
 async function setupTest(
   config: Readonly<{
     // the host's grow of a filesystem; reported grown by default
@@ -30,8 +34,17 @@ async function setupTest(
   await harness.createTestImage('ubuntu');
 
   const app = buildTestApp(harness, harness);
+  const dir = mkdtempSync(join(tmpdir(), 'impd-grow-test-'));
 
-  return { ...harness, client: app.client };
+  onTestFinished(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const disk = join(dir, 'disk.ext4');
+
+  writeFileSync(disk, '');
+
+  return { ...harness, client: app.client, disk };
 }
 
 test('it makes a new disk the size asked for', async () => {
@@ -395,3 +408,79 @@ test('it reports the reserve, the low disk and the imp disks in system info', as
   expect(info.storage.isLow).toBeTrue();
   expect(info.storage.impDiskBytes).toBe(4 * 1024 ** 3);
 });
+
+test.skipIf(Bun.which('mkfs.ext4') === null || Bun.which('resize2fs') === null)(
+  'it grows a clean filesystem to fill its file',
+  async () => {
+    const ctx = await setupTest();
+
+    truncateSync(ctx.disk, 64 * 1024 * 1024);
+
+    await runChecked(['mkfs.ext4', '-q', '-F', '-b', '4096', ctx.disk]);
+
+    truncateSync(ctx.disk, 256 * 1024 * 1024);
+
+    const isGrown = await growFilesystem(ctx.disk);
+    const header = await runChecked(['dumpe2fs', '-h', ctx.disk]);
+
+    expect(isGrown).toBeTrue();
+
+    // 256 MiB of 4096-byte blocks
+    expect(header).toMatch(/^Block count:\s+65536$/m);
+  },
+);
+
+test.skipIf(Bun.which('mkfs.ext4') === null || Bun.which('resize2fs') === null)(
+  'it leaves the new inode tables of a grown filesystem as holes a check accepts',
+  async () => {
+    const ctx = await setupTest();
+
+    truncateSync(ctx.disk, 64 * 1024 * 1024);
+
+    await runChecked(['mkfs.ext4', '-q', '-F', '-b', '4096', ctx.disk]);
+
+    truncateSync(ctx.disk, 256 * 1024 * 1024);
+
+    const allocatedBefore = statSync(ctx.disk).blocks * 512;
+
+    const isGrown = await growFilesystem(ctx.disk);
+
+    const allocatedAfter = statSync(ctx.disk).blocks * 512;
+
+    const header = await runChecked(['dumpe2fs', '-h', ctx.disk]);
+
+    expect(isGrown).toBeTrue();
+
+    // 256 MiB of 4096-byte blocks
+    expect(header).toMatch(/^Block count:\s+65536$/m);
+
+    // six new groups' zeroed inode tables would take several MiB
+    expect(allocatedAfter - allocatedBefore).toBeLessThan(1024 * 1024);
+
+    await expect(runChecked(['e2fsck', '-fn', ctx.disk])).toResolve();
+  },
+);
+
+test.skipIf(Bun.which('mkfs.ext4') === null || Bun.which('resize2fs') === null)(
+  'it leaves an unclean filesystem for the guest to grow',
+  async () => {
+    const ctx = await setupTest();
+
+    truncateSync(ctx.disk, 64 * 1024 * 1024);
+
+    await runChecked(['mkfs.ext4', '-q', '-F', '-b', '4096', ctx.disk]);
+
+    // as after a VM killed with its filesystem mounted
+    await runChecked(['debugfs', '-w', '-R', 'ssv state 0', ctx.disk]);
+
+    truncateSync(ctx.disk, 256 * 1024 * 1024);
+
+    const isGrown = await growFilesystem(ctx.disk);
+    const header = await runChecked(['dumpe2fs', '-h', ctx.disk]);
+
+    expect(isGrown).toBeFalse();
+
+    // still 64 MiB of 4096-byte blocks
+    expect(header).toMatch(/^Block count:\s+16384$/m);
+  },
+);

@@ -14,11 +14,16 @@ import { buildStubMounts } from '../test-utils/build-stub-mounts';
 import { buildStubUidProcesses } from '../test-utils/build-stub-uid-processes';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { startStubInnerAgent } from '../test-utils/start-stub-inner-agent';
+import { startStubSessionAgent } from '../test-utils/start-stub-session-agent';
 import { createJails } from '../vmm/jail';
 import { createImpTest, waitForOutcome } from './test-imps';
 import type { ImpTestOptions } from './test-imps';
 
-async function setupTest(options: Pick<ImpTestOptions, 'env' | 'frozenClockMs'> = {}) {
+// `installBundle`: the broker's CA install in the guest, which a test fails
+// or holds
+async function setupTest(
+  options: Pick<ImpTestOptions, 'env' | 'frozenClockMs' | 'installBundle'> = {},
+) {
   // one stack: an agent a test starts closes before the harness
   const stack = new AsyncDisposableStack();
 
@@ -972,4 +977,404 @@ test('it shows no inner container for an agent from before 0.14.0', async () => 
   const shown = await ctx.imps.toApi(record);
 
   expect(shown).not.toContainKey('inner');
+});
+
+test('it refuses an exec that requires the broker without a grant', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  expect(
+    ctx.imps.openExec('dev', { argv: ['true'], tty: false, require: ['broker'] }),
+  ).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: {
+      reason: 'broker_not_ready',
+      detail: 'the imp has no grant, so impd sets no broker variables',
+    },
+  });
+
+  expect(agent.readExecs()).toBeEmpty();
+});
+
+test('it runs an exec without the requirement on an imp with no grant', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  const stream = await ctx.imps.openExec('dev', { argv: ['true'], tty: false });
+
+  stream.close();
+
+  expect(agent.readExecs()).toHaveLength(1);
+});
+
+test('it refuses the exec when the CA bundle step fails', async () => {
+  const ctx = await setupTest({ installBundle: () => Promise.reject(new Error('no /bin/sh')) });
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  expect(
+    ctx.imps.openExec('dev', { argv: ['true'], tty: false, require: ['broker'] }),
+  ).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: {
+      reason: 'broker_not_ready',
+      detail: 'the broker CA bundle is not in this boot of the guest: no /bin/sh',
+    },
+  });
+
+  expect(agent.readExecs()).toBeEmpty();
+});
+
+test('it tries the CA bundle step again at the next exec after one failed', async () => {
+  const install = { fail: true };
+
+  const ctx = await setupTest({
+    installBundle: () =>
+      install.fail ? Promise.reject(new Error('no /bin/sh')) : Promise.resolve(),
+  });
+
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const failed = await ctx.imps
+    .openExec('dev', { argv: ['true'], tty: false, require: ['broker'] })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+  install.fail = false;
+
+  const stream = await ctx.imps.openExec('dev', {
+    argv: ['true'],
+    tty: false,
+    require: ['broker'],
+  });
+
+  stream.close();
+
+  expect(failed).toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: {
+      reason: 'broker_not_ready',
+      detail: 'the broker CA bundle is not in this boot of the guest: no /bin/sh',
+    },
+  });
+
+  expect(agent.readExecs()).toHaveLength(1);
+  expect(agent.readExecs()[0]?.env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
+});
+
+test('it never sends the requirement to the agent', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const stream = await ctx.imps.openExec('dev', {
+    argv: ['true'],
+    tty: false,
+    require: ['broker'],
+  });
+
+  stream.close();
+
+  const [sent] = agent.readExecPayloads();
+
+  invariant(sent);
+
+  expect(sent).not.toHaveProperty('require');
+});
+
+test('it runs the CA bundle step before the first exec of a boot, with the broker variables', async () => {
+  // how many execs the agent had got at each CA bundle step
+  const sentAtInstall: number[] = [];
+  const agentRef: { readExecs: () => readonly unknown[] } = { readExecs: () => [] };
+
+  const ctx = await setupTest({
+    installBundle: () => {
+      sentAtInstall.push(agentRef.readExecs().length);
+
+      return Promise.resolve();
+    },
+  });
+
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  agentRef.readExecs = agent.readExecs;
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const stream = await ctx.imps.openExec('dev', {
+    argv: ['true'],
+    tty: false,
+    require: ['broker'],
+  });
+
+  stream.close();
+
+  const env = agent.readExecs()[0]?.env;
+
+  expect(sentAtInstall).toStrictEqual([0]);
+  expect(agent.readExecs()).toHaveLength(1);
+  expect(env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
+  expect(env).toContain('SSL_CERT_FILE=/etc/imp/broker-ca.pem');
+});
+
+test('it runs the CA bundle step again after a reboot', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const first = await ctx.imps.openExec('dev', { argv: ['true'], tty: false, require: ['broker'] });
+
+  first.close();
+
+  // a restore halts the guest and boots it again: a new boot
+  await ctx.imps.lockImp('dev', async (locked) => {
+    const halted = await ctx.imps.haltImp(locked, false);
+
+    await ctx.imps.bootImp(halted);
+  });
+
+  const second = await ctx.imps.openExec('dev', {
+    argv: ['true'],
+    tty: false,
+    require: ['broker'],
+  });
+
+  second.close();
+
+  expect(ctx.bundleInstalls).toHaveLength(2);
+});
+
+test('it refuses an env that replaces a broker variable, and names it', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  expect(
+    ctx.imps.openExec('dev', {
+      argv: ['true'],
+      tty: false,
+      require: ['broker'],
+      env: ['SSL_CERT_FILE=/tmp/mine.pem'],
+    }),
+  ).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: {
+      reason: 'broker_not_ready',
+      detail: "the exec's env sets SSL_CERT_FILE, which the broker sets",
+    },
+  });
+
+  expect(agent.readExecs()).toBeEmpty();
+});
+
+test('it passes an env variable the broker does not set', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const stream = await ctx.imps.openExec('dev', {
+    argv: ['true'],
+    tty: false,
+    require: ['broker'],
+    env: ['TERM=xterm'],
+  });
+
+  stream.close();
+
+  expect(agent.readExecs()[0]?.env).toContain('TERM=xterm');
+});
+
+test('it refuses the broker requirement for an outer exec', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  expect(
+    ctx.imps.openExec(
+      'dev',
+      { argv: ['true'], tty: false, require: ['broker'], outer: true },
+      'outer-exec',
+    ),
+  ).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: { reason: 'broker_not_ready', detail: 'an exec in the agent gets no broker variables' },
+  });
+
+  expect(agent.readExecs()).toBeEmpty();
+});
+
+test('it runs no lifecycle operation between the CA bundle step and the start', async () => {
+  const install = { release: () => {}, reached: () => {} };
+
+  const reached = new Promise<void>((resolve) => {
+    install.reached = resolve;
+  });
+
+  const ctx = await setupTest({
+    installBundle: () =>
+      new Promise<void>((resolve) => {
+        install.release = resolve;
+
+        install.reached();
+      }),
+  });
+
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const order: string[] = [];
+
+  const exec = (async () => {
+    const stream = await ctx.imps.openExec('dev', {
+      argv: ['true'],
+      tty: false,
+      require: ['broker'],
+    });
+
+    order.push(`exec started (${String(agent.readExecs().length)} sent)`);
+    stream.close();
+  })();
+
+  await reached;
+
+  // as a restore would: it queues on the lock the exec holds
+  const locked = ctx.imps.lockImp('dev', () => {
+    order.push('lifecycle');
+
+    return Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(ctx.imps.countLockQueue(imp.id)).toBe(2);
+  });
+
+  const beforeRelease = [...order];
+
+  install.release();
+
+  await Promise.all([exec, locked]);
+
+  expect(beforeRelease).toBeEmpty();
+  expect(order).toStrictEqual(['exec started (1 sent)', 'lifecycle']);
+});
+
+test('it boots the imp again and checks again when a stop takes the lock before the exec', async () => {
+  const order: string[] = [];
+
+  const ctx = await setupTest({
+    installBundle: () => {
+      order.push('bundle');
+
+      return Promise.resolve();
+    },
+  });
+
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const agent = await startStubSessionAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    stack: ctx.stack,
+  });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_SECRET' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  // the stop holds the lock until the exec queues behind it, so the exec
+  // found the imp running and its bundle step waits for the stop
+  const stopGate = Promise.withResolvers<void>();
+
+  onTestFinished(() => {
+    stopGate.resolve();
+  });
+
+  const stopping = ctx.imps.lockImp('dev', async (locked) => {
+    await stopGate.promise;
+
+    await ctx.imps.haltImp(locked, false);
+
+    order.push('stopped');
+  });
+
+  const opening = ctx.imps.openExec('dev', { argv: ['true'], tty: false, require: ['broker'] });
+
+  await waitFor(() => {
+    expect(ctx.imps.countLockQueue(imp.id)).toBe(2);
+  });
+
+  const bootsBefore = ctx.fake.boots.length;
+
+  stopGate.resolve();
+
+  const stream = await opening;
+
+  stream.close();
+
+  await stopping;
+
+  expect(order).toStrictEqual(['stopped', 'bundle']);
+  expect(ctx.fake.boots).toHaveLength(bootsBefore + 1);
+  expect(agent.readExecs()[0]?.env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
 });
