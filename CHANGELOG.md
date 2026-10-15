@@ -2,10 +2,11 @@
 
 ## [2.0.1](https://github.com/zgeoff/impz/compare/v2.0.0...v2.0.1) (2026-10-15)
 
-
 ### Bug Fixes
 
-* **geo-942:** keep the impz rename from stranding a config or breaking an install ([#401](https://github.com/zgeoff/impz/issues/401)) ([af73a97](https://github.com/zgeoff/impz/commit/af73a970bf15251a671f482ff96a7fe2808f44ec))
+- **geo-942:** keep the impz rename from stranding a config or breaking an install
+  ([#401](https://github.com/zgeoff/impz/issues/401))
+  ([af73a97](https://github.com/zgeoff/impz/commit/af73a970bf15251a671f482ff96a7fe2808f44ec))
 
 ## [2.0.0](https://github.com/zgeoff/impz/compare/v1.6.0...v2.0.0) (2026-10-15)
 
