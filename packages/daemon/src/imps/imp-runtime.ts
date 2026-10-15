@@ -647,12 +647,18 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
       const imps = await listImps(context.db);
 
-      // only a reboot clears the flag, so a hold impd finds with it clear came
-      // from an earlier boot, and that reboot freed the disk. An unknown read
-      // does not prove a reboot, so the holds stay
-      if (flag === 'clear') {
-        await removeStaleOopsHolds(context, imps);
-      }
+      // a reboot freed the disk of a hold impd finds with the flag clear, which
+      // only a reboot clears, or with another boot's id, whatever the flag reads
+      const bootId = context.kernelOops.findBootId();
+
+      await removeStaleOopsHolds(
+        context,
+        imps.filter(
+          (imp) =>
+            flag === 'clear' ||
+            (bootId !== null && imp.oopsBootId !== null && imp.oopsBootId !== bootId),
+        ),
+      );
 
       // cgroups of imps destroyed while impd was down, or whose remove failed
       const impIds = new Set(imps.map((imp) => imp.id));
@@ -897,7 +903,12 @@ async function removeStaleOopsHolds(
   imps: readonly ImpRecord[],
 ): Promise<void> {
   for (const imp of imps.filter((listed) => listed.error === KERNEL_OOPS_TRIGGER)) {
-    await updateImpState(context.db, imp.id, { reason: 'repaired', state: imp.state, error: null });
+    await updateImpState(context.db, imp.id, {
+      reason: 'repaired',
+      state: imp.state,
+      error: null,
+      oopsBootId: null,
+    });
 
     context.log(`impd: ${imp.name}: the host rebooted since a kernel oops held its disk`);
   }

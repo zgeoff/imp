@@ -19,6 +19,7 @@ test('it builds a default imp record', () => {
     sleptAt: null,
     holdUntil: null,
     error: null,
+    oopsBootId: null,
     pid: expect.toBeWithin(2, 4_194_305),
     firecrackerVersion: 'v1.17.0',
     httpPort: expect.toBeWithin(0, 65_536),

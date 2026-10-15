@@ -164,7 +164,7 @@ async function setupTest(options: SetupOptions) {
       readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
       growFilesystem: () => Promise.resolve(false),
       hostCpus: 8,
-      kernelOops: createKernelOopsWatch(taintPath),
+      kernelOops: createKernelOopsWatch(taintPath, Date.now, join(taintDir, 'boot_id')),
     },
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });

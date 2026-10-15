@@ -37,6 +37,10 @@ export interface ImpRecord {
   readonly sleptAt: Date | null;
   readonly holdUntil: Date | null;
   readonly error: string | null;
+
+  // the kernel's boot id when a kernel oops began to hold the imp's disk;
+  // null without a hold, and on a hold from before impd recorded it
+  readonly oopsBootId: string | null;
   readonly pid: number | null;
   readonly firecrackerVersion: string | null;
   readonly httpPort: number;
@@ -120,6 +124,7 @@ export interface ImpStateChange {
   readonly detail?: ImpEventDetail;
   readonly state: ImpState;
   readonly error?: string | null;
+  readonly oopsBootId?: string | null;
   readonly pid?: number | null;
   readonly sleptAt?: Date | null;
   readonly firecrackerVersion?: string | null;
@@ -383,6 +388,10 @@ export async function updateImpState(
     values.error = change.error;
   }
 
+  if (change.oopsBootId !== undefined) {
+    values.oops_boot_id = change.oopsBootId;
+  }
+
   if (change.pid !== undefined) {
     values.pid = change.pid;
   }
@@ -417,6 +426,10 @@ export async function updateImpStateIf(
 
   if (change.error !== undefined) {
     values.error = change.error;
+  }
+
+  if (change.oopsBootId !== undefined) {
+    values.oops_boot_id = change.oopsBootId;
   }
 
   if (change.pid !== undefined) {
@@ -720,6 +733,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     sleptAt: toDate(row.slept_at),
     holdUntil: toDate(row.hold_until),
     error: row.error,
+    oopsBootId: row.oops_boot_id,
     pid: row.pid,
     firecrackerVersion: row.firecracker_version,
     httpPort: row.http_port,

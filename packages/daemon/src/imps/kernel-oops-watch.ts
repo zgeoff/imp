@@ -26,6 +26,10 @@ export interface KernelOopsWatch {
   // when impd first read the flag set, after it had read it clear: the oops
   // came before then and since the clear read. Null without such a change
   readonly findOopsSeenAt: () => number | null;
+
+  // the kernel's id for this boot, which a hold records: a hold of another
+  // boot's id came before a reboot. Null when impd cannot read it
+  readonly findBootId: () => string | null;
 }
 
 // tests and a host without the file: the kernel never oopses
@@ -33,6 +37,7 @@ export const NO_KERNEL_OOPS: KernelOopsWatch = {
   readFlag: () => 'clear',
   isOopsed: () => false,
   findOopsSeenAt: () => null,
+  findBootId: () => null,
 };
 
 // An unreadable or malformed file reads as unknown: it never starts a hold,
@@ -40,8 +45,12 @@ export const NO_KERNEL_OOPS: KernelOopsWatch = {
 export function createKernelOopsWatch(
   path = '/proc/sys/kernel/tainted',
   now: () => number = Date.now,
+  bootIdPath = '/proc/sys/kernel/random/boot_id',
 ): KernelOopsWatch {
   const seen: { clear: boolean; oopsedAt: number | null } = { clear: false, oopsedAt: null };
+
+  // a boot keeps its id, so the first read that finds one stands
+  const boot: { id: string | null } = { id: null };
 
   const readFlag = (): OopsFlag => {
     if (seen.oopsedAt !== null) {
@@ -71,6 +80,11 @@ export function createKernelOopsWatch(
     readFlag,
     isOopsed,
     findOopsSeenAt: () => (isOopsed() && seen.clear ? seen.oopsedAt : null),
+    findBootId: () => {
+      boot.id ??= readBootId(bootIdPath);
+
+      return boot.id;
+    },
   };
 }
 
@@ -87,4 +101,17 @@ function readTaint(path: string): number | null {
   const taint = /^\d+$/v.test(text) ? Number(text) : null;
 
   return taint !== null && Number.isSafeInteger(taint) ? taint : null;
+}
+
+// the kernel's boot id is a UUID; anything else proves no boot
+function readBootId(path: string): string | null {
+  let text: string;
+
+  try {
+    text = readFileSync(path, 'utf8').trim();
+  } catch {
+    return null;
+  }
+
+  return /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/v.test(text) ? text : null;
 }

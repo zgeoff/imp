@@ -37,9 +37,12 @@ export async function checkLiveness(
   // an oops holds the disk until a reboot, so the record says so even asleep
   const slept = lostVm ? findSleptChange(imp, paths) : null;
 
+  // the hold records this boot, so a later boot knows a reboot freed the disk
+  const oopsBootId = trigger === KERNEL_OOPS_TRIGGER ? context.kernelOops.findBootId() : null;
+
   const change =
     slept !== null && trigger === KERNEL_OOPS_TRIGGER
-      ? { ...slept, detail: { trigger }, error: trigger }
+      ? { ...slept, detail: { trigger }, error: trigger, oopsBootId }
       : slept;
 
   const repaired = await updateImpStateIf(
@@ -54,7 +57,7 @@ export async function checkLiveness(
 
       // a VM gone while it ran is a recovery; a lost snapshot fails the wake
       nextBootCause: lostVm ? 'recovery' : 'wake_fallback',
-      ...(trigger !== null && { detail: { trigger }, error: trigger }),
+      ...(trigger !== null && { detail: { trigger }, error: trigger, oopsBootId }),
     },
   );
 

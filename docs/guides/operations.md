@@ -349,8 +349,9 @@ is set:
 
 When impd cannot read `/proc/sys/kernel/tainted`, or finds no number in it, it logs
 `impd: cannot read the kernel taint flag; imps a kernel oops held stay held` at start. Each imp that
-shows `a kernel oops killed firecracker` keeps that error, and its start or wake fails with the same
-`PRECONDITION_FAILED` error until impd reads the flag clear.
+a kernel oops held in this boot keeps the error `a kernel oops killed firecracker`, and its start or
+wake fails with the same `PRECONDITION_FAILED` error until impd reads the flag clear. impd clears
+the hold of an earlier boot, which it tells by the boot id in `/proc/sys/kernel/random/boot_id`.
 
 To recover:
 
@@ -365,8 +366,13 @@ To recover:
 3. Reboot the host.
 4. Check that impd sees a clear flag: `curl -s http://127.0.0.1:7070/health`. Expect
    `"warnings":[]`.
+
+   A `host needs a reboot: a kernel oops` warning here means another task oopsed in the new boot.
+   impd still cleared the holds of the earlier boot, so go on to step 5, then recover from the new
+   oops from step 1.
+
 5. Start each imp that the oops held: `imp start <name>`. impd cleared its hold at start, when it
-   read the flag clear, and logged
+   read the flag clear or a new boot id, and logged
    `impd: <name>: the host rebooted since a kernel oops held its disk`. The imp boots cold from its
    disk.
 
