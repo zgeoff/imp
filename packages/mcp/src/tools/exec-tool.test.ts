@@ -1,34 +1,33 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createImpGuard } from '@imp/mcp';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
-import { createImpClient } from '@zgeoff/imp-client';
-import { buildStubAfter } from '../../../mcp/src/test-utils/build-stub-after';
-import { buildStubRepeat } from '../../../mcp/src/test-utils/build-stub-repeat';
-import { createMcpServer } from '../../../mcp/src/test-utils/create-mcp-server';
-import { buildApiListenOptions } from '../api-listen-options';
-import { loadConfig } from '../config';
-import { createImpd } from '../create-impd';
-import { createImage } from '../db/images';
-import { findImpByName } from '../db/imps';
-import { openDatabase } from '../db/open-database';
+import { buildApiListenOptions } from '@imp/daemon/src/api-listen-options';
+import { loadConfig } from '@imp/daemon/src/config';
+import { createImpd } from '@imp/daemon/src/create-impd';
+import { createImage } from '@imp/daemon/src/db/images';
+import { findImpByName } from '@imp/daemon/src/db/imps';
+import { openDatabase } from '@imp/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '../storage/data-layout';
-import { createXfsBackend } from '../storage/xfs-backend';
-import { buildMockNewImage } from '../test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
-import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
-import { buildStubVmm } from '../test-utils/build-stub-vmm';
-import { findFreePorts } from '../test-utils/find-free-ports';
-import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
+} from '@imp/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '@imp/daemon/src/test-utils/build-stub-exec-guest';
+import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { startStubExecAgent } from '@imp/daemon/src/test-utils/start-stub-exec-agent';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { createImpClient } from '@zgeoff/imp-client';
+import { createImpGuard } from '../imp-guard';
+import { buildStubAfter } from '../test-utils/build-stub-after';
+import { buildStubRepeat } from '../test-utils/build-stub-repeat';
+import { createMcpServer } from '../test-utils/create-mcp-server';
 
 // impd's real app on a loopback port for an exec's socket, a root client,
 // `stack`, whose releases run before impd stops, and an MCP server whose
