@@ -522,16 +522,25 @@ jobs:
           mkdir -p tap/Formula
           formula=scripts/release/build-formula.sh
           [ -f "$formula" ] || formula=scripts/build-formula.sh
-          "$formula" "$VERSION" dist/SHA256SUMS > tap/Formula/impz.rb
+          "$formula" "$VERSION" dist/SHA256SUMS > formula.rb
+          # Homebrew loads a formula only from the file its class names, and
+          # a tag from before the rename to impz generates class Imp: imp.rb
+          class=$(sed -n 's/^class \([A-Za-z0-9]*\) < Formula$/\1/p' formula.rb)
+          name=$(printf '%s' "$class" | sed 's/\([a-z0-9]\)\([A-Z]\)/\1-\2/g' | tr '[:upper:]' '[:lower:]')
+          if [ -z "$name" ]; then
+            echo "$formula printed no formula class" >&2
+            exit 1
+          fi
+          mv formula.rb "tap/Formula/$name.rb"
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/impz.rb
+          git add "Formula/$name.rb"
           if git diff --cached --quiet; then
             echo "the formula is at $VERSION already"
             exit 0
           fi
-          git commit -m "impz $VERSION"
+          git commit -m "$name $VERSION"
           git pull --rebase
           git push
 
