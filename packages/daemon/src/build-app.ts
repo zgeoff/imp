@@ -22,11 +22,10 @@ import { formatCaller, isCallerAllowed } from './auth/caller';
 import type { Caller } from './auth/caller';
 import { createLogouts } from './auth/logouts';
 import type { Revocations } from './auth/revocations';
-import { createSessionRoutes } from './auth/session-routes';
 import { readBearer } from './auth/token-store';
+import { buildDashboardRoutes } from './build-dashboard-routes';
 import { buildRouter, toApiImage } from './build-router';
 import type { RouterDeps } from './build-router';
-import { DASHBOARD_PATH, createDashboardFiles } from './dashboard/dashboard-files';
 import { buildAuditedBackend } from './exec/audited-backend';
 import { buildGrantedBackend } from './exec/exec-grant';
 import type { ExecGrant } from './exec/exec-grant';
@@ -274,14 +273,13 @@ export function buildApp(deps: AppDeps) {
     challenge: `Bearer resource_metadata="${deps.oauth.issuer}${PROTECTED_RESOURCE_PATH}/mcp", scope="read"`,
   });
 
-  const sessionRoutes = createSessionRoutes({
+  const dashboardRoutes = buildDashboardRoutes({
     tokens: deps.tokens,
     rootToken: deps.rootToken,
     now: deps.now,
     onLogout: logouts.logOut,
+    dashboardDir: deps.config.dashboardDir,
   });
-
-  const dashboard = createDashboardFiles(deps.config.dashboardDir);
 
   const app = new Elysia({ websocket: EXEC_SOCKET_OPTIONS })
     .get('/health', () => ({
@@ -289,8 +287,7 @@ export function buildApp(deps: AppDeps) {
       ready: deps.isReady(),
       warnings: buildHealthWarnings(deps.imps.readRebootReason(), deps.storage.readWarnings()),
     }))
-    .post('/auth/login', (context) => sessionRoutes.login(context.request), { parse: 'none' })
-    .post('/auth/logout', (context) => sessionRoutes.logout(context.request), { parse: 'none' })
+    .use(dashboardRoutes)
 
     // parse: 'none' leaves the body unread for oRPC
     .all(
@@ -535,12 +532,7 @@ export function buildApp(deps: AppDeps) {
         entry?.forget();
         tunnels.delete(ws.id);
       },
-    })
-
-    // under its own prefix, so no dashboard route can shadow the API's
-    .get('/', () => Response.redirect(DASHBOARD_PATH, 302))
-    .get(DASHBOARD_PATH, (context) => dashboard.serve(context.request))
-    .get(`${DASHBOARD_PATH}*`, (context) => dashboard.serve(context.request));
+    });
 
   return {
     app,
