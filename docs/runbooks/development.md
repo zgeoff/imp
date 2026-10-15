@@ -223,9 +223,8 @@ After you change the agent protocol's schema, `proto/imp/agent/v1/agent.proto`, 
 `protoc-gen-go` from the agent's `go.mod`, so Go must be on `PATH`), impd's TypeScript types and
 `docs/reference/agent-protocol.md`. CI runs it again and fails while the committed output differs.
 
-The property tests (`*.property.test.ts`) use fast-check. On a failure it prints the seed and the
-path of the shrunk case. Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay
-the case.
+The property tests use fast-check. On a failure it prints the seed and the path of the shrunk case.
+Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay the case.
 
 ## Dashboard tests
 

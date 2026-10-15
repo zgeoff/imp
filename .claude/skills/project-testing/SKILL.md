@@ -142,16 +142,22 @@ closure that makes a per-test imp directory under the test's temp root from a na
 The closure only composes the production path helpers with `mkdirSync`, so it holds no logic that
 could fail without a test of its own.
 
+The `setupTest()` of `storage/zfs/zfs-backend.test.ts` builds the fake pool's backends and returns
+`createPoolBackend`, which the real-pool tests call: it makes the test's own dataset on the real
+pool with `createZfsTestDataset` and returns a backend on it, with a `startBackend` for a new impd
+on the same dataset.
+
 `packages/daemon/src/create-impd.test.ts` returns its stack as `ctx.stack`.
 `packages/test-utils/src/run-child-tests.ts` (`runChildTests(dir, source, timeoutMs = 4000)`) runs
 one test file in a child `bun test` with `dir` as its working and temp dir, and kills it at
 `timeoutMs`.
 
 Plain `bun test` does not match `*.e2e.ts` or `*.pebble.ts`; each of those runs only when its `./`
-path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain `bun test`
-and skip unless their variables are set. The `*.host.test.ts` files and
-`host/scripts/setup-net.test.ts` load too, and each namespace test skips where its probe fails;
-`bun run test:host` runs exactly those files.
+path is given. The real-pool tests and the small-filesystem tests load in plain `bun test` and skip
+unless their variables are set. The host networking tests load too, and each namespace test skips
+where its probe fails. They sit in `egress/egress-ruleset.test.ts`,
+`test-utils/run-in-netns.test.ts`, `test-utils/build-stub-public-network.test.ts` and
+`host/scripts/setup-net.test.ts`, and `bun run test:host` runs exactly those files.
 
 ## End-to-end harness
 
@@ -407,13 +413,14 @@ child that inherits them works on this checkout whatever its `-C` says.
   util-linux does, its `umount -R` refuses a dir that is not itself a mount.
   `test-utils/build-stub-move-stream.ts` (`buildStubMoveStream`) is a peer's move stream: a source's
   bytes, then an `onEnd` hook and a close, or a `failAtEnd` error.
-- **The real-pool tests.** `zfs-backend.real.test.ts` and `create-zfs-moves.test.ts` skip unless
-  `readZfsTestPool()` (`test-utils/read-zfs-test-pool.ts`) finds `IMP_TEST_ZFS_ROOT` (a dataset) and
-  `IMP_TEST_ZFS_DIR` (its mount dir) both set. Each test makes its own dataset with
-  `createZfsTestDataset`: a new `mkdtemp` dir under the mount dir names it, a dataset of that name
-  that `zfs list` already shows is refused untouched, and the caller's stack releases only what was
-  made (`umount -R` of the dir, `zfs destroy -R`, then the empty dir). Its tests run it against
-  `buildStubZfs`. `test-utils/write-synced-file.ts` fsyncs a disk file before a snapshot.
+- **The real-pool tests.** The real-pool tests of `zfs-backend.test.ts`, which follow its tests on
+  the fake, and `create-zfs-moves.test.ts` skip unless `readZfsTestPool()`
+  (`test-utils/read-zfs-test-pool.ts`) finds `IMP_TEST_ZFS_ROOT` (a dataset) and `IMP_TEST_ZFS_DIR`
+  (its mount dir) both set. Each test makes its own dataset with `createZfsTestDataset`: a new
+  `mkdtemp` dir under the mount dir names it, a dataset of that name that `zfs list` already shows
+  is refused untouched, and the caller's stack releases only what was made (`umount -R` of the dir,
+  `zfs destroy -R`, then the empty dir). Its tests run it against `buildStubZfs`.
+  `test-utils/write-synced-file.ts` fsyncs a disk file before a snapshot.
 - **`scripts/test-zfs.sh`** runs as root. It makes a sparse-file pool `imptest<pid>` of
   `IMP_ZFS_TEST_GIB` (default 4) under `IMP_ZFS_TEST_DIR` (default a new temp dir; a given dir may
   exist), mounts `<pool>/imp` with a legacy mount on `<dir>/mnt`, runs
@@ -706,7 +713,7 @@ Paths are under `packages/daemon/src/` unless they start with `e2e/`, `scripts/`
 7. The shell tests in `scripts/` and `deploy/`: a stub on a temp `PATH` logs each call to one file
    and answers from a bash script the test gives it. `run-sourced-function.ts` beside it calls a
    function of a sourced script with only `PATH` and the variables a test passes.
-8. Bash that `egress/egress-ruleset.host.test.ts` runs in a mount and network namespace.
+8. Bash that the host tests of `egress/egress-ruleset.test.ts` run in a mount and network namespace.
 9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
 10. `createImpTest`'s default `runNft` still records scripts for the suites that use it.
 11. An MSW handler a test adds with `server.use`; an unissued refresh token gets `invalid_grant`.
@@ -718,7 +725,7 @@ Paths are under `packages/daemon/src/` unless they start with `e2e/`, `scripts/`
     next read, for the memory controller. `buildStubElasticGuest` unplugs one step per read, for
     `memory/shrink-guest.ts`. The last two refuse a size that is not whole 2 MiB blocks within the
     region, with Firecracker's 400.
-14. `governor/ram-governor.property.test.ts` draws its cases from
+14. The property tests of `governor/ram-governor.test.ts` draw their cases from
     `test-utils/build-stub-governed-host-arbitraries.ts`. Each case builds its own host and
     governor, which hold nothing to release.
 15. MSW handlers over `@msw/data` collections, built fresh in each test and registered with
@@ -828,8 +835,9 @@ without it. Its image factory is the api's, `packages/api/src/test-utils/build-m
 (`buildMockImage`).
 
 Host networking runs the real tools: `host/scripts/setup-net.test.ts` runs
-`host/scripts/setup-net.sh` with `iptables`, and `egress/egress-ruleset.host.test.ts` applies impd's
-ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in-netns.ts`.
+`host/scripts/setup-net.sh` with `iptables`, and the host tests of `egress/egress-ruleset.test.ts`
+apply impd's ruleset with `nft`, each in a fresh network namespace through
+`test-utils/run-in-netns.ts`.
 
 The Pebble suite, `https/acme/acme-issuer.pebble.ts`, starts its own Pebble and challtestsrv for
 each test through `e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
@@ -945,8 +953,8 @@ file leaves every host on its real origin.
 2. To mount the small filesystem.
 3. Passwordless, for the `registry` suite.
 4. For `tailscale` and `moves-tailnet`.
-5. Optional: `packages/cli/src/image/run-image-build.docker.test.ts` runs the real `docker buildx`
-   and skips when it is missing.
+5. Optional: `packages/cli/src/image/run-image-build.test.ts` runs the real `docker buildx` and
+   skips when it is missing.
 
 - `IMP_HOST_TESTS=required` makes the `canUnshare` probe (`packages/daemon/src/test-utils/`) of each
   host test true, so a missing tool or namespace fails the test instead of skipping it.
