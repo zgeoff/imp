@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
@@ -6,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@imp/api';
 import { buildMockBrokerRule } from '@imp/api/test-utils/build-mock-broker-rule';
+import { buildMockOAuthConfig } from '@imp/api/test-utils/build-mock-oauth-config';
 import { server } from '@imp/test-utils/mock-server';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
@@ -26,6 +26,7 @@ import {
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubBrokerGuest } from '../test-utils/build-stub-broker-guest';
+import { buildStubBrokerTokenEndpoint } from '../test-utils/build-stub-broker-token-endpoint';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -40,6 +41,8 @@ import { loadOrCreateBrokerCa } from './broker-ca';
 // The broker end to end on loopback: with IMP_SUBNET 127.0.0.0/16, curl
 // bound to 127.0.0.2 is slot 0's guest, and 127.0.0.1 its gateway. A fake
 // upstream serves the granted host through the test-upstreams file.
+
+// An oauth secret's token endpoint is an MSW handler; every token is made up.
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -1285,4 +1288,261 @@ test('it applies a filter given to an existing grant from the next request on', 
   expect(ctx.seen).toStrictEqual([
     { method: 'GET', path: '/user', authorization: 'Bearer ghp_real', bodyBytes: 0 },
   ]);
+});
+
+test('it sends the current access token to the granted host', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.example.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/v1', () => new Response('from the api'));
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 3600,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh-0',
+    rules: [buildMockBrokerRule({ host: 'api.example.com' })],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'codex');
+
+  const result = await ctx.guest.curl('https://api.example.com/v1', [
+    '-H',
+    'Authorization: Bearer imp-broker-placeholder',
+  ]);
+
+  expect(result).toStrictEqual({ code: 0, stdout: 'from the api', stderr: '' });
+
+  expect(ctx.seen).toStrictEqual([
+    { method: 'GET', path: '/v1', authorization: 'Bearer fake-access-1', bodyBytes: 0 },
+  ]);
+});
+
+test('it sends the new access token after a refresh that used the rotated refresh token', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.example.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/v2', () => new Response('from the api'));
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 3600,
+  });
+
+  endpoint.issue('fake-refresh-1', {
+    access_token: 'fake-access-2',
+    refresh_token: 'fake-refresh-2',
+    expires_in: 3600,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh-0',
+    rules: [buildMockBrokerRule({ host: 'api.example.com' })],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'codex');
+  await ctx.impd.broker.refreshSecret('codex');
+  await ctx.guest.curl('https://api.example.com/v2');
+
+  expect(ctx.seen).toStrictEqual([
+    { method: 'GET', path: '/v2', authorization: 'Bearer fake-access-2', bodyBytes: 0 },
+  ]);
+
+  expect(endpoint.requests.map((request) => request.refreshToken)).toStrictEqual([
+    'fake-refresh-0',
+    'fake-refresh-1',
+  ]);
+});
+
+test('it gives no credential for a secret with no access token', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.example.com': ctx.upstreamOrigin } }),
+  );
+
+  // no answer is issued, so the first sign-in gets invalid_grant
+  server.use(buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token').handler);
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh-0',
+    rules: [buildMockBrokerRule({ host: 'api.example.com' })],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'codex');
+
+  const result = await ctx.guest.curl('https://api.example.com/v1', ['-w', '%{http_code}']);
+
+  expect(result).toStrictEqual({
+    code: 0,
+    stdout: 'no credential is granted for api.example.com\n403',
+    stderr: '',
+  });
+
+  expect(ctx.seen).toStrictEqual([]);
+});
+
+test('it keeps sending the valid access token of a secret that needs a new sign-in', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.example.com': ctx.upstreamOrigin } }),
+  );
+
+  ctx.answers.set('/v2', () => new Response('from the api'));
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  // the sign-in works; the refresh token it returns is dead by the refresh
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 3600,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh-0',
+    rules: [buildMockBrokerRule({ host: 'api.example.com' })],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'codex');
+
+  const refreshed = await ctx.impd.broker.refreshSecret('codex');
+
+  await ctx.guest.curl('https://api.example.com/v2');
+
+  expect(refreshed.oauth?.status).toBe('needs_login');
+
+  expect(ctx.seen).toStrictEqual([
+    { method: 'GET', path: '/v2', authorization: 'Bearer fake-access-1', bodyBytes: 0 },
+  ]);
+});
+
+test('it answers a websocket upgrade 426 and never reaches the upstream', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.example.com': ctx.upstreamOrigin } }),
+  );
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-1', expires_in: 3600 });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh-0',
+    rules: [buildMockBrokerRule({ host: 'api.example.com' })],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'codex');
+
+  const result = await ctx.guest.curl('https://api.example.com/socket', [
+    '-H',
+    'Connection: Upgrade',
+    '-H',
+    'Upgrade: websocket',
+    '-w',
+    '%{http_code}',
+  ]);
+
+  expect(result).toStrictEqual({
+    code: 0,
+    stdout: 'websocket upgrades are not supported through the broker\n426',
+    stderr: '',
+  });
+
+  expect(ctx.seen).toStrictEqual([]);
+});
+
+test('it refreshes through a token host that the test-upstreams file routes', async () => {
+  const ctx = await setupTest();
+
+  const refreshTokens: string[] = [];
+
+  // the token host over TLS the broker verifies with the file's CA
+  const tokenHost = await startStubBrokerTlsUpstream(ctx.stack, {
+    dir: join(ctx.dataDir, 'token-host'),
+    fetch: async (request) => {
+      const text = await request.text();
+
+      const form = new URLSearchParams(text);
+
+      refreshTokens.push(form.get('refresh_token') ?? '');
+
+      return Response.json({
+        access_token: 'fake-access-1',
+        refresh_token: 'fake-refresh-1',
+        expires_in: 3600,
+      });
+    },
+  });
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: tokenHost.caPem, upstreams: { 'auth.example.com': tokenHost.origin } }),
+  );
+
+  await ctx.impd.broker.addSecret({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh-0',
+    rules: [buildMockBrokerRule({ host: 'api.example.com' })],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+  });
+
+  const refreshed = await ctx.impd.broker.refreshSecret('codex');
+
+  expect(refreshed.oauth?.status).toBe('ready');
+  expect(refreshTokens).toStrictEqual(['fake-refresh-0', 'fake-refresh-1']);
 });
