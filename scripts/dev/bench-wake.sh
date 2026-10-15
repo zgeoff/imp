@@ -9,7 +9,7 @@
 # It fails when the median wake passes --limit-ms (default 500). A slow wake
 # takes 700-1100 ms on an affected host; a normal one 100-200 ms.
 #
-# It drives impd through the imp CLI, so it runs against any host: set
+# It drives impd through the impz CLI, so it runs against any host: set
 # IMP_URL and IMP_TOKEN, or use the saved login. IMP_BIN picks the CLI
 # (default: scripts/impz from this checkout). To see the effect itself, run
 # impd with IMP_SLEEP_MIN_GUEST_UPTIME_MS=0; with the default, impd waits
@@ -35,14 +35,14 @@ while [ $# -gt 0 ]; do
   shift 2
 done
 
-imp_bin=${IMP_BIN:-$(dirname "$0")/../imp}
+imp_bin=${IMP_BIN:-$(dirname "$0")/../impz}
 name=bench-wake-$$
 
 now_ms() {
   echo $(($(date +%s%N) / 1000000))
 }
 
-imp() {
+impz() {
   "$imp_bin" "$@" >/dev/null
 }
 
