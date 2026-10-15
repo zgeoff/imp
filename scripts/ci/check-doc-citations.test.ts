@@ -111,6 +111,38 @@ test('it checks a blob URL into this repo on any ref', async () => {
   ]);
 });
 
+test('it checks a blob URL on a ref with a slash in it', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(
+    join(ctx.root, 'src/a.ts'),
+    '// https://github.com/zgeoff/impz/blob/feature/kettle-lid/docs/guides/teapots.md\n',
+  );
+
+  expect(checkDocCitations(ctx.root, ['src/a.ts'])).toStrictEqual([
+    { file: 'src/a.ts', line: 1, message: 'docs/guides/teapots.md does not exist' },
+  ]);
+});
+
+test('it takes no heading or id from an HTML comment', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(
+    join(ctx.root, 'docs/page.md'),
+    '# Page\n\n<!--\n## Old section\n<a id="old-spot"></a>\n-->\n<!-- x --> ## Kept\n',
+  );
+
+  await Bun.write(
+    join(ctx.root, 'src/a.ts'),
+    '// docs/page.md#old-section docs/page.md#old-spot docs/page.md#page\n',
+  );
+
+  expect(checkDocCitations(ctx.root, ['src/a.ts'])).toStrictEqual([
+    { file: 'src/a.ts', line: 1, message: 'docs/page.md has no heading #old-section' },
+    { file: 'src/a.ts', line: 1, message: 'docs/page.md has no heading #old-spot' },
+  ]);
+});
+
 test('it passes over a docs folder of another path or another repo', async () => {
   const ctx = await setupTest();
 

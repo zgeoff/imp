@@ -13,9 +13,9 @@ export interface Problem {
 // `docs/guides/tokens.md#scopes` or `docs/reference`, not a docs/ folder of another path
 const DOC_PATH = /(?<![\w/.-])docs(?:\/[\w.-]+)+(?:#[\w-]+)?/gu;
 
-// this repo's docs by URL, on any ref: https://github.com/zgeoff/impz/blob/main/docs/…
+// this repo's docs by URL, on any ref, one with a slash in it too: https://github.com/zgeoff/impz/blob/main/docs/…
 const BLOB_URL =
-  /github\.com\/zgeoff\/impz\/(?:blob|tree)\/[^/\s]+\/(?<ref>docs(?:\/[\w.-]+)+(?:#[\w-]+)?)/gu;
+  /github\.com\/zgeoff\/impz\/(?:blob|tree)\/\S*?\/(?<ref>docs(?:\/[\w.-]+)+(?:#[\w-]+)?)/gu;
 
 // `files` are paths relative to `root`, the repository root that every citation starts from
 export function checkDocCitations(root: string, files: readonly string[]): Problem[] {
@@ -97,8 +97,14 @@ function collectAnchors(markdown: string): Set<string> {
   const start = lines[0] === '---' ? lines.indexOf('---', 1) + 1 : 0;
   let fence = '';
   let previous = '';
+  let inComment = false;
 
-  for (const line of lines.slice(start)) {
+  for (const rawLine of lines.slice(start)) {
+    const visible = fence === '' ? splitComments(rawLine, inComment) : null;
+    const line = visible?.kept ?? rawLine;
+
+    inComment = visible?.isOpen ?? inComment;
+
     const marker = /^\s*(?<marker>`{3,}|~{3,})(?<rest>.*)$/u.exec(line)?.groups;
 
     if (marker !== undefined) {
@@ -130,6 +136,29 @@ function collectAnchors(markdown: string): Set<string> {
   }
 
   return anchors;
+}
+
+// GitHub never renders an HTML comment, so a heading inside one has no anchor: the line without
+// its comments, and whether a comment is still open at its end
+function splitComments(line: string, inComment: boolean): { kept: string; isOpen: boolean } {
+  let kept = '';
+  let rest = line;
+  let isOpen = inComment;
+
+  while (rest !== '') {
+    const delimiter = isOpen ? '-->' : '<!--';
+    const end = rest.indexOf(delimiter);
+
+    if (end === -1) {
+      return { kept: isOpen ? kept : kept + rest, isOpen };
+    }
+
+    kept += isOpen ? '' : rest.slice(0, end);
+    rest = rest.slice(end + delimiter.length);
+    isOpen = !isOpen;
+  }
+
+  return { kept, isOpen };
 }
 
 // a fence closes on a marker of its own character, at least as long, with nothing after it
