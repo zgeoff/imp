@@ -45,7 +45,7 @@ export const HOST_BUILD_WARNING =
 // what a streamed add or build hears of: `signal` aborts when the client
 // goes, `setPhase` hears each phase as it starts, `output` a build's lines
 // and steps, and `setBuilder` the builder imp an isolated build runs in
-export interface ImageOpOptions {
+interface ImageOpOptions {
   readonly signal?: AbortSignal;
   readonly setPhase?: (phase: ImageBuildPhase) => void;
   readonly output?: BuildOutput | undefined;
