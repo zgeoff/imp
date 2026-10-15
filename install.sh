@@ -48,14 +48,31 @@ case "$tag" in
   *) fail "no release found at $releases (got '$tag')" ;;
 esac
 
-asset=impz-$os-$arch
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "impz: downloading $asset $tag"
-curl -fsSL "$releases/download/$tag/$asset" -o "$tmp/$asset" || fail "cannot download $asset $tag"
 curl -fsSL "$releases/download/$tag/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
   fail "cannot download SHA256SUMS for $tag"
+
+# The CLI was named imp before impz, and a release from before the rename
+# ships imp-<platform>, attested by the repository under its old name; such a
+# release installs as imp, as it did then.
+listed() {
+  awk -v name="$1-$os-$arch" '$2 == name { found = 1 } END { exit !found }' "$tmp/SHA256SUMS"
+}
+if listed impz; then
+  name=impz
+  repo=zgeoff/impz
+elif listed imp; then
+  name=imp
+  repo=zgeoff/imp
+else
+  fail "SHA256SUMS for $tag lists no impz-$os-$arch"
+fi
+asset=$name-$os-$arch
+
+echo "impz: downloading $asset $tag"
+curl -fsSL "$releases/download/$tag/$asset" -o "$tmp/$asset" || fail "cannot download $asset $tag"
 
 want=$(awk -v name="$asset" '$2 == name { print $1 }' "$tmp/SHA256SUMS")
 if command -v sha256sum >/dev/null 2>&1; then
@@ -63,28 +80,27 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
   got=$(shasum -a 256 "$tmp/$asset" | cut -d' ' -f1)
 fi
-[ -n "$want" ] || fail "SHA256SUMS for $tag lists no $asset"
 [ "$got" = "$want" ] || fail "$asset does not match SHA256SUMS for $tag; nothing installed"
 
 # gh asks the GitHub API for the attestation, which needs a login
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh attestation verify "$tmp/$asset" -R zgeoff/impz >/dev/null ||
-    fail "could not verify provenance of $asset from zgeoff/impz; nothing installed"
+  gh attestation verify "$tmp/$asset" -R "$repo" >/dev/null ||
+    fail "could not verify provenance of $asset from $repo; nothing installed"
   echo "impz: provenance verified"
 elif command -v gh >/dev/null 2>&1; then
   echo "impz: gh is not logged in; skipped the provenance check"
 fi
 
-# copied next to the target first, so the rename replaces an old impz in one
-# step even when the temp directory is on another filesystem
+# copied next to the target first, so the rename replaces an old binary in
+# one step even when the temp directory is on another filesystem
 mkdir -p "$dir"
-cp "$tmp/$asset" "$dir/.impz.tmp"
-chmod +x "$dir/.impz.tmp"
-mv "$dir/.impz.tmp" "$dir/impz"
+cp "$tmp/$asset" "$dir/.$name.tmp"
+chmod +x "$dir/.$name.tmp"
+mv "$dir/.$name.tmp" "$dir/$name"
 
 # on its own line, so set -e stops here when the binary does not run
-version=$("$dir/impz" --version)
-echo "impz: installed $version to $dir/impz"
+version=$("$dir/$name" --version)
+echo "impz: installed $version to $dir/$name"
 
 case ":$PATH:" in
   *":$dir:"*) ;;
@@ -92,6 +108,6 @@ case ":$PATH:" in
 esac
 
 # the CLI was named imp before impz; the old binary is left for its owner
-if [ -e "$dir/imp" ]; then
+if [ "$name" = impz ] && [ -e "$dir/imp" ]; then
   echo "impz: $dir/imp is the CLI from before its rename to impz; remove it once nothing calls it"
 fi

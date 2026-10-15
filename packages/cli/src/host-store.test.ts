@@ -33,6 +33,43 @@ test('#readHostConfig reads no hosts when there is no config file', () => {
   expect(readHostConfig(ctx.env)).toStrictEqual({ current: null, hosts: {} });
 });
 
+test('#readHostConfig reads the hosts saved before the rename to impz, from their new place', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.env.XDG_CONFIG_HOME, 'imp'));
+
+  writeFileSync(
+    join(ctx.env.XDG_CONFIG_HOME, 'imp', 'config.json'),
+    '{"current":"home","hosts":{"home":{"url":"https://home.example","token":"secret"}}}\n',
+    { mode: 0o600 },
+  );
+
+  const warn = mock<(line: string) => void>();
+
+  expect(readHostConfig(ctx.env, warn)).toStrictEqual({
+    current: 'home',
+    hosts: { home: { url: 'https://home.example', token: 'secret' } },
+  });
+
+  expect(warn.mock.calls).toStrictEqual([
+    [`impz: moved ${join(ctx.env.XDG_CONFIG_HOME, 'imp', 'config.json')} to ${ctx.path}`],
+  ]);
+});
+
+test('#writeHostConfig keeps the token file saved before the rename to impz', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.env.XDG_CONFIG_HOME, 'imp'));
+  writeFileSync(join(ctx.env.XDG_CONFIG_HOME, 'imp', 'token'), 'file-token\n');
+
+  writeHostConfig(ctx.env, {
+    current: 'home',
+    hosts: { home: { url: 'https://home.example', token: 'secret' } },
+  });
+
+  expect(readdirSync(join(ctx.path, '..')).toSorted()).toStrictEqual(['config.json', 'token']);
+});
+
 test('#writeHostConfig writes mode 0600 in a 0700 directory that holds only the config', () => {
   const ctx = setupTest();
 

@@ -1,11 +1,12 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@impz/test-utils/invariant';
 import { buildStubRegistryDocker } from '../../scripts/test-utils/build-stub-registry-docker';
 import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
 import { parseReleaseWorkflow } from '../../scripts/test-utils/parse-release-workflow';
+import { createGitFreeEnv } from './git-env';
 
 // The base job publishes imp-base, which other images pin by digest, so a published tag must
 // never move (docs/runbooks/releasing.md). The Plan step's tests run its shell as Actions does (bash -eo
@@ -658,4 +659,230 @@ test('it fails the job, moving nothing, when the newest release cannot be read',
   expect(readFileSync(gh.calls, 'utf8')).toBe(
     'gh release view --repo zgeoff/impz --json tagName --jq .tagName\n',
   );
+});
+
+test('it writes the formula of a tag from before the rename to imp.rb, the file its class names', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).tap.steps.find((candidate) => candidate.name === 'Update the formula')?.run;
+
+  invariant(step);
+
+  const gitEnv = { ...createGitFreeEnv(process.env), HOME: ctx.dir };
+
+  const runGit = (...args: readonly string[]) =>
+    Bun.spawnSync(['git', ...args], { env: gitEnv }).stdout.toString();
+
+  // the tap as it is: a formula for each name, imp's from before the rename
+  mkdirSync(join(ctx.dir, 'seed', 'Formula'), { recursive: true });
+
+  writeFileSync(
+    join(ctx.dir, 'seed', 'Formula', 'imp.rb'),
+    'class Imp < Formula\n  version "1.5.0"\nend\n',
+  );
+
+  writeFileSync(
+    join(ctx.dir, 'seed', 'Formula', 'impz.rb'),
+    'class Impz < Formula\n  version "2.0.0"\nend\n',
+  );
+
+  runGit('-C', join(ctx.dir, 'seed'), 'init', '-q', '-b', 'main');
+  runGit('-C', join(ctx.dir, 'seed'), 'add', '.');
+
+  runGit(
+    '-C',
+    join(ctx.dir, 'seed'),
+    '-c',
+    'user.name=seed',
+    '-c',
+    'user.email=seed@example.test',
+    'commit',
+    '-q',
+    '-m',
+    'seed',
+  );
+
+  runGit('clone', '-q', '--bare', join(ctx.dir, 'seed'), join(ctx.dir, 'tap.git'));
+
+  // the generator a tag from before the rename checks out, at its old path
+  mkdirSync(join(ctx.tree, 'scripts'), { recursive: true });
+
+  writeFileSync(
+    join(ctx.tree, 'scripts', 'build-formula.sh'),
+    '#!/bin/sh\nprintf \'class Imp < Formula\\n  version "%s"\\nend\\n\' "$1"\n',
+    { mode: 0o755 },
+  );
+
+  mkdirSync(join(ctx.tree, 'dist'));
+  writeFileSync(join(ctx.tree, 'dist', 'SHA256SUMS'), '');
+  rmSync(join(ctx.tree, 'scripts', 'release'), { recursive: true });
+
+  const gh = createStubBin(
+    ctx.dir,
+    'gh',
+    '[ "$1 $2" = "repo clone" ] && exec git clone -q "$STUB_TAP_REMOTE" "$4"\nexit 0',
+  );
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    cwd: ctx.tree,
+    env: {
+      ...gitEnv,
+      PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+      GH_TOKEN: 'tap-token',
+      TAP: 'zgeoff/homebrew-tap',
+      VERSION: '1.6.0',
+      STUB_TAP_REMOTE: join(ctx.dir, 'tap.git'),
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+
+  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'log', '-1', '--format=%s', 'main')).toBe(
+    'imp 1.6.0\n',
+  );
+
+  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'show', 'main:Formula/imp.rb')).toBe(
+    'class Imp < Formula\n  version "1.6.0"\nend\n',
+  );
+
+  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'show', 'main:Formula/impz.rb')).toBe(
+    'class Impz < Formula\n  version "2.0.0"\nend\n',
+  );
+});
+
+test('it writes the formula of a tag after the rename to impz.rb with the generator in scripts/release', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).tap.steps.find((candidate) => candidate.name === 'Update the formula')?.run;
+
+  invariant(step);
+
+  const gitEnv = { ...createGitFreeEnv(process.env), HOME: ctx.dir };
+
+  const runGit = (...args: readonly string[]) =>
+    Bun.spawnSync(['git', ...args], { env: gitEnv }).stdout.toString();
+
+  // the tap as it is: a formula for each name, imp's from before the rename
+  mkdirSync(join(ctx.dir, 'seed', 'Formula'), { recursive: true });
+
+  writeFileSync(
+    join(ctx.dir, 'seed', 'Formula', 'imp.rb'),
+    'class Imp < Formula\n  version "1.6.0"\nend\n',
+  );
+
+  writeFileSync(
+    join(ctx.dir, 'seed', 'Formula', 'impz.rb'),
+    'class Impz < Formula\n  version "2.0.0"\nend\n',
+  );
+
+  runGit('-C', join(ctx.dir, 'seed'), 'init', '-q', '-b', 'main');
+  runGit('-C', join(ctx.dir, 'seed'), 'add', '.');
+
+  runGit(
+    '-C',
+    join(ctx.dir, 'seed'),
+    '-c',
+    'user.name=seed',
+    '-c',
+    'user.email=seed@example.test',
+    'commit',
+    '-q',
+    '-m',
+    'seed',
+  );
+
+  runGit('clone', '-q', '--bare', join(ctx.dir, 'seed'), join(ctx.dir, 'tap.git'));
+
+  writeFileSync(
+    join(ctx.tree, 'scripts', 'release', 'build-formula.sh'),
+    readFileSync(new URL('../../scripts/release/build-formula.sh', import.meta.url)),
+    { mode: 0o755 },
+  );
+
+  mkdirSync(join(ctx.tree, 'dist'));
+
+  writeFileSync(
+    join(ctx.tree, 'dist', 'SHA256SUMS'),
+    ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
+      .map((platform) => `${'1'.repeat(64)}  impz-${platform}\n`)
+      .join(''),
+  );
+
+  const gh = createStubBin(
+    ctx.dir,
+    'gh',
+    '[ "$1 $2" = "repo clone" ] && exec git clone -q "$STUB_TAP_REMOTE" "$4"\nexit 0',
+  );
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    cwd: ctx.tree,
+    env: {
+      ...gitEnv,
+      PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+      GH_TOKEN: 'tap-token',
+      TAP: 'zgeoff/homebrew-tap',
+      VERSION: '2.0.1',
+      STUB_TAP_REMOTE: join(ctx.dir, 'tap.git'),
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+
+  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'log', '-1', '--format=%s', 'main')).toBe(
+    'impz 2.0.1\n',
+  );
+
+  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'show', 'main:Formula/impz.rb')).toStartWith(
+    'class Impz < Formula\n',
+  );
+
+  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'show', 'main:Formula/imp.rb')).toBe(
+    'class Imp < Formula\n  version "1.6.0"\nend\n',
+  );
+});
+
+test('it fails the job, moving no formula, when the generator prints no formula class', () => {
+  const ctx = setupTest();
+
+  const step = parseReleaseWorkflow(
+    readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).tap.steps.find((candidate) => candidate.name === 'Update the formula')?.run;
+
+  invariant(step);
+
+  writeFileSync(
+    join(ctx.tree, 'scripts', 'release', 'build-formula.sh'),
+    '#!/bin/sh\necho oops\n',
+    {
+      mode: 0o755,
+    },
+  );
+
+  mkdirSync(join(ctx.tree, 'dist'));
+  writeFileSync(join(ctx.tree, 'dist', 'SHA256SUMS'), '');
+
+  const gh = createStubBin(ctx.dir, 'gh', '[ "$1 $2" = "repo clone" ] && mkdir -p "$4"\nexit 0');
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
+    cwd: ctx.tree,
+    env: {
+      ...createGitFreeEnv(process.env),
+      HOME: ctx.dir,
+      PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
+      GH_TOKEN: 'tap-token',
+      TAP: 'zgeoff/homebrew-tap',
+      VERSION: '2.0.1',
+    },
+  });
+
+  expect({ exitCode: result.exitCode, stderr: result.stderr.toString() }).toStrictEqual({
+    exitCode: 1,
+    stderr: 'scripts/release/build-formula.sh printed no formula class\n',
+  });
+
+  expect(readdirSync(join(ctx.tree, 'tap', 'Formula'))).toStrictEqual([]);
 });

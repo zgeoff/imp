@@ -12,26 +12,24 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { resolveConfigDir } from './host-store';
-import type { CliEnv } from './host-store';
 
 // what the CLI keeps in its config directory: the saved hosts and the
 // fallback token (cli-config.ts)
-const CONFIG_FILES = ['config.json', 'token'] as const;
+const CONFIG_FILES: readonly string[] = ['config.json', 'token'];
 
-// The CLI kept its files in <config>/imp before its rename to impz.
+// Moves the files the CLI kept in <config>/imp before its rename into `dir`,
+// each only when `dir` lacks it, so a move that failed part way resumes on
+// the next call and never writes over a file impz has.
 export function updateLegacyConfig(
-  env: CliEnv,
+  dir: string,
   warn: (line: string) => void = console.error,
 ): void {
-  const dir = resolveConfigDir(env);
   const legacyDir = join(dirname(dir), 'imp');
 
-  if (isPresent(dir)) {
-    return;
-  }
-
-  const files = CONFIG_FILES.filter((name) => isPresent(join(legacyDir, name)));
+  // impz's own file first, so a complete config never needs the old path
+  const files = CONFIG_FILES.filter(
+    (name) => !isPresent(join(dir, name)) && checkLegacyFile(join(legacyDir, name), warn),
+  );
 
   if (files.length === 0) {
     return;
@@ -49,7 +47,7 @@ export function updateLegacyConfig(
     const to = join(dir, name);
 
     if (lstatSync(from).isSymbolicLink()) {
-      symlinkSync(planLinkTarget(readlinkSync(from), realLegacyDir, realDir, files), to);
+      symlinkSync(planLinkTarget(readlinkSync(from), realLegacyDir, realDir), to);
       unlinkSync(from);
     } else {
       writeMovedFile(from, to);
@@ -75,29 +73,46 @@ function writeMovedFile(from: string, to: string): void {
       throw error;
     }
 
-    copyFileSync(from, to);
-    chmodSync(to, statSync(from).mode & 0o777);
+    // copied beside the target first, so a copy cut short never stands as
+    // the moved file that a later call keeps
+    const temp = `${to}.tmp`;
+
+    copyFileSync(from, temp);
+    chmodSync(temp, statSync(from).mode & 0o777);
+    renameSync(temp, to);
     unlinkSync(from);
   }
 }
 
 // a link's target as seen from the new directory: an absolute one as it was,
 // a moved file at its new place, anything else where it was
-function planLinkTarget(
-  target: string,
-  legacyDir: string,
-  dir: string,
-  files: readonly string[],
-): string {
+function planLinkTarget(target: string, legacyDir: string, dir: string): string {
   if (isAbsolute(target)) {
     return target;
   }
 
   const absolute = resolve(legacyDir, target);
-  const isMoved = dirname(absolute) === legacyDir && files.includes(basename(absolute));
+  const isMoved = dirname(absolute) === legacyDir && CONFIG_FILES.includes(basename(absolute));
   const file = isMoved ? join(dir, basename(absolute)) : absolute;
 
   return relative(dir, file);
+}
+
+// whether an old file is there to move; a path that cannot be looked up is
+// noted and left, so it never stops a call that reads impz's own config
+function checkLegacyFile(path: string, warn: (line: string) => void): boolean {
+  try {
+    return isPresent(path);
+  } catch (error) {
+    // an `imp` that is a file, not a directory, holds no old config
+    if (error instanceof Error && 'code' in error && error.code === 'ENOTDIR') {
+      return false;
+    }
+
+    warn(`impz: cannot look for ${path} to move it: ${String(error)}`);
+
+    return false;
+  }
 }
 
 // lstat, so a symlink counts even when its target is gone

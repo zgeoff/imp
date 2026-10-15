@@ -36,6 +36,11 @@ async function setupTest() {
 
   stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
+  // the subprocess's own HOME, so no run reads the developer's config
+  const home = await mkdtemp(join(tmpdir(), 'mcp-stdio-home-'));
+
+  stack.defer(() => rm(home, { recursive: true, force: true }));
+
   const db = await openDatabase(':memory:');
 
   stack.defer(() => db.destroy());
@@ -147,6 +152,7 @@ async function setupTest() {
   return {
     db,
     dataDir,
+    home,
     url,
     main: join(import.meta.dir, '..', 'main.ts'),
     client: createImpClient({ url, token: 'root-token' }),
@@ -158,7 +164,12 @@ test('it answers initialize over stdio, and nothing for a notification', async (
   const ctx = await setupTest();
 
   const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
-    env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: ctx.home,
+      IMP_URL: ctx.url,
+      IMP_TOKEN: 'root-token',
+    },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -215,7 +226,12 @@ test('it lists its tools over stdio', async () => {
   const ctx = await setupTest();
 
   const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
-    env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: ctx.home,
+      IMP_URL: ctx.url,
+      IMP_TOKEN: 'root-token',
+    },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -251,7 +267,12 @@ test('it answers an unknown method over stdio with method not found', async () =
   const ctx = await setupTest();
 
   const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
-    env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: ctx.home,
+      IMP_URL: ctx.url,
+      IMP_TOKEN: 'root-token',
+    },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -286,7 +307,12 @@ test('it creates an imp through impd over stdio', async () => {
   const ctx = await setupTest();
 
   const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
-    env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: ctx.home,
+      IMP_URL: ctx.url,
+      IMP_TOKEN: 'root-token',
+    },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -355,7 +381,12 @@ test('it runs a command in the guest over stdio', async () => {
   });
 
   const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--prefix', 'agent-'], {
-    env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: ctx.home,
+      IMP_URL: ctx.url,
+      IMP_TOKEN: 'root-token',
+    },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -420,7 +451,12 @@ test('it stops a command still running in the guest when the client goes away', 
   });
 
   const proc = Bun.spawn(['bun', ctx.main, 'mcp', '--allow', 'box'], {
-    env: { ...process.env, IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: ctx.home,
+      IMP_URL: ctx.url,
+      IMP_TOKEN: 'root-token',
+    },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -466,7 +502,7 @@ test('it exits 2 without a guard and says how to choose one', async () => {
   const ctx = await setupTest();
 
   const proc = Bun.spawn(['bun', ctx.main, 'mcp'], {
-    env: { ...process.env, IMP_URL: 'http://127.0.0.1:1' },
+    env: { PATH: process.env['PATH'] ?? '', HOME: ctx.home, IMP_URL: 'http://127.0.0.1:1' },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',

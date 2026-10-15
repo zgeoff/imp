@@ -13,16 +13,25 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { canUpdateReadOnly } from '@impz/test-utils/can-update-read-only';
+import { updateReadOnly } from '@impz/test-utils/update-read-only';
 import { updateLegacyConfig } from './update-legacy-config';
 
+// `stack` makes a read-only tree writable again before the directory goes
 function setupTest() {
-  const dir = mkdtempSync(join(tmpdir(), 'impz-legacy-'));
+  const stack = new DisposableStack();
 
   onTestFinished(() => {
+    stack.dispose();
+  });
+
+  const dir = mkdtempSync(join(tmpdir(), 'impz-legacy-'));
+
+  stack.defer(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  return { dir };
+  return { dir, stack };
 }
 
 test('it moves the saved hosts and the token file from the old directory', () => {
@@ -34,7 +43,7 @@ test('it moves the saved hosts and the token file from the old directory', () =>
 
   const warn = mock<(line: string) => void>();
 
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, warn);
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
 
   expect(readFileSync(join(ctx.dir, 'impz', 'config.json'), 'utf8')).toBe(
     '{"current":null,"hosts":{}}\n',
@@ -52,7 +61,59 @@ test('it moves the saved hosts and the token file from the old directory', () =>
   ]);
 });
 
-test('it never moves over a directory impz has already', () => {
+test('it never looks up the old path when impz has both files', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+  writeFileSync(join(ctx.dir, 'impz', 'token'), 'file-token\n');
+
+  // a link to itself, so any lookup under the old path fails with ELOOP
+  symlinkSync('imp', join(ctx.dir, 'imp'));
+
+  const warn = mock<(line: string) => void>();
+
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+
+  expect(warn).not.toHaveBeenCalled();
+});
+
+test('it notes an old path it cannot look up and leaves the config impz has', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+
+  // a link to itself, so any lookup under the old path fails with ELOOP
+  symlinkSync('imp', join(ctx.dir, 'imp'));
+
+  const warn = mock<(line: string) => void>();
+
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+
+  const prefix = `impz: cannot look for ${join(ctx.dir, 'imp', 'token')} to move it: `;
+
+  expect(warn.mock.calls).toStrictEqual([
+    [expect.toSatisfy((line: string) => line.startsWith(prefix) && line.includes('ELOOP'))],
+  ]);
+
+  expect(readdirSync(join(ctx.dir, 'impz'))).toStrictEqual(['config.json']);
+});
+
+test('it reads an old path that is a file as holding no config', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'imp'), 'another tool\n');
+
+  const warn = mock<(line: string) => void>();
+
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+
+  expect(warn).not.toHaveBeenCalled();
+  expect(readdirSync(ctx.dir)).toStrictEqual(['imp']);
+});
+
+test('it never moves over a file impz has already', () => {
   const ctx = setupTest();
 
   mkdirSync(join(ctx.dir, 'imp'));
@@ -62,11 +123,72 @@ test('it never moves over a directory impz has already', () => {
 
   const warn = mock<(line: string) => void>();
 
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, warn);
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
 
   expect(readFileSync(join(ctx.dir, 'impz', 'config.json'), 'utf8')).toBe('new\n');
   expect(readFileSync(join(ctx.dir, 'imp', 'config.json'), 'utf8')).toBe('old\n');
   expect(warn).not.toHaveBeenCalled();
+});
+
+test.skipIf(!canUpdateReadOnly())(
+  'it finishes a move that failed after it made the directory, once the old one is writable again',
+  () => {
+    const ctx = setupTest();
+
+    mkdirSync(join(ctx.dir, 'imp'));
+    writeFileSync(join(ctx.dir, 'imp', 'config.json'), '{"current":null,"hosts":{}}\n');
+    writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+
+    const restore = updateReadOnly(ctx.stack, join(ctx.dir, 'imp'));
+
+    const failure: unknown = (() => {
+      try {
+        updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
+      } catch (error) {
+        return error;
+      }
+
+      return null;
+    })();
+
+    const leftBehind = readdirSync(join(ctx.dir, 'impz'));
+
+    restore();
+
+    const warn = mock<(line: string) => void>();
+
+    updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+
+    expect(failure).toMatchObject({ code: expect.toBeOneOf(['EACCES', 'EPERM']) });
+    expect(leftBehind).toStrictEqual([]);
+
+    expect(readFileSync(join(ctx.dir, 'impz', 'config.json'), 'utf8')).toBe(
+      '{"current":null,"hosts":{}}\n',
+    );
+
+    expect(readFileSync(join(ctx.dir, 'impz', 'token'), 'utf8')).toBe('file-token\n');
+    expect(existsSync(join(ctx.dir, 'imp'))).toBeFalse();
+
+    expect(warn.mock.calls).toStrictEqual([
+      [
+        `impz: moved ${join(ctx.dir, 'imp', 'config.json')} to ${join(ctx.dir, 'impz', 'config.json')}`,
+      ],
+      [`impz: moved ${join(ctx.dir, 'imp', 'token')} to ${join(ctx.dir, 'impz', 'token')}`],
+    ]);
+  },
+);
+
+test('it moves the file a part-way move left behind, beside the one it moved', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'imp'));
+  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+  updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
+
+  expect(readdirSync(join(ctx.dir, 'impz')).toSorted()).toStrictEqual(['config.json', 'token']);
+  expect(readFileSync(join(ctx.dir, 'impz', 'token'), 'utf8')).toBe('file-token\n');
 });
 
 test('it makes no directory when the old one holds neither file', () => {
@@ -74,7 +196,7 @@ test('it makes no directory when the old one holds neither file', () => {
 
   mkdirSync(join(ctx.dir, 'imp'));
   writeFileSync(join(ctx.dir, 'imp', 'notes.txt'), 'another tool\n');
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, mock<(line: string) => void>());
+  updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
 
   expect(readdirSync(ctx.dir)).toStrictEqual(['imp']);
 });
@@ -85,7 +207,7 @@ test('it leaves the old directory with whatever else it holds', () => {
   mkdirSync(join(ctx.dir, 'imp'));
   writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
   writeFileSync(join(ctx.dir, 'imp', 'notes.txt'), 'kept\n');
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, mock<(line: string) => void>());
+  updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
 
   expect(readdirSync(join(ctx.dir, 'imp'))).toStrictEqual(['notes.txt']);
   expect(readFileSync(join(ctx.dir, 'impz', 'token'), 'utf8')).toBe('file-token\n');
@@ -98,7 +220,7 @@ test('it moves a relative symlink that still resolves after the move', () => {
   writeFileSync(join(ctx.dir, 'dotfiles', 'config.json'), '{"current":null,"hosts":{}}\n');
   mkdirSync(join(ctx.dir, 'imp'));
   symlinkSync('../dotfiles/config.json', join(ctx.dir, 'imp', 'config.json'));
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, mock<(line: string) => void>());
+  updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
 
   expect(readlinkSync(join(ctx.dir, 'impz', 'config.json'))).toBe('../dotfiles/config.json');
 
@@ -113,7 +235,7 @@ test('it points a moved symlink at a file that stays in the old directory', () =
   mkdirSync(join(ctx.dir, 'imp'));
   writeFileSync(join(ctx.dir, 'imp', 'hosts.json'), '{"current":null,"hosts":{}}\n');
   symlinkSync('hosts.json', join(ctx.dir, 'imp', 'config.json'));
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, mock<(line: string) => void>());
+  updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
 
   expect(readlinkSync(join(ctx.dir, 'impz', 'config.json'))).toBe('../imp/hosts.json');
 
@@ -128,7 +250,7 @@ test('it points a moved symlink at the other moved file', () => {
   mkdirSync(join(ctx.dir, 'imp'));
   writeFileSync(join(ctx.dir, 'imp', 'config.json'), '{"current":null,"hosts":{}}\n');
   symlinkSync('./config.json', join(ctx.dir, 'imp', 'token'));
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, mock<(line: string) => void>());
+  updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
 
   expect(readlinkSync(join(ctx.dir, 'impz', 'token'))).toBe('config.json');
 
@@ -143,7 +265,7 @@ test('it keeps an absolute symlink as it was', () => {
   writeFileSync(join(ctx.dir, 'root-token'), 'root\n');
   mkdirSync(join(ctx.dir, 'imp'));
   symlinkSync(join(ctx.dir, 'root-token'), join(ctx.dir, 'imp', 'token'));
-  updateLegacyConfig({ XDG_CONFIG_HOME: ctx.dir }, mock<(line: string) => void>());
+  updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
 
   expect(readlinkSync(join(ctx.dir, 'impz', 'token'))).toBe(join(ctx.dir, 'root-token'));
 });
@@ -156,7 +278,7 @@ test('it points a moved relative symlink at its file when the old directory is i
   symlinkSync('../hosts.json', join(ctx.dir, 'dotfiles', 'imp', 'config.json'));
   mkdirSync(join(ctx.dir, 'config'));
   symlinkSync('../dotfiles/imp', join(ctx.dir, 'config', 'imp'));
-  updateLegacyConfig({ XDG_CONFIG_HOME: join(ctx.dir, 'config') }, mock<(line: string) => void>());
+  updateLegacyConfig(join(ctx.dir, 'config', 'impz'), mock<(line: string) => void>());
 
   expect(readFileSync(join(ctx.dir, 'config', 'impz', 'config.json'), 'utf8')).toBe(
     '{"current":null,"hosts":{}}\n',
