@@ -1,9 +1,9 @@
 # zizmor's settings for the workflows and actions under .github/, which the
 # shellcheck job in ci.yml audits.
 rules:
-  # repo-sync.yml calls the shared workflow from zgeoff/tools at main on
-  # purpose, so each run syncs the files main holds; every other action stays
-  # pinned to a commit
+  # repo-sync.yml calls the shared workflow from zgeoff/tools at a sync tag on
+  # purpose, so each run syncs the files that tag holds and the repo moves to a
+  # newer tag between sweeps; every other action stays pinned to a commit
   unpinned-uses:
     config:
       policies:
