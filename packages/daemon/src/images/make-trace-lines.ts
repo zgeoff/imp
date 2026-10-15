@@ -24,8 +24,8 @@ export function makeTraceLines(output: BuildOutput): (trace: BuildTrace) => void
 
   const steps = createBuildSteps(output.setStep);
 
-  const emit = (state: Readonly<VertexState>, text: string): void => {
-    output.emitLog(`#${String(state.number)} ${text}`.slice(0, IMAGE_BUILD_LOG_MAX_CHARS));
+  const emit = (vertex: number, text: string): void => {
+    output.emitLog(`#${String(vertex)} ${text}`.slice(0, IMAGE_BUILD_LOG_MAX_CHARS));
   };
 
   // a message's starts come before its logs, and its ends after them
@@ -41,7 +41,7 @@ export function makeTraceLines(output: BuildOutput): (trace: BuildTrace) => void
 
         vertexes.set(vertex.digest, state);
 
-        emit(state, vertex.name);
+        emit(state.number, vertex.name);
 
         steps.start(vertex.digest, vertex.name);
       }
@@ -60,11 +60,11 @@ export function makeTraceLines(output: BuildOutput): (trace: BuildTrace) => void
       state.partial = lines.pop() ?? '';
 
       for (const line of lines) {
-        emit(state, line);
+        emit(state.number, line);
       }
 
       while (state.partial.length > PARTIAL_MAX_CHARS) {
-        emit(state, state.partial.slice(0, PARTIAL_MAX_CHARS));
+        emit(state.number, state.partial.slice(0, PARTIAL_MAX_CHARS));
 
         state.partial = state.partial.slice(PARTIAL_MAX_CHARS);
       }
@@ -80,7 +80,7 @@ export function makeTraceLines(output: BuildOutput): (trace: BuildTrace) => void
       state.done = true;
 
       if (state.partial !== '') {
-        emit(state, state.partial);
+        emit(state.number, state.partial);
 
         state.partial = '';
       }
@@ -88,7 +88,7 @@ export function makeTraceLines(output: BuildOutput): (trace: BuildTrace) => void
       const done = vertex.cached ? 'CACHED' : 'DONE';
       const end = vertex.error === '' ? done : `ERROR: ${vertex.error}`;
 
-      emit(state, end);
+      emit(state.number, end);
 
       steps.end(vertex.digest);
     }
