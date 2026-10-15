@@ -1167,3 +1167,72 @@ test('it records a refused audit row with no secret, header or body for a reques
     reason: 'outside-filter',
   });
 });
+
+test.each([['X-HTTP-Method-Override'], ['X-HTTP-Method'], ['X-Method-Override']])(
+  'it runs an allowed POST carrying %s: DELETE as a POST at an upstream that honours it',
+  async (header) => {
+    const received = mock<(method: string) => void>();
+
+    // an upstream that runs the method the override header names, as some
+    // frameworks do for a POST
+    server.use(
+      http.all('https://api.anthropic.com/v1/messages', (info) => {
+        received(info.request.headers.get(header) ?? info.request.method);
+
+        return HttpResponse.text('upstream body');
+      }),
+    );
+
+    const forward = createForwarder({
+      impId: 'imp-1',
+      host: 'api.anthropic.com',
+      findCredential: () =>
+        Promise.resolve(
+          buildMockCredential({ filter: { methods: ['POST'], paths: ['/v1/messages'] } }),
+        ),
+      resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+      recordAudit: () => {},
+    });
+
+    const response = await forward(
+      new Request('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { host: 'api.anthropic.com', [header]: 'DELETE' },
+        body: 'payload',
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveBeenCalledExactlyOnceWith('POST');
+  },
+);
+
+test('it sends a method-override header on a grant with no filter', async () => {
+  const received = mock<(override: string | null) => void>();
+
+  server.use(
+    http.post('https://api.anthropic.com/v1/messages', (info) => {
+      received(info.request.headers.get('x-http-method-override'));
+
+      return HttpResponse.text('upstream body');
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.anthropic.com',
+    findCredential: () => Promise.resolve(buildMockCredential({ filter: null })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+  });
+
+  await forward(
+    new Request('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { host: 'api.anthropic.com', 'x-http-method-override': 'PATCH' },
+      body: 'payload',
+    }),
+  );
+
+  expect(received).toHaveBeenCalledExactlyOnceWith('PATCH');
+});
