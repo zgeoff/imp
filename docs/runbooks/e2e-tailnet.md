@@ -51,6 +51,9 @@ The secret does not expire. Replace it when it may have leaked.
 
 ## Check the isolation
 
-From a `tag:imp-e2e` node, `tailscale ping` to a live impd on `tag:imp` must fail, because the
-policy gives the node no route to it. The `moves-tailnet` suite fails with the grant to add when two
-`tag:imp-e2e` nodes cannot see each other.
+From a `tag:imp-e2e` node, a request to the API of a live impd on `tag:imp` must time out, because
+the policy gives the node no route to it. Use a TCP request such as
+`curl --max-time 5 http://<impd_tailnet_ip>:7070/`. A plain `tailscale ping` does not test this,
+because its default ping tests the connection between the two devices, not the policy. The
+`moves-tailnet` suite fails with the grant to add when two `tag:imp-e2e` nodes cannot see each
+other.
