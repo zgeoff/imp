@@ -633,19 +633,24 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     // the lock's liveness check marks an imp whose VM died with impd stopped
     reconcileImps: async () => {
       // the first read sets what a lost VM's oops is judged against
-      const isOopsed = context.kernelOops.isOopsed();
+      const flag = context.kernelOops.readFlag();
 
-      if (isOopsed) {
+      if (flag === 'set') {
         context.log(
           'impd: the kernel oopsed since the host booted (taint flag D); the host needs a reboot',
         );
       }
 
+      if (flag === 'unknown') {
+        context.log('impd: cannot read the kernel taint flag; imps a kernel oops held stay held');
+      }
+
       const imps = await listImps(context.db);
 
       // only a reboot clears the flag, so a hold impd finds with it clear came
-      // from an earlier boot, and that reboot freed the disk
-      if (!isOopsed) {
+      // from an earlier boot, and that reboot freed the disk. An unknown read
+      // does not prove a reboot, so the holds stay
+      if (flag === 'clear') {
         await removeStaleOopsHolds(context, imps);
       }
 
