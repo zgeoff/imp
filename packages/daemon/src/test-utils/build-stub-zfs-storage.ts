@@ -7,7 +7,10 @@ import type { StubZfs } from './build-stub-zfs';
 // An impd's ZFS storage on buildStubZfs's pool under `root`, with the kernel
 // module at `moduleVersion`. The stub pool keeps no file data, so the backend
 // writes a disk file wherever a clone or a received stream would have left one.
-export function buildStubZfsStorage(root: string, options: { moduleVersion?: string } = {}) {
+export function buildStubZfsStorage(
+  root: string,
+  options: Readonly<{ moduleVersion?: string }> = {},
+) {
   const moduleVersion = options.moduleVersion ?? '2.2.2-0ubuntu9';
   const made: { pool: StubZfs | null } = { pool: null };
 
