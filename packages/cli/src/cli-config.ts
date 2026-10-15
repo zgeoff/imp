@@ -53,7 +53,7 @@ export function loadCliConfig(
     return { ...saved, token: envToken ?? saved.token };
   }
 
-  return { url: DEFAULT_URL, token: envToken ?? readTokenFile(env), host: null };
+  return { url: DEFAULT_URL, token: envToken ?? readTokenFile(env, warn), host: null };
 }
 
 export function isHttpUrl(url: string): boolean {
