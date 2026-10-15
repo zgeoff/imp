@@ -100,7 +100,7 @@ function collectAnchors(markdown: string): Set<string> {
   let inComment = false;
 
   for (const rawLine of lines.slice(start)) {
-    const visible = fence === '' ? splitComments(rawLine, inComment) : null;
+    const visible: VisibleText | null = fence === '' ? splitComments(rawLine, inComment) : null;
     const line = visible?.kept ?? rawLine;
 
     inComment = visible?.isOpen ?? inComment;
@@ -140,7 +140,12 @@ function collectAnchors(markdown: string): Set<string> {
 
 // GitHub never renders an HTML comment, so a heading inside one has no anchor: the line without
 // its comments, and whether a comment is still open at its end
-function splitComments(line: string, inComment: boolean): { kept: string; isOpen: boolean } {
+interface VisibleText {
+  readonly kept: string;
+  readonly isOpen: boolean;
+}
+
+function splitComments(line: string, inComment: boolean): VisibleText {
   let kept = '';
   let rest = line;
   let isOpen = inComment;
