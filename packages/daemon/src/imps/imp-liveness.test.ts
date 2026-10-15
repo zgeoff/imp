@@ -220,7 +220,8 @@ test('it boots no VM on the disk of an imp a kernel oops killed', async () => {
 
   const bootsBefore = ctx.fake.boots.length;
 
-  expect(ctx.imps.startImp('dev')).toReject();
+  await expect(ctx.imps.startImp('dev')).toReject();
+
   expect(ctx.fake.boots).toHaveLength(bootsBefore);
 });
 
