@@ -1,15 +1,14 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, test } from 'bun:test';
 
 // The release job formats a release pull request once more at most (ci.yml). oxfmt 0.57.0
 // needed a second pass for this 0.29.0 entry, with a `($)` and a `${BASE}` in one paragraph.
 test('it settles a release changelog in one oxfmt pass', () => {
   const oxfmt = [
-    new URL('../../node_modules/.bin/oxfmt', import.meta.url).pathname,
+    new URL('node_modules/.bin/oxfmt', import.meta.url).pathname,
     '--stdin-filepath=CHANGELOG.md',
   ];
 
-  const cwd = new URL('..', import.meta.url).pathname;
+  const cwd = new URL('.', import.meta.url).pathname;
 
   const once = Bun.spawnSync(oxfmt, {
     cwd,

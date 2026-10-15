@@ -1,12 +1,11 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@imp/test-utils/invariant';
-import { buildStubRegistryDocker } from '../test-utils/build-stub-registry-docker';
-import { createStubBin } from '../test-utils/create-stub-bin';
-import { parseReleaseWorkflow } from '../test-utils/parse-release-workflow';
+import { buildStubRegistryDocker } from '../../scripts/test-utils/build-stub-registry-docker';
+import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
+import { parseReleaseWorkflow } from '../../scripts/test-utils/parse-release-workflow';
 
 // The base job publishes imp-base, which other images pin by digest, so a published tag must
 // never move (docs/runbooks/releasing.md). The Plan step's tests run its shell as Actions does (bash -eo

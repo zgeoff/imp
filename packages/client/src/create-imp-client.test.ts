@@ -24,6 +24,7 @@ import { ORPCError } from '@orpc/client';
 import { HttpResponse, http } from 'msw';
 import { CLIENT_VERSION } from './check-server';
 import { createImpClient } from './create-imp-client';
+import { buildStubImpdWithNewReason } from './test-utils/build-stub-impd-with-new-reason';
 import { createStubDockerBin } from './test-utils/create-stub-docker-bin';
 import { startStubDockerEngine } from './test-utils/start-stub-docker-engine';
 
@@ -593,4 +594,38 @@ test('#images.buildStream hands on each progress event as it comes, then the ima
   ]);
 
   expect(engine.unexpected).toStrictEqual([]);
+});
+
+// A newer impd sends a reason this client does not know: the client passes
+// it through, since oRPC checks outputs on the server, not here. A new
+// ImpChangeReason needs no EVENT_VERSION bump.
+test('#events.stream passes on an event whose reason this client does not know', async () => {
+  const ctx = await setupTest();
+  const impd = await ctx.startImpd();
+
+  const newer = buildStubImpdWithNewReason(
+    (request) => impd.api.app.handle(request),
+    'from-the-future',
+  );
+
+  server.use(http.all('http://impd.test/*', (info) => newer(info.request)));
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const events = await ctx.client.events.stream();
+
+  const reading = events[Symbol.asyncIterator]();
+
+  onTestFinished(() => reading.return?.());
+
+  await reading.next();
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const changed = await reading.next();
+
+  expect(changed.value).toMatchObject({
+    ev: 'ImpChanged',
+    reason: 'from-the-future',
+    imp: { name: 'dev' },
+  });
 });

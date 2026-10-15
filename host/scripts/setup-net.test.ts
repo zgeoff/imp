@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- tests setup-net.sh under a test-kind suffix the rule does not allow; GEO-472
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { canUnshare } from '../../packages/daemon/src/test-utils/can-unshare';

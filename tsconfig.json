@@ -14,7 +14,9 @@
     "deploy/**/*.ts",
     "images/**/*.ts",
     "host/**/*.ts",
-    "*.test.ts"
+    "*.test.ts",
+    // a wildcard skips a dot-named file
+    ".oxfmtrc.test.ts"
   ],
   // a browser app with its own tsconfig (DOM, JSX)
   "exclude": ["node_modules", "tmp", "packages/dashboard"]

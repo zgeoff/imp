@@ -786,7 +786,7 @@ jobs:
           git checkout -B "$branch" FETCH_HEAD
           bun install
           bun run format
-          # One more pass at most (scripts/ci/format-stable.test.ts): if the
+          # One more pass at most (.oxfmtrc.test.ts): if the
           # second pass still leaves changes, the formatter does not settle
           if ! bun run format:check; then
             bun run format

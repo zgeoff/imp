@@ -149,8 +149,9 @@ one test file in a child `bun test` with `dir` as its working and temp dir, and 
 
 Plain `bun test` does not match `*.e2e.ts` or `*.pebble.ts`; each of those runs only when its `./`
 path is given. The `*.real.test.ts` files and the small-filesystem tests load in plain `bun test`
-and skip unless their variables are set. The `*.host.test.ts` files load too, and each test skips
-where its namespace probe fails; `bun run test:host` runs exactly those files.
+and skip unless their variables are set. The `*.host.test.ts` files and
+`host/scripts/setup-net.test.ts` load too, and each namespace test skips where its probe fails;
+`bun run test:host` runs exactly those files.
 
 ## End-to-end harness
 
@@ -826,7 +827,7 @@ option off unix servers, its 10 s default closes a silent build after 10 to 12 s
 without it. Its image factory is the api's, `packages/api/src/test-utils/build-mock-image.ts`
 (`buildMockImage`).
 
-Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs
+Host networking runs the real tools: `host/scripts/setup-net.test.ts` runs
 `host/scripts/setup-net.sh` with `iptables`, and `egress/egress-ruleset.host.test.ts` applies impd's
 ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in-netns.ts`.
 
@@ -948,7 +949,7 @@ file leaves every host on its real origin.
    and skips when it is missing.
 
 - `IMP_HOST_TESTS=required` makes the `canUnshare` probe (`packages/daemon/src/test-utils/`) of each
-  `*.host.test.ts` test true, so a missing tool or namespace fails the test instead of skipping it.
+  host test true, so a missing tool or namespace fails the test instead of skipping it.
   `build-unshare.ts` there adds a user namespace (`-r`) only when the uid is not 0.
   `deploy/bootstrap.test.ts`'s `nft -c` check of the rendered firewall reads it too; plain
   `bun test` skips that check where `unshare -rn nft` fails.
