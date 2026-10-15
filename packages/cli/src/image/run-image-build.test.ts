@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- tests run-image-build.ts under a test-kind suffix the rule does not allow; GEO-472
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
