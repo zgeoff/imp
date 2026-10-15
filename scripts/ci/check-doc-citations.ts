@@ -137,10 +137,12 @@ function collectAnchors(markdown: string): Set<string> {
     const title = findHeading(line, previous);
 
     if (title !== null) {
-      const anchor = pickHeadingAnchor(buildSlug(title), headingAnchors, seen);
+      const slug = buildSlug(title);
+      const picked = pickHeadingAnchor(slug, headingAnchors, seen);
 
-      headingAnchors.add(anchor);
-      anchors.add(anchor);
+      seen.set(slug, picked.count);
+      headingAnchors.add(picked.anchor);
+      anchors.add(picked.anchor);
     }
 
     for (const match of line.matchAll(/\b(?:id|name)\s*=\s*"(?<id>[^"]+)"/gu)) {
@@ -159,19 +161,17 @@ function collectAnchors(markdown: string): Set<string> {
 function pickHeadingAnchor(
   slug: string,
   taken: ReadonlySet<string>,
-  seen: Map<string, number>,
-): string {
+  seen: ReadonlyMap<string, number>,
+): { anchor: string; count: number } {
   let anchor = slug;
+  let count = seen.get(slug) ?? 0;
 
   while (taken.has(anchor)) {
-    const count = (seen.get(slug) ?? 0) + 1;
-
-    seen.set(slug, count);
-
+    count++;
     anchor = `${slug}-${String(count)}`;
   }
 
-  return anchor;
+  return { anchor, count };
 }
 
 // GitHub never renders an HTML comment, so a heading inside one has no anchor: the line without
