@@ -117,6 +117,76 @@ test('#start warns about a minor version skew and goes on', async () => {
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBe('tank/imp/mem');
 });
 
+test.each(['2.2.2-0ubuntu9.5', '2.3.4-1ubuntu2', '2.4.1'])(
+  '#start warns that the kernel module %s has the zfs_uiomove short-copy bug',
+  async (version) => {
+    const ctx = setupTest();
+
+    const backend = createZfsBackend({
+      dataDir: ctx.dataDir,
+      root: 'tank/imp',
+      run: ctx.fake.run,
+      readMounts: ctx.fake.readMounts,
+      readModuleVersion: () => version,
+      log: ctx.log,
+    });
+
+    ctx.stack.defer(() => backend.waitForReclaim());
+
+    await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+    expect(backend.readWarnings()).toStrictEqual([
+      `the zfs kernel module ${version} has the zfs_uiomove short-copy bug (openzfs/zfs#15918): a VM killed during a disk read can oops the kernel and hold its disk until a reboot; modules 2.3.7, 2.4.2 and later fix it`,
+    ]);
+  },
+);
+
+test.each(['2.3.7', '2.4.2', '2.4.4', '2.5.0-1'])(
+  '#start gives no warning for the kernel module %s, which has the zfs_uiomove fix',
+  async (version) => {
+    const ctx = setupTest();
+
+    const backend = createZfsBackend({
+      dataDir: ctx.dataDir,
+      root: 'tank/imp',
+      run: ctx.fake.run,
+      readMounts: ctx.fake.readMounts,
+      readModuleVersion: () => version,
+      log: ctx.log,
+    });
+
+    ctx.stack.defer(() => backend.waitForReclaim());
+
+    await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+    expect(backend.readWarnings()).toStrictEqual([]);
+    expect(ctx.log).not.toHaveBeenCalledWith(expect.stringContaining('zfs_uiomove'));
+  },
+);
+
+test('#start logs the zfs_uiomove warning and still mounts the storage', async () => {
+  const ctx = setupTest();
+
+  const backend = createZfsBackend({
+    dataDir: ctx.dataDir,
+    root: 'tank/imp',
+    run: ctx.fake.run,
+    readMounts: ctx.fake.readMounts,
+    readModuleVersion: () => '2.3.4-1ubuntu2',
+    log: ctx.log,
+  });
+
+  ctx.stack.defer(() => backend.waitForReclaim());
+
+  await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+  expect(ctx.log).toHaveBeenCalledWith(
+    'impd: zfs: warning: the zfs kernel module 2.3.4-1ubuntu2 has the zfs_uiomove short-copy bug (openzfs/zfs#15918): a VM killed during a disk read can oops the kernel and hold its disk until a reboot; modules 2.3.7, 2.4.2 and later fix it',
+  );
+
+  expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBe('tank/imp/mem');
+});
+
 test('#start refuses a host whose zfs kernel module is not loaded', () => {
   const ctx = setupTest();
 

@@ -316,6 +316,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   return {
     kind: 'xfs',
+    readWarnings: () => [],
 
     // an image build that a crash cut short leaves its staging dir
     start: (live) => {

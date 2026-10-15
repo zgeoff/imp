@@ -287,7 +287,7 @@ export function buildApp(deps: AppDeps) {
     .get('/health', () => ({
       status: 'ok',
       ready: deps.isReady(),
-      warnings: buildHealthWarnings(deps.imps.readRebootReason()),
+      warnings: buildHealthWarnings(deps.imps.readRebootReason(), deps.storage.readWarnings()),
     }))
     .post('/auth/login', (context) => sessionRoutes.login(context.request), { parse: 'none' })
     .post('/auth/logout', (context) => sessionRoutes.logout(context.request), { parse: 'none' })
@@ -564,8 +564,13 @@ export function buildApp(deps: AppDeps) {
 // A browser names the page a request comes from in Sec-Fetch-Site or
 // Origin; on the public route only the route's own origin may call
 // what /health tells an operator beside `ready`; empty while all is well
-function buildHealthWarnings(rebootReason: string | null): string[] {
-  return rebootReason === null ? [] : [`host needs a reboot: ${rebootReason}`];
+function buildHealthWarnings(
+  rebootReason: string | null,
+  storageWarnings: readonly string[],
+): string[] {
+  const reboot = rebootReason === null ? [] : [`host needs a reboot: ${rebootReason}`];
+
+  return [...reboot, ...storageWarnings];
 }
 
 function isPublicCrossOrigin(request: Request, origin: string): boolean {

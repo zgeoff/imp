@@ -81,6 +81,13 @@ snapshot still needs its blocks.
 - **Versions.** The container's ZFS tools and the host's ZFS module must share a major version, and
   impd refuses to start when they do not. A different minor version only logs a warning, since impd
   runs nothing a 2.x module lacks.
+- **Minimum module versions.** A ZFS module needs 2.3.7 on the 2.3 line or 2.4.2 on the 2.4 line,
+  and no 2.2 or older release has the fix. An older module can overrun a buffer when a SIGKILL or a
+  cgroup OOM kill lands during a read (openzfs/zfs#15918). impd sends both kills to Firecracker, at
+  stop and at each VM's memory cap, so one can land during a read of an imp's disk. With hardened
+  usercopy the kernel then oopses, the oops kills Firecracker, and its hold on the disk's dataset
+  lasts until a reboot. impd still starts on an older module, since the bug strikes only on such a
+  kill, but it logs a warning at start and lists the same warning in `/health`.
 
 ## Crash recovery
 

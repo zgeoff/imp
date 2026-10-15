@@ -21,10 +21,12 @@ import { findImpByName } from './db/imps';
 import { openDatabase } from './db/open-database';
 import { createKernelOopsWatch } from './imps/kernel-oops-watch';
 import { buildImagePaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
+import type { StorageBackend } from './storage/storage-backend';
 import { createXfsBackend } from './storage/xfs-backend';
 import { buildMockNewImage } from './test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
+import { buildStubZfsStorage } from './test-utils/build-stub-zfs-storage';
 import { createStubDockerCli } from './test-utils/create-stub-docker-cli';
 import { findFreePorts } from './test-utils/find-free-ports';
 import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
@@ -33,6 +35,9 @@ import type { CpuCgroups } from './vmm/cpu-cgroups';
 interface SetupOptions {
   // the host's cgroup tree
   readonly cgroups: CpuCgroups;
+
+  // the data dir's storage backend; XFS by default
+  readonly createStorage?: (dataDir: string) => StorageBackend;
 }
 
 // impd's real app on stub VMs, on a loopback port for the sockets, with a
@@ -94,7 +99,9 @@ async function setupTest(options: SetupOptions) {
 
     // the bearer the root client sends
     rootToken: 'root-token',
-    storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
+    storage:
+      options.createStorage?.(dataDir) ??
+      createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
 
     // what system.info reports; the drive's hash names the drive file above
     systemFiles: {
@@ -354,6 +361,25 @@ test('it answers /health with the reboot a kernel oops needs', async () => {
     status: 'ok',
     ready: false,
     warnings: ['host needs a reboot: a kernel oops'],
+  });
+});
+
+test("it answers /health with the zfs_uiomove bug of the host's kernel module", async () => {
+  const ctx = await setupTest({
+    cgroups: buildStubCpuCgroups().cgroups,
+    createStorage: buildStubZfsStorage('tank/imp', { moduleVersion: '2.3.4-1ubuntu2' })
+      .createStorage,
+  });
+
+  const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));
+  const body: unknown = await response.json();
+
+  expect(body).toStrictEqual({
+    status: 'ok',
+    ready: false,
+    warnings: [
+      'the zfs kernel module 2.3.4-1ubuntu2 has the zfs_uiomove short-copy bug (openzfs/zfs#15918): a VM killed during a disk read can oops the kernel and hold its disk until a reboot; modules 2.3.7, 2.4.2 and later fix it',
+    ],
   });
 });
 
