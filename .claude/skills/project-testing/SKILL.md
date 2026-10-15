@@ -863,7 +863,7 @@ does it reach the storage gate: `createStorageGate(clock)` takes `now` and `star
 wait on the operations in flight (the wall clock and `setTimeout` by default), createImpd passes
 none, and `storage/storage-gate.test.ts` passes `buildStubClock`'s. `imps.sleepTiming` (`now` and
 `sleep`, `performance.now` and `Bun.sleep` by default) is the clock of a sleep's `prepareMs` and
-`durationMs` and the pause of its young-guest wait; `events/imp-events.test.ts` passes
+`durationMs` and the pause of its young-guest wait; `events/imp-event-publisher.test.ts` passes
 `buildStubClock`'s. A field left out takes the host's real one. With tailnet names configured,
 `runCommand` also reaches `buildTailnetNames`' `tailscale serve` calls, so `tailnet-names.test.ts`
 boots named impds on `buildStubTailscaleServe`'s `run`. Its parts (`buildImpdStorage`,
