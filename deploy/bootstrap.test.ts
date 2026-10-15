@@ -2337,6 +2337,32 @@ test('#health refuses imp-host publishing a port beyond loopback', () => {
   });
 });
 
+test('#health asks imp in an image from before the CLI was impz', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubBootstrapDocker({
+      impInfo: 'imp 1.6.0',
+      published: '7070/tcp -> 0.0.0.0:7070',
+      runningCLI: 'imp',
+    }),
+  );
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'health',
+      env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '== health\nimp 1.6.0\n',
+    stderr: 'bootstrap: imp-host publishes a port beyond loopback: 7070/tcp -> 0.0.0.0:7070\n',
+  });
+});
+
 test('#check_storage_live refuses impd on another storage backend than the bootstrap set up', () => {
   const ctx = setupTest();
 

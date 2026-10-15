@@ -141,12 +141,15 @@ jobs:
           name: release-assets
           path: dist
 
+      # a tag from before the CLI's rename builds imp-<target>
       - name: Check the binary and its checksum
         env:
-          BIN: impz-${{ matrix.target }}
+          TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.assets.outputs.version }}
         run: |
           cd dist
+          BIN=impz-$TARGET
+          [ -f "$BIN" ] || BIN=imp-$TARGET
           grep "  $BIN\$" SHA256SUMS | shasum -a 256 -c -
           chmod +x "$BIN"
           got=$("./$BIN" --version)

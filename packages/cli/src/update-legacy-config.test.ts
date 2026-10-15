@@ -147,3 +147,18 @@ test('it keeps an absolute symlink as it was', () => {
 
   expect(readlinkSync(join(ctx.dir, 'impz', 'token'))).toBe(join(ctx.dir, 'root-token'));
 });
+
+test('it points a moved relative symlink at its file when the old directory is itself a symlink', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'dotfiles', 'imp'), { recursive: true });
+  writeFileSync(join(ctx.dir, 'dotfiles', 'hosts.json'), '{"current":null,"hosts":{}}\n');
+  symlinkSync('../hosts.json', join(ctx.dir, 'dotfiles', 'imp', 'config.json'));
+  mkdirSync(join(ctx.dir, 'config'));
+  symlinkSync('../dotfiles/imp', join(ctx.dir, 'config', 'imp'));
+  updateLegacyConfig({ XDG_CONFIG_HOME: join(ctx.dir, 'config') }, mock<(line: string) => void>());
+
+  expect(readFileSync(join(ctx.dir, 'config', 'impz', 'config.json'), 'utf8')).toBe(
+    '{"current":null,"hosts":{}}\n',
+  );
+});

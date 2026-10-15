@@ -1,9 +1,13 @@
 import {
+  chmodSync,
+  copyFileSync,
   lstatSync,
   mkdirSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmdirSync,
+  statSync,
   symlinkSync,
   unlinkSync,
 } from 'node:fs';
@@ -35,16 +39,20 @@ export function updateLegacyConfig(
 
   mkdirSync(dir, { recursive: true, mode: 0o700 });
 
+  // physical paths, so a relative link resolves as the kernel resolves it even
+  // when either directory is reached through a symlink
+  const realLegacyDir = realpathSync(legacyDir);
+  const realDir = realpathSync(dir);
+
   for (const name of files) {
     const from = join(legacyDir, name);
     const to = join(dir, name);
-    const target = findRelativeLinkTarget(from);
 
-    if (target === null) {
-      renameSync(from, to);
-    } else {
-      symlinkSync(planLinkTarget(target, legacyDir, dir, files), to);
+    if (lstatSync(from).isSymbolicLink()) {
+      symlinkSync(planLinkTarget(readlinkSync(from), realLegacyDir, realDir, files), to);
       unlinkSync(from);
+    } else {
+      writeMovedFile(from, to);
     }
 
     warn(`impz: moved ${from} to ${to}`);
@@ -58,28 +66,35 @@ export function updateLegacyConfig(
   }
 }
 
-// a relative symlink's target, which a plain rename would leave pointing
-// into the new directory; null for a file or an absolute link
-function findRelativeLinkTarget(path: string): string | null {
-  if (!lstatSync(path).isSymbolicLink()) {
-    return null;
+// a rename, or a copy when the old directory is on another filesystem
+function writeMovedFile(from: string, to: string): void {
+  try {
+    renameSync(from, to);
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EXDEV')) {
+      throw error;
+    }
+
+    copyFileSync(from, to);
+    chmodSync(to, statSync(from).mode & 0o777);
+    unlinkSync(from);
   }
-
-  const target = readlinkSync(path);
-
-  return isAbsolute(target) ? null : target;
 }
 
-// the same file, as seen from the new directory: a moved one at its new
-// place, anything else where it was
+// a link's target as seen from the new directory: an absolute one as it was,
+// a moved file at its new place, anything else where it was
 function planLinkTarget(
   target: string,
   legacyDir: string,
   dir: string,
   files: readonly string[],
 ): string {
+  if (isAbsolute(target)) {
+    return target;
+  }
+
   const absolute = resolve(legacyDir, target);
-  const isMoved = dirname(absolute) === resolve(legacyDir) && files.includes(basename(absolute));
+  const isMoved = dirname(absolute) === legacyDir && files.includes(basename(absolute));
   const file = isMoved ? join(dir, basename(absolute)) : absolute;
 
   return relative(dir, file);

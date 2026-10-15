@@ -17,7 +17,7 @@ fi
 image=$1 version=$2 sums=$3
 
 status=0
-for bin in impd imp; do
+for bin in impd impz; do
   # --entrypoint: the image's CMD is the host entrypoint, which needs KVM
   got=$(docker run --rm --entrypoint "$bin" "$image" --version)
   if [ "$got" != "$version" ]; then
