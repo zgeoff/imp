@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1](https://github.com/zgeoff/imp/compare/v1.5.0...v1.5.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **geo-900:** push a wide directory's subdirectories one at a time ([#385](https://github.com/zgeoff/imp/issues/385)) ([9bd8770](https://github.com/zgeoff/imp/commit/9bd877066d750be85fb86f03920b485d41a86f71))
+* **geo-908:** clear a kernel oops hold that an earlier boot recorded ([#388](https://github.com/zgeoff/imp/issues/388)) ([c97136e](https://github.com/zgeoff/imp/commit/c97136ea39bd5e81b37802ece016948edfdbd075))
+
 ## [1.5.0](https://github.com/zgeoff/imp/compare/v1.4.4...v1.5.0) (2026-10-15)
 
 ### Features
