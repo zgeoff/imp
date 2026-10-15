@@ -294,14 +294,14 @@ The dashboard needs no login for a tailnet member a rule matches.
 ## Tests
 
 - `packages/daemon/src/auth/access-policy.test.ts`: every contract path has a rule.
-- `packages/daemon/src/build-app-tokens.test.ts`: every procedure refuses a token whose scope is too
-  low, and every host-wide one a token with patterns. It also covers patterns, the event stream,
-  sockets, tickets, revocation, the peer handle and cross-site sockets.
+- `packages/daemon/src/auth/caller.test.ts`: every procedure refuses a token whose scope is too low,
+  and every host-wide one a token with patterns. It also covers patterns, the event stream, sockets,
+  tickets, revocation, the peer handle and cross-site sockets.
 - `packages/daemon/src/auth/authenticate.test.ts`: sessions, a rebound host and an imp's page.
-- `packages/daemon/src/build-app-grants.test.ts`: tokens that may grant secrets, through a bearer
-  token and a dashboard session: every pairing of imp and secret, refusals, stale list entries,
-  forks and moves, and what survives a restart. `build-app-token-update.test.ts` changes a list in
-  place. `broker/grant-races.test.ts` races grants, revokes, fork copies and replaces against one
+- `packages/daemon/src/auth/check-grantable.test.ts`: tokens that may grant secrets, through a
+  bearer token and a dashboard session: every pairing of imp and secret, refusals, stale list
+  entries, forks and moves, and what survives a restart. `build-token-routes.test.ts` changes a list
+  in place. `broker/grant-races.test.ts` races grants, revokes, fork copies and replaces against one
   another.
 - The `tokens` e2e suite drives it all through the CLI. The `tailscale` suite reboots impd with a
   rule and calls the API over the tailnet without a token.
