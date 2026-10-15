@@ -282,3 +282,31 @@ function parseEpochSeconds(value: string): Date | null {
 
   return Number.isSafeInteger(seconds) && seconds >= 0 ? new Date(seconds * 1000) : null;
 }
+
+export function readSnapshotId(name: string): string {
+  return name.slice(name.indexOf('@') + 1);
+}
+
+// Checkpoint ids are global, so the snapshot is found by name wherever it is:
+// a restore or a promote moves it to another dataset.
+export function listCheckpointSnapshots(
+  entries: readonly ZfsEntry[],
+  checkpointId: string,
+): ZfsEntry[] {
+  return entries.filter(
+    (entry) => entry.type === 'snapshot' && readSnapshotId(entry.name) === checkpointId,
+  );
+}
+
+export function findCheckpointSnapshot(entries: readonly ZfsEntry[], checkpointId: string): string {
+  const snapshots = listCheckpointSnapshots(entries, checkpointId);
+  const [snapshot] = snapshots;
+
+  if (snapshots.length !== 1 || snapshot === undefined) {
+    throw new Error(
+      `zfs: expected one snapshot named ${checkpointId}, found ${String(snapshots.length)}`,
+    );
+  }
+
+  return snapshot.name;
+}

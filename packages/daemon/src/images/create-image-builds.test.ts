@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import {
   existsSync,
@@ -17,6 +16,8 @@ import { waitFor } from '@imp/test-utils/wait-for';
 import { loadConfig } from '../config';
 import { createImage, findImageByName, listImages } from '../db/images';
 import { openDatabase } from '../db/open-database';
+import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { checkBuildQuery } from '../docker-proxy/rules';
 import { buildImagePaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
@@ -32,6 +33,7 @@ import { buildTreeTar } from '../test-utils/build-tree-tar';
 import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { createStubImageMkfs } from '../test-utils/create-stub-image-mkfs';
 import { startDiskSampler } from '../test-utils/start-disk-sampler';
+import { normalizeDockerfilePath } from './create-image-builds';
 import { createImageService } from './image-service';
 
 async function setupTest() {
@@ -39,7 +41,7 @@ async function setupTest() {
 
   onTestFinished(() => stack.disposeAsync());
 
-  const dir = await mkdtemp(join(tmpdir(), 'isolated-build-'));
+  const dir = await mkdtemp(join(tmpdir(), 'image-builds-'));
 
   stack.defer(() => rm(dir, { recursive: true, force: true }));
 
@@ -98,6 +100,32 @@ async function setupTest() {
     grows,
   };
 }
+
+test.each([
+  [undefined, 'Dockerfile'],
+  ['./Dockerfile', 'Dockerfile'],
+  ['sub//./web.Dockerfile', 'sub/web.Dockerfile'],
+  ['a/../Dockerfile', 'Dockerfile'],
+])('#normalizeDockerfilePath writes %p as %p, a path the proxy lets through', (given, expected) => {
+  const path = normalizeDockerfilePath(given);
+
+  const query = new Map([
+    ['t', ['imp/x:latest']],
+    ['version', ['2']],
+    ['buildargs', [JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND })]],
+    ['dockerfile', [path]],
+  ]);
+
+  expect(path).toBe(expected);
+  expect(checkBuildQuery(query)).toStrictEqual({ isOk: true });
+});
+
+test.each(['../Dockerfile', 'a/../../Dockerfile', '/etc/passwd', '.', 'sub/'])(
+  '#normalizeDockerfilePath refuses %p, which leaves the context or names it',
+  (path) => {
+    expect(() => normalizeDockerfilePath(path)).toThrow('not a file inside the build context');
+  },
+);
 
 test('it pins, builds and exports in its builder, with no host engine call', async () => {
   const ctx = await setupTest();

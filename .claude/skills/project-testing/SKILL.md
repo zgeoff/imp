@@ -33,7 +33,7 @@ the rules for writing tests live in the testing skill.
 Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
 tests need `jq`, and `release-please-config.test.ts` runs `git`.
 
-The build disk hold's `<file>` is `packages/daemon/src/images/isolated-build.test.ts`; its
+The build disk hold's `<file>` is `packages/daemon/src/images/create-image-builds.test.ts`; its
 small-filesystem tests skip unless `IMP_TEST_SMALL_FS` names a directory. Each trial measures the
 filesystem with `packages/daemon/src/test-utils/start-disk-sampler.ts`, which removes its filler
 file when the test ends.
@@ -407,14 +407,13 @@ child that inherits them works on this checkout whatever its `-C` says.
   util-linux does, its `umount -R` refuses a dir that is not itself a mount.
   `test-utils/build-stub-move-stream.ts` (`buildStubMoveStream`) is a peer's move stream: a source's
   bytes, then an `onEnd` hook and a close, or a `failAtEnd` error.
-- **The real-pool tests.** `zfs-backend.real.test.ts`, `zfs-move.real.test.ts`, and
-  `zfs-move-flow.real.test.ts` skip unless `readZfsTestPool()` (`test-utils/read-zfs-test-pool.ts`)
-  finds `IMP_TEST_ZFS_ROOT` (a dataset) and `IMP_TEST_ZFS_DIR` (its mount dir) both set. Each test
-  makes its own dataset with `createZfsTestDataset`: a new `mkdtemp` dir under the mount dir names
-  it, a dataset of that name that `zfs list` already shows is refused untouched, and the caller's
-  stack releases only what was made (`umount -R` of the dir, `zfs destroy -R`, then the empty dir).
-  Its tests run it against `buildStubZfs`. `test-utils/write-synced-file.ts` fsyncs a disk file
-  before a snapshot.
+- **The real-pool tests.** `zfs-backend.real.test.ts` and `create-zfs-moves.test.ts` skip unless
+  `readZfsTestPool()` (`test-utils/read-zfs-test-pool.ts`) finds `IMP_TEST_ZFS_ROOT` (a dataset) and
+  `IMP_TEST_ZFS_DIR` (its mount dir) both set. Each test makes its own dataset with
+  `createZfsTestDataset`: a new `mkdtemp` dir under the mount dir names it, a dataset of that name
+  that `zfs list` already shows is refused untouched, and the caller's stack releases only what was
+  made (`umount -R` of the dir, `zfs destroy -R`, then the empty dir). Its tests run it against
+  `buildStubZfs`. `test-utils/write-synced-file.ts` fsyncs a disk file before a snapshot.
 - **`scripts/test-zfs.sh`** runs as root. It makes a sparse-file pool `imptest<pid>` of
   `IMP_ZFS_TEST_GIB` (default 4) under `IMP_ZFS_TEST_DIR` (default a new temp dir; a given dir may
   exist), mounts `<pool>/imp` with a legacy mount on `<dir>/mnt`, runs
@@ -866,7 +865,7 @@ does it reach the storage gate: `createStorageGate(clock)` takes `now` and `star
 wait on the operations in flight (the wall clock and `setTimeout` by default), createImpd passes
 none, and `storage/storage-gate.test.ts` passes `buildStubClock`'s. `imps.sleepTiming` (`now` and
 `sleep`, `performance.now` and `Bun.sleep` by default) is the clock of a sleep's `prepareMs` and
-`durationMs` and the pause of its young-guest wait; `events/imp-events.test.ts` passes
+`durationMs` and the pause of its young-guest wait; `events/imp-event-publisher.test.ts` passes
 `buildStubClock`'s. A field left out takes the host's real one. With tailnet names configured,
 `runCommand` also reaches `buildTailnetNames`' `tailscale serve` calls, so `tailnet-names.test.ts`
 boots named impds on `buildStubTailscaleServe`'s `run`. Its parts (`buildImpdStorage`,

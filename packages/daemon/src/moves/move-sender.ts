@@ -1,4 +1,4 @@
-import type { MovePlan, MoveStatus, WarmHost, WarmMove } from '@imp/api';
+import type { MovePlan, MoveStatus, WarmHost } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildInvalidStateError, buildNotFoundError } from '../api-errors';
 import type { Broker } from '../broker/broker-service';
@@ -8,22 +8,20 @@ import { listColdBoots } from '../db/cold-boots';
 import { findImageById } from '../db/images';
 import { findImpById, findImpByName, listImps, updateImpMove } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
-import { listLeases } from '../db/leases';
 import { findMoveSend, removeMoveSend, updateMoveSend, writeMoveSend } from '../db/move-sends';
-import { listNetworkMembers } from '../db/networks';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { LockedImp } from '../imps/imp-lock';
 import type { Imps } from '../imps/imp-service';
-import { deriveSlotAddress } from '../net/addressing';
-import { readTapMac } from '../net/tap-devices';
 import type { StreamedCommand } from '../process/run-stream';
 import { readErrorMessage } from '../read-error-message';
-import { encodeSnapshotMeta, readSnapshotMeta } from '../sleep/snapshot-meta';
+import { encodeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotMeta } from '../sleep/snapshot-meta';
-import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImagePaths } from '../storage/data-layout';
 import type { MoveMode, StorageBackend } from '../storage/storage-backend';
+import { buildMovedLeases, requireLeasesKept } from './build-moved-leases';
+import { buildWarmHeader, checkWarmMove, requireSnapshotMeta } from './check-warm-move';
+import type { WarmParts } from './check-warm-move';
 import {
   MOVE_FRAMES,
   countDataBytes,
@@ -33,22 +31,19 @@ import {
 } from './move-frames';
 import type { MoveFile } from './move-frames';
 import {
-  MAX_LEASE_REMAINING_MS,
-  MAX_MOVED_LEASES,
   MOVE_FINISH_HEADER,
   MOVE_PART_HEADER,
   MOVE_PATHS,
   MoveCommitReplySchema,
   MoveOfferReplySchema,
-  MovedLeaseOwnerSchema,
 } from './move-header';
 import type { MoveHeader } from './move-header';
 import { sendInParts } from './move-parts';
 import { ReceiptSchema, buildTicketHeader, parseTicket, readReceipt } from './move-tickets';
 import type { ReadonlyReceiptBody, ReceiptBody } from './move-tickets';
+import { OfferRefusalError } from './offer-refusal-error';
 import { readPeerUrlAddress } from './peer-address';
 import type { PeerRanges } from './peer-address';
-import { buildWarmMove, findWarmMismatches } from './warm-facts';
 
 export interface MoveSender {
   readonly prepare: (name: string, options: PrepareOptions) => Promise<MovePlan>;
@@ -157,12 +152,6 @@ interface SendTarget {
   readonly ticket: string;
   readonly mode: MoveMode;
   readonly isWarm: boolean;
-}
-
-// a warm send's memory snapshot, and whether the target needs its drive
-interface WarmParts {
-  readonly meta: SnapshotMeta;
-  readonly isDriveIncluded: boolean;
 }
 
 // what a running send reports as it goes
@@ -290,17 +279,6 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     }
 
     return imp;
-  };
-
-  // a sleeping imp's snapshot record, which a warm send carries
-  const requireMeta = (imp: ImpRecord): SnapshotMeta => {
-    const meta = readSnapshotMeta(deps.storage.resolveImpPaths(imp.id));
-
-    if (meta === null) {
-      throw new Error(`${imp.name} has no memory snapshot to move`);
-    }
-
-    return meta;
   };
 
   // What a send carries after the header, in order: the image (when asked),
@@ -433,51 +411,6 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     }
   };
 
-  // a warm send's part of the header: what the target checks, the snapshot's
-  // record and vm.json, and a box imp's resolved addresses
-  const buildWarmHeader = async (
-    imp: ImpRecord,
-    warm: WarmParts,
-  ): Promise<NonNullable<MoveHeader['warm']>> => {
-    const egress = await deps.egress.readPolicy(imp.name);
-
-    return {
-      move: buildWarmMove(imp.slot, egress.mode, warm.meta, deps.readWarmHost()),
-      meta: warm.meta,
-      vm: readVmIdentity(deps.storage.resolveImpPaths(imp.id)),
-      isDriveIncluded: warm.isDriveIncluded,
-      answers: egress.mode === 'box' ? deps.egress.readAnswers(imp.slot) : [],
-    };
-  };
-
-  // The imp's live leases, each with the time it has left now: the target
-  // ends it that long after it reads the header. The mark keeps every lease
-  // call off the imp until the commit, so the rows here stay as sent.
-  const buildMovedLeases = async (imp: ImpRecord): Promise<MoveHeader['imp']['leases']> => {
-    const at = deps.now();
-
-    const leases = await listLeases(deps.db, at, [imp.id]);
-
-    return leases.map((lease) => {
-      const remainingMs = lease.until === null ? null : lease.until.getTime() - at;
-
-      // a hold past what a header carries ends at the cap on the target
-      if (remainingMs !== null && remainingMs > MAX_LEASE_REMAINING_MS) {
-        deps.log(
-          `impd: move: ${imp.name}: lease ${lease.principal} ${lease.label} ends past 100 years; it moves with 100 years left`,
-        );
-      }
-
-      return {
-        principal: lease.principal,
-        label: lease.label,
-        display: lease.display,
-        remainingMs: remainingMs === null ? null : Math.min(remainingMs, MAX_LEASE_REMAINING_MS),
-        createdAt: lease.createdAt,
-      };
-    });
-  };
-
   const buildHeader = async (
     imp: ImpRecord,
     isImageIncluded: boolean,
@@ -496,7 +429,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const egress = await deps.egress.readPolicy(imp.name);
     const grants = await deps.grants.listGrantDetails(imp.name);
-    const leases = await buildMovedLeases(imp);
+    const leases = await buildMovedLeases(deps, imp);
 
     return {
       version: 1,
@@ -535,7 +468,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         diskBytes: checkpoint.diskBytes,
       })),
       streams,
-      warm: warm === null ? null : await buildWarmHeader(imp, warm),
+      warm: warm === null ? null : await buildWarmHeader(deps, imp, warm),
     };
   };
 
@@ -598,7 +531,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const image = await findImageById(deps.db, imp.imageId);
 
-    const meta = target.isWarm ? requireMeta(imp) : null;
+    const meta = target.isWarm ? requireSnapshotMeta(deps, imp) : null;
 
     const offer = await sendToPeer(peer, MOVE_PATHS.offer, ticket, {
       body: JSON.stringify({
@@ -624,7 +557,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       );
     }
 
-    await requireLeasesKept(imp, reply.keepsLeases);
+    await requireLeasesKept(deps, imp, reply.keepsLeases);
 
     // a target from before the setting would put the imp's disk in its backups
     if (!imp.isBackedUp && !reply.keepsBackupOff) {
@@ -765,33 +698,6 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return true;
   };
 
-  // Any live lease, a hold too, goes only to a target that keeps leases,
-  // and only as many as a header carries
-  const requireLeasesKept = async (imp: ImpRecord, keepsLeases: boolean): Promise<void> => {
-    const leases = await listLeases(deps.db, deps.now(), [imp.id]);
-
-    if (leases.length > 0 && !keepsLeases) {
-      throw new OfferRefusalError(
-        `the target's impd predates moving leases and would drop the imp's ${String(leases.length)} lease(s); upgrade it, or release them first`,
-      );
-    }
-
-    if (leases.length > MAX_MOVED_LEASES) {
-      throw new OfferRefusalError(
-        `the imp has ${String(leases.length)} leases, more than a move carries (${String(MAX_MOVED_LEASES)}); release some first`,
-      );
-    }
-
-    // the target would refuse the header after the stream started
-    const unfit = leases.find((lease) => !MovedLeaseOwnerSchema.safeParse(lease).success);
-
-    if (unfit !== undefined) {
-      throw new OfferRefusalError(
-        `the imp's lease ${unfit.label} of ${unfit.principal.slice(0, 64)} has an owner or label a move cannot carry (at most 256 characters); release it first`,
-      );
-    }
-  };
-
   const startHaltedAgain = async (imp: ImpRecord): Promise<void> => {
     try {
       await deps.imps.startImp(imp.name);
@@ -874,54 +780,6 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     };
   };
 
-  // A sleeping imp moves warm only to a target that can load its memory;
-  // else the refusal names each fact that differs
-  const checkWarmMove = async (
-    imp: ImpRecord,
-    meta: SnapshotMeta,
-    target: WarmHost | null,
-  ): Promise<WarmMove> => {
-    const egress = await deps.egress.readPolicy(imp.name);
-
-    const move = buildWarmMove(imp.slot, egress.mode, meta, deps.readWarmHost());
-
-    const mismatches =
-      target === null
-        ? ['the target does not say what it can load']
-        : findWarmMismatches(move, target);
-
-    // The guest knows its gateway by this tap's MAC. A tap made before taps
-    // took their slot's MAC has a random one, which no target tap has; with
-    // no tap (a host restart removed it), the guest may still hold one
-    const address = deriveSlotAddress(imp.slot, { subnet: deps.config.subnet, portBase: 0 });
-    const tapMac = (deps.readTapMac ?? readTapMac)(address.tap);
-
-    if (tapMac === null) {
-      mismatches.push(`it has no tap ${address.tap} since a restart; wake it once first`);
-    } else if (tapMac !== address.hostMac) {
-      mismatches.push(`its tap ${address.tap} has a MAC from before slot MACs (${tapMac})`);
-    }
-
-    // the guest holds its peers' addresses, which are other imps' on the target
-    const members = await listNetworkMembers(deps.db);
-
-    const networks = members
-      .filter((member) => member.impId === imp.id)
-      .map((member) => member.network);
-
-    if (networks.length > 0) {
-      mismatches.push(`it is on private networks (${networks.join(', ')}); imp net leave first`);
-    }
-
-    if (mismatches.length > 0) {
-      throw new ORPCError('PRECONDITION_FAILED', {
-        message: `${imp.name} cannot move with its memory: ${mismatches.join('; ')}. imp move --stop moves it cold`,
-      });
-    }
-
-    return move;
-  };
-
   // What prepare writes once the imp is stopped or asleep: the send's row
   // and the mark, after which no call but the move's own reaches the imp
   const writeSendMark = async (
@@ -929,8 +787,8 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     options: PrepareOptions,
     isWarm: boolean,
   ): Promise<MovePlan> => {
-    const meta = isWarm ? requireMeta(imp) : null;
-    const warm = meta === null ? null : await checkWarmMove(imp, meta, options.target);
+    const meta = isWarm ? requireSnapshotMeta(deps, imp) : null;
+    const warm = meta === null ? null : await checkWarmMove(deps, imp, meta, options.target);
     const isZfs = deps.storage.kind === 'zfs' && options.targetStorage === 'zfs';
     const mode: MoveMode = isZfs ? 'zfs' : 'files';
 
@@ -1211,10 +1069,4 @@ async function withPeerError<T>(call: () => Promise<T>): Promise<T> {
 
     throw new ORPCError('BAD_GATEWAY', { message: readErrorMessage(error), cause: error });
   }
-}
-
-// The offer's answer refused the send before any byte went: an imp the
-// prepare halted runs again
-class OfferRefusalError extends Error {
-  override name = 'OfferRefusalError';
 }
