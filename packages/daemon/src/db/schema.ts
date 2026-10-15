@@ -113,6 +113,7 @@ export interface Imps {
   move_state: MoveState | null;
   name: string;
   next_boot_cause: ColdBootCause | null;
+  oops_boot_id: string | null;
   pid: number | null;
   public_auth: string | null;
   public_hash: string | null;

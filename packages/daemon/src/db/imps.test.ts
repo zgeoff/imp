@@ -62,6 +62,7 @@ test('#createImp returns a creating imp with the defaults for what it leaves out
     sleptAt: null,
     holdUntil: null,
     error: null,
+    oopsBootId: null,
     pid: null,
     firecrackerVersion: null,
     httpPort: 8080,

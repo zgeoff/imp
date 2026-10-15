@@ -6,6 +6,7 @@ import { invariant } from '@imp/test-utils/invariant';
 import { sql } from 'kysely';
 import { createSecretFiles } from '../broker/secret-files';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
+import { findImpByName } from './imps';
 import { MIGRATIONS, runMigrations, runMigrationsTo } from './run-migrations';
 import { listGrantedRules } from './secrets';
 
@@ -576,4 +577,46 @@ test('#runMigrations keeps the broker audit index in the refusals migration', as
       sql: 'CREATE INDEX "broker_audit_imp_id" on "broker_audit" ("imp_id", "id")',
     },
   ]);
+});
+
+test('#runMigrations adds only the oops boot id column to the imps in the oops boot id migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '031_add_grant_filter');
+
+  const before = await sql<{ name: string; type: string; notnull: number; dflt_value: null }>`
+    SELECT name, type, "notnull", dflt_value FROM pragma_table_info('imps')
+  `.execute(db);
+
+  await runMigrations(db);
+
+  const after = await sql<{ name: string; type: string; notnull: number; dflt_value: null }>`
+    SELECT name, type, "notnull", dflt_value FROM pragma_table_info('imps')
+  `.execute(db);
+
+  expect(after.rows).toStrictEqual([
+    ...before.rows,
+    { name: 'oops_boot_id', type: 'TEXT', notnull: 0, dflt_value: null },
+  ]);
+});
+
+test('#runMigrations keeps a kernel oops hold an older impd wrote in the oops boot id migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '031_add_grant_filter');
+
+  // rows as an impd at 031 wrote them: a hold, with no boot recorded
+  await sql`INSERT INTO images (id, name, ref, digest, size_bytes, created_at)
+    VALUES ('img', 'base', 'imp/base:latest', 'sha256:0', 1, 0)`.execute(db);
+
+  await sql`INSERT INTO imps (id, name, image_id, state, vcpus, memory_mib, slot, ip,
+    created_at, last_active_at, error)
+    VALUES ('imp', 'dev', 'img', 'stopped', 1, 512, 0, 'ip', 0, 0,
+      'a kernel oops killed firecracker')`.execute(db);
+
+  await runMigrations(db);
+
+  const imp = await findImpByName(db, 'dev');
+
+  expect(imp).toMatchObject({ error: 'a kernel oops killed firecracker', oopsBootId: null });
 });

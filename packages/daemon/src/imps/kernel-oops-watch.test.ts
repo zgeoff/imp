@@ -11,8 +11,9 @@ function setupTest() {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // where the test writes the kernel's taint mask, as /proc/sys/kernel/tainted
-  return { taintPath: join(dir, 'tainted') };
+  // where the test writes the kernel's taint mask, as /proc/sys/kernel/tainted,
+  // and its boot id, as /proc/sys/kernel/random/boot_id
+  return { taintPath: join(dir, 'tainted'), bootIdPath: join(dir, 'boot_id') };
 }
 
 test('it reads a clear taint mask as no oops', () => {
@@ -179,4 +180,46 @@ test('it keeps an oops it saw once the file reads clear again', () => {
   writeFileSync(ctx.taintPath, '0\n');
 
   expect(watch.isOopsed()).toBeTrue();
+});
+
+test('it reads the boot id the kernel gives this boot', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.bootIdPath, '6b1f0c3e-92d4-4a7b-8e5f-0d2c4a6b8e1f\n');
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath);
+
+  expect(watch.findBootId()).toBe('6b1f0c3e-92d4-4a7b-8e5f-0d2c4a6b8e1f');
+});
+
+test('it finds no boot id without the boot id file', () => {
+  const ctx = setupTest();
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath);
+
+  expect(watch.findBootId()).toBeNull();
+});
+
+test('it finds no boot id in a file that holds no UUID', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.bootIdPath, 'booted\n');
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath);
+
+  expect(watch.findBootId()).toBeNull();
+});
+
+test('it keeps the first boot id it read', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.bootIdPath, '6b1f0c3e-92d4-4a7b-8e5f-0d2c4a6b8e1f\n');
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath);
+
+  watch.findBootId();
+
+  // a boot keeps its id; a read that says otherwise is not a reboot
+  writeFileSync(ctx.bootIdPath, 'c47a9e20-1b3d-4f68-a5c2-7e9d0b1f3a54\n');
+
+  expect(watch.findBootId()).toBe('6b1f0c3e-92d4-4a7b-8e5f-0d2c4a6b8e1f');
 });

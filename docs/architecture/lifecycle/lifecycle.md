@@ -62,12 +62,13 @@ because a VM that ran when impd started had already outlived any earlier oops. I
 only for a VM that was running when impd first read the flag set, because a VM that booted or woke
 later never met the oops. Until the flag clears, impd refuses a start or a wake of that imp with an
 error that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)). The hold
-lives in the imp's record, so it outlasts the reboot that freed the disk. impd therefore clears
-every hold at a start that reads the flag clear, because only a reboot clears the flag, and a later
-oops in another task never holds the imp again. A read that fails or finds no taint mask does not
-prove a reboot, so impd keeps every hold and refuses a start or a wake of a held imp until a read
-finds the flag clear. impd records no boot with a hold, so an oops between a reboot and impd's start
-keeps the earlier boot's holds until the next reboot.
+lives in the imp's record with the kernel's boot id, so it outlasts the reboot that freed the disk.
+At start impd clears every hold when it reads the flag clear, because only a reboot clears the flag.
+It also clears a hold that records another boot's id, whatever the flag reads, because an oops in
+another task between the reboot and impd's start sets the flag again without holding the imp. A read
+that fails or finds no taint mask does not prove a reboot, so a hold of this boot stays, and impd
+refuses a start or a wake of the held imp until a read finds the flag clear. A hold without a boot
+id, from an impd that did not record one or could not read it, waits for a clear read too.
 
 Background work never waits for a lock. The idle loop, the governor, the watchdog and the memory
 controller try the lock and skip the imp when anything holds it or waits for it. The governor holds

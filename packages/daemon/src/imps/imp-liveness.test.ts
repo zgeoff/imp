@@ -13,7 +13,8 @@ async function setupTest(options: ImpTestOptions = {}) {
 
   onTestFinished(() => stack.disposeAsync());
 
-  // the host's taint mask, as /proc/sys/kernel/tainted; a test writes it
+  // the host's taint mask, as /proc/sys/kernel/tainted, and its boot id, as
+  // /proc/sys/kernel/random/boot_id; a test writes them
   const taintDir = mkdtempSync(join(tmpdir(), 'imp-taint-'));
 
   stack.defer(() => {
@@ -21,13 +22,17 @@ async function setupTest(options: ImpTestOptions = {}) {
   });
 
   const taintPath = join(taintDir, 'tainted');
+  const bootIdPath = join(taintDir, 'boot_id');
 
-  const harness = await createImpTest(stack, { taintPath, ...options });
+  const harness = await createImpTest(stack, {
+    kernelFiles: { taintPath, bootIdPath },
+    ...options,
+  });
 
   // the image every imp boots from
   await harness.createTestImage('ubuntu');
 
-  return { ...harness, taintPath };
+  return { ...harness, taintPath, bootIdPath };
 }
 
 test('it finds a VM that died after its sleep wrote the snapshot asleep, not stopped', async () => {
@@ -401,6 +406,177 @@ test('it clears the hold of an imp a kernel oops killed when impd starts with fl
 
   expect(record?.error).toBeNull();
   expect(ctx.logs).toContain('impd: dev: the host rebooted since a kernel oops held its disk');
+});
+
+test('it records the boot a kernel oops held the disk of an imp in', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(ctx.taintPath, '0\n');
+  writeFileSync(ctx.bootIdPath, '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43\n');
+
+  // impd's start reads the flag clear
+  await ctx.imps.reconcileImps();
+  await ctx.imps.createImp({ name: 'dev' });
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  ctx.fake.alive.clear();
+
+  await ctx.imps.getImp('dev');
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(record?.oopsBootId).toBe('0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43');
+});
+
+test('it clears the hold of an earlier boot when an oops set flag D before impd started', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops left in the boot before the reboot
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+    oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
+  });
+
+  // after the reboot, another task oopsed before impd started
+  writeFileSync(ctx.taintPath, '128\n');
+  writeFileSync(ctx.bootIdPath, 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58\n');
+
+  await ctx.imps.reconcileImps();
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(record?.error).toBeNull();
+  expect(ctx.logs).toContain('impd: dev: the host rebooted since a kernel oops held its disk');
+});
+
+test('it starts an imp held in an earlier boot when an oops set flag D before impd started', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops left in the boot before the reboot
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+    oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
+  });
+
+  // after the reboot, another task oopsed before impd started
+  writeFileSync(ctx.taintPath, '128\n');
+  writeFileSync(ctx.bootIdPath, 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58\n');
+
+  await ctx.imps.reconcileImps();
+
+  const started = await ctx.imps.startImp('dev');
+
+  expect(started.state).toBe('running');
+});
+
+test('it clears the hold of an earlier boot when impd cannot read the taint flag', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops left in the boot before the reboot
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+    oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
+  });
+
+  writeFileSync(ctx.taintPath, 'tainted\n');
+  writeFileSync(ctx.bootIdPath, 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58\n');
+
+  await ctx.imps.reconcileImps();
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(record?.error).toBeNull();
+});
+
+test('it keeps the record of a hold of this boot when impd starts again with flag D set', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops of this boot left before impd restarted
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+    oopsBootId: 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58',
+  });
+
+  writeFileSync(ctx.taintPath, '128\n');
+  writeFileSync(ctx.bootIdPath, 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58\n');
+
+  await ctx.imps.reconcileImps();
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(record?.error).toBe('a kernel oops killed firecracker');
+});
+
+test('it refuses to start an imp held in this boot until the host reboots', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops of this boot left before impd restarted
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+    oopsBootId: 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58',
+  });
+
+  writeFileSync(ctx.taintPath, '128\n');
+  writeFileSync(ctx.bootIdPath, 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58\n');
+
+  await ctx.imps.reconcileImps();
+
+  expect(ctx.imps.startImp('dev')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+});
+
+test('it keeps the hold of an earlier boot when impd cannot read the boot id', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.stopImp('dev');
+
+  // the record an oops left; without this boot's id nothing proves a reboot
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    pid: null,
+    error: 'a kernel oops killed firecracker',
+    oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
+  });
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  await ctx.imps.reconcileImps();
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(record?.error).toBe('a kernel oops killed firecracker');
 });
 
 test('it keeps the record of a hold when impd starts with flag D set', async () => {

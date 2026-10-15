@@ -173,9 +173,10 @@ export interface ImpTestOptions {
   // the storage backend over the data dir; XFS on plain files by default
   readonly createStorage?: (dataDir: string) => StorageBackend;
 
-  // a file that stands for /proc/sys/kernel/tainted, read on the harness's
-  // clock; the kernel never oopses without one
-  readonly taintPath?: string;
+  // files that stand for /proc/sys/kernel/tainted, read on the harness's
+  // clock, and /proc/sys/kernel/random/boot_id; the kernel never oopses
+  // without them
+  readonly kernelFiles?: { readonly taintPath: string; readonly bootIdPath: string };
 
   // CPU limits: none enforced, and 8 cores, by default
   readonly cgroups?: CpuCgroups;
@@ -382,9 +383,13 @@ export async function createImpTest(
       },
       hostCpus: options.hostCpus ?? 8,
       kernelOops:
-        options.taintPath === undefined
+        options.kernelFiles === undefined
           ? NO_KERNEL_OOPS
-          : createKernelOopsWatch(options.taintPath, readClock),
+          : createKernelOopsWatch(
+              options.kernelFiles.taintPath,
+              readClock,
+              options.kernelFiles.bootIdPath,
+            ),
       ...(frozenAt !== undefined && {
         sleepTiming: {
           now: readClock,

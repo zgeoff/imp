@@ -852,6 +852,19 @@ export const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // the boot a kernel oops held the imp's disk in (GEO-908)
+  '032_add_imp_oops_boot_id': {
+    async up(db: Kysely<NoTables>) {
+      await db.schema
+        .alterTable('imps')
+
+        // the kernel's boot id when the oops hold began; null on an imp
+        // without one, and on a hold from before this column
+        .addColumn('oops_boot_id', 'text')
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {
