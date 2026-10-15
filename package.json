@@ -81,7 +81,7 @@
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "lint:full": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error",
-    "lint:docs": "bash .claude/skills/docs-writing/scripts/check-links.sh",
+    "lint:docs": "bash .claude/skills/docs-writing/scripts/check-links.sh && bun scripts/ci/check-doc-citations.ts",
     "render:deploy": "bun scripts/render/render-imp-host.ts",
     "render:protocol": "bun scripts/render-protocol-schema.ts",
     "render:db-schema": "bun packages/daemon/src/db/render-schema.ts",

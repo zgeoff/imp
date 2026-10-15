@@ -14,7 +14,7 @@ bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck and shfmt over install.sh and the shell in scripts/, host/, kernel/, deploy/, test/, packages/
 actionlint && zizmor --config .github/zizmor.yml .github   # the workflows, as CI lints them
 hadolint host/Dockerfile images/base/Dockerfile
-bun run lint:docs                 # every relative link and anchor in the docs resolves
+bun run lint:docs                 # every docs link, and every docs/ path code cites, resolves
 (cd agent && gofmt -l . && go vet ./...)   # gofmt -l lists unformatted files
 (cd agent && go tool -modfile=tools/go.mod golangci-lint run --build-tags root ./...)   # the lint CI runs
 scripts/test-go.sh                # the agent's Go tests with -race; prints the slowest cases
@@ -264,7 +264,9 @@ Lefthook installs the hooks with `bun install`.
 
 The `checks` job also runs the docs-writing skill's scripts. `bun run lint:docs` runs
 `check-links.sh`, which fails on a broken relative link or anchor in a README or a page under
-`docs/`. `check-length.sh` reports README and docs/ lengths and runs `check-prose.sh`, without
+`docs/`. It then runs `scripts/ci/check-doc-citations.ts`, which fails on a `docs/` path or anchor
+cited outside Markdown that does not resolve, such as a code comment that names a page a docs
+rewrite moved. `check-length.sh` reports README and docs/ lengths and runs `check-prose.sh`, without
 failing the job.
 
 `bun run audit` ignores one advisory by its ID. GHSA-86w9-cpqp-85rv is a flaw in node-forge's RSA
