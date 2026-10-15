@@ -2,16 +2,13 @@ import type { Socket } from 'node:net';
 import { join } from 'node:path';
 import type {
   AuditEntry,
-  BrokerRule,
   EgressMode,
   Grant,
   GrantFilter,
   GrantNotCopied,
-  OAuthConfig,
   RefusedRequest,
   Secret,
   SecretAdded,
-  SecretKind,
 } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import {
@@ -21,63 +18,29 @@ import {
   buildNotFoundError,
 } from '../api-errors';
 import type { Config } from '../config';
-import { listAuditEntries, listRefusedRequests, writeAuditEntry } from '../db/broker-audit';
-import type { NewAuditEntry } from '../db/broker-audit';
+import { listAuditEntries, listRefusedRequests } from '../db/broker-audit';
 import { findImpByName, listImps } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import {
   createCheckedGrant,
   createForkGrants,
-  createSecret,
-  findBrokerPeer,
-  findSecret,
   listAllGrantedRules,
-  listFileRemovals,
   listGrantNames,
   listGrantedRules,
   listGrants,
-  listSecrets,
-  listValueFiles,
   removeCheckedGrant,
-  removeFileRemoval,
-  removeSecret,
-  upsertSecret,
 } from '../db/secrets';
-import type {
-  ForkAuthority,
-  GrantAuthority,
-  GrantClash,
-  GrantedRule,
-  NewSecret,
-  SecretRecord,
-} from '../db/secrets';
+import type { ForkAuthority, GrantAuthority, GrantClash } from '../db/secrets';
 import { deriveSlotAddress } from '../net/addressing';
-import { readConnectedPrefixes4, readRouteDevice, readUplinks } from '../net/host-routes';
-import type { Uplinks } from '../net/host-routes';
-import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
-import { createRangeChecker } from '../net/range-checker';
-import {
-  BLOCKED_RANGES6,
-  DOCUMENTATION_RANGES6,
-  RESERVED_RANGES6,
-  createRangeChecker6,
-} from '../net/ranges6';
-import { createTtlCache } from '../process/ttl-cache';
 import { readErrorMessage } from '../read-error-message';
 import { loadOrCreateBrokerCa } from './broker-ca';
-import { startBrokerFront } from './broker-front';
-import type { BrokerFront } from './broker-front';
-import {
-  PLACEHOLDER,
-  SecretRulesError,
-  listPlaceholderEnv,
-  renderCredential,
-  resolveRules,
-} from './connector-kinds';
-import { createForwarder } from './forward-request';
-import type { Credential, UpstreamFetch } from './forward-request';
+import { PLACEHOLDER, listPlaceholderEnv } from './connector-kinds';
+import { createBrokerProxy } from './create-broker-proxy';
+import { createSecretStore } from './create-secret-store';
+import type { AddSecretInput } from './create-secret-store';
+import type { UpstreamFetch } from './forward-request';
 import {
   buildBrokerEnv,
   buildInstallInput,
@@ -87,29 +50,14 @@ import {
 import type { BrokerExecEnv, InstallBundle, TrustedImp } from './guest-trust';
 import { createOAuthRefresher } from './oauth-refresher';
 import type { OAuthFetch } from './oauth-refresher';
-import { buildPendingState, formatOAuthState, parseOAuthState, readIdClaims } from './oauth-state';
-import { createRefusalBudget } from './refusal-budget';
-import { buildValueFile, createSecretFiles } from './secret-files';
+import { removeStaleSecretFiles } from './remove-stale-secret-files';
+import { createSecretFiles } from './secret-files';
 import type { SecretFiles } from './secret-files';
-import { createTerminators } from './terminators';
 import { createUpstreamResolver } from './test-upstreams';
-import { requireUplinkRoute, resolveTunnelTarget } from './tunnel-target';
 
-// The credential broker (docs/guides/connectors.md): secrets and grants for
-// the API, the front port guests reach on their gateway, and the exec
-// variables that point a guest's tools at it.
-
-interface AddSecretInput {
-  readonly name: string;
-  readonly kind: SecretKind;
-  readonly value: string;
-  readonly rules?: readonly BrokerRule[] | undefined;
-
-  // required for kind oauth, whose value is then the refresh token
-  readonly oauth?: OAuthConfig | undefined;
-  readonly replace?: boolean | undefined;
-  readonly rebind?: boolean | undefined;
-}
+// The credential broker (docs/guides/connectors.md): grants for the API, the
+// exec variables that point a guest's tools at it, and the secret store and
+// request path it puts together.
 
 // what a fork's copy of its source's grants did: the grants it skipped, and
 // a message when it copied none because the copy failed as a whole
@@ -224,119 +172,17 @@ export interface BrokerDeps {
   readonly secretFiles?: SecretFiles;
 }
 
-// how long the container's own prefixes stay read
-const CONNECTED_CACHE_MS = 30_000;
-
-// the refused requests of one imp audited in one second; past it, the rest
-// of that second's refusals get no row
-const REFUSED_AUDITS_PER_SECOND = 20;
-
 export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const config = deps.config;
   const db = deps.db;
   const log = deps.log;
-  const brokerDir = join(config.dataDir, 'broker');
   const now = deps.now ?? Date.now;
 
-  const ca = await loadOrCreateBrokerCa(join(brokerDir, 'ca'), now);
-
-  // the container's own prefixes, each read again once it is more than
-  // CONNECTED_CACHE_MS old
-  const blocked6 = createTtlCache<'blocked6', (address: string) => boolean>({
-    max: 1,
-    ttlMs: CONNECTED_CACHE_MS,
-    now,
-  });
-
-  // with IPv6, what no tunnel dials: the fixed ranges, the imps' /64, and
-  // the container's own links
-  const readBlocked6 = async (): Promise<((address: string) => boolean) | null> => {
-    const ipv6 = deps.ipv6 ?? null;
-
-    if (ipv6 === null) {
-      return null;
-    }
-
-    const cached = blocked6.get('blocked6');
-
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    const connected = await readConnectedPrefixes6();
-
-    const check = createRangeChecker6([...BLOCKED_RANGES6, ipv6.prefix.text, ...connected]);
-
-    blocked6.set('blocked6', check);
-
-    return check;
-  };
-
-  const publicRefused = createTtlCache<
-    'public',
-    { readonly check: (address: string) => boolean; readonly uplinks: Uplinks }
-  >({ max: 1, ttlMs: CONNECTED_CACHE_MS, now });
-
-  // what a public imp's tunnel may not dial beyond every tunnel's ranges,
-  // as its firewall refuses it: the container's IPv4 networks (can be
-  // public), IMP_EGRESS_DENY and the IPv6 ranges refused to public only
-  const readPublicRefused = async (): Promise<{
-    readonly check: (address: string) => boolean;
-    readonly uplinks: Uplinks;
-  }> => {
-    const cached = publicRefused.get('public');
-
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    const connected = await readConnectedPrefixes4();
-    const uplinks = await readUplinks();
-
-    const deny = config.egressDeny;
-
-    const check = createRangeChecker(
-      [...connected, ...deny.filter((cidr) => !cidr.includes(':'))],
-      [...DOCUMENTATION_RANGES6, ...RESERVED_RANGES6, ...deny.filter((cidr) => cidr.includes(':'))],
-    );
-
-    publicRefused.set('public', { check, uplinks });
-
-    return { check, uplinks };
-  };
-
-  const resolveTarget = async (host: string, mode: EgressMode): Promise<string> => {
-    const isBlocked6 = await readBlocked6();
-
-    if (mode !== 'public') {
-      return resolveTunnelTarget(host, { isBlocked6 });
-    }
-
-    const refused = await readPublicRefused();
-    const address = await resolveTunnelTarget(host, { isBlocked6, isRefusedMore: refused.check });
-
-    // as the firewall's uplink rule: a route by another interface reaches
-    // a private service whatever the address
-    await requireUplinkRoute(host, address, refused.uplinks, readRouteDevice);
-
-    return address;
-  };
+  const ca = await loadOrCreateBrokerCa(join(config.dataDir, 'broker', 'ca'), now);
 
   const files = deps.secretFiles ?? createSecretFiles(config.dataDir);
 
-  const valueFiles = await listValueFiles(db);
-  const pending = await removeRecordedFiles(db, files, valueFiles, log);
-
-  // A value no row and no record names is kept aside, not deleted: it may be
-  // a secret added after the database copy a restore put back, or a write
-  // whose row never came. A record that failed again keeps its file here.
-  const orphans = files.keepOrphansExcept(new Set([...valueFiles, ...pending]), new Date(now()));
-
-  for (const file of orphans.files) {
-    log(
-      `impd: broker: kept secret value file ${file}, which no database row names, in ${orphans.dir ?? ''}`,
-    );
-  }
+  await removeStaleSecretFiles(db, files, new Date(now()), log);
 
   const resolveUpstream = createUpstreamResolver(config.brokerTestUpstreams, log);
 
@@ -353,79 +199,20 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
   });
 
-  const findRule = async (impId: string, host: string): Promise<GrantedRule | undefined> => {
-    const rules = await listGrantedRules(db, impId);
-
-    return rules.find((granted) => granted.rule.host === host);
-  };
-
-  // The value comes from the file the rule's row names: a replace writes a
-  // new file and switches the row, so the old host never gets the new value.
-  // A request that read the row just before finds the old file gone.
-  const findCredential = async (impId: string, host: string): Promise<Credential | null> => {
-    const granted = await findRule(impId, host);
-
-    await deps.afterRuleRead?.();
-
-    const stored = granted === undefined ? null : files.read(granted.valueFile);
-
-    // an oauth secret's file is its state; the credential is the access token
-    const value =
-      granted?.kind === 'oauth' && stored !== null
-        ? (parseOAuthState(stored)?.accessToken ?? null)
-        : stored;
-
-    if (granted === undefined || value === null) {
-      return null;
-    }
-
-    return {
-      secretName: granted.secretName,
-      header: granted.rule.header,
-      value: renderCredential(granted.rule, value),
-      upstream: granted.rule.upstream ?? null,
-      filter: granted.filter,
-    };
-  };
-
-  // the audit write must never fail the request it describes
-  const writeAudit = async (entry: Readonly<NewAuditEntry>): Promise<void> => {
-    try {
-      await writeAuditEntry(db, entry);
-    } catch (error) {
-      log(`impd: broker: audit write failed: ${readErrorMessage(error)}`);
-    }
-  };
-
-  const refusals = createRefusalBudget({ perSecond: REFUSED_AUDITS_PER_SECOND, now });
-
-  // every request sent with a credential, and the refused ones within the
-  // imp's budget
-  const writeBudgetedAudit = (entry: NewAuditEntry): void => {
-    if (entry.reason === null || refusals.tryClaim(entry.impId)) {
-      void writeAudit(entry);
-    }
-  };
-
-  const terminators = createTerminators({
-    socketDir: join(brokerDir, 'run'),
-    issueLeaf: ca.issueLeaf,
-    isLeafDue: (leaf) => ca.isDue(leaf, now()),
-    createHandler: (key) =>
-      createForwarder({
-        impId: key.impId,
-        host: key.host,
-        findCredential,
-        resolveUpstream,
-        recordAudit: writeBudgetedAudit,
-        ...(deps.fetch !== undefined && { fetch: deps.fetch }),
-      }),
+  const proxy = createBrokerProxy({
+    config,
+    db,
+    files,
+    log,
+    now,
+    ca,
+    resolveUpstream,
+    fetch: deps.fetch,
+    resolveTunnelTarget: deps.resolveTunnelTarget,
+    dialTunnel: deps.dialTunnel,
+    ipv6: deps.ipv6,
+    afterRuleRead: deps.afterRuleRead,
   });
-
-  const state: { front: BrokerFront | null; port: number } = {
-    front: null,
-    port: config.brokerPort,
-  };
 
   const requireImp = async (name: string): Promise<ImpRecord> => {
     const imp = await findImpByName(db, name);
@@ -435,91 +222,6 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
 
     return imp;
-  };
-
-  const toApiSecret = async (secret: SecretRecord): Promise<Secret> => {
-    const listed = await listSecrets(db);
-
-    const imps = listed.find((entry) => entry.secret.name === secret.name)?.imps ?? [];
-
-    return buildSecretView(secret, imps);
-  };
-
-  // what the API shows of a secret; for kind oauth, its state from the value
-  // file, with no token in it
-  const buildSecretView = (secret: SecretRecord, imps: readonly string[]): Secret => {
-    const shown: Secret = {
-      name: secret.name,
-      kind: secret.kind,
-      rules: secret.rules,
-      imps,
-      createdAt: secret.createdAt,
-    };
-
-    if (secret.kind !== 'oauth' || secret.oauth === null) {
-      return shown;
-    }
-
-    const text = files.read(secret.valueFile);
-    const stored = text === null ? null : parseOAuthState(text);
-
-    return {
-      ...shown,
-      oauth: {
-        ...secret.oauth,
-        status: stored?.status ?? 'needs_login',
-        expiresAt: toDate(stored?.expiresAt),
-        refreshedAt: toDate(stored?.refreshedAt),
-        error: stored === null ? 'value file missing or unreadable' : stored.error,
-        idClaims: readIdClaims(stored?.idToken ?? null),
-      },
-    };
-  };
-
-  // The row for a value just written to its file, which goes again when no
-  // row names it; with replace, the file the row named before.
-  const writeSecretRow = async (
-    secret: Readonly<NewSecret>,
-    input: Readonly<AddSecretInput>,
-  ): Promise<{
-    readonly secret: SecretRecord;
-    readonly oldValueFile: string | null;
-    readonly droppedGrants: number;
-  }> => {
-    try {
-      if (input.replace !== true) {
-        const made = await createSecret(db, secret);
-
-        if (made === null) {
-          throw buildConflictError('secret', secret.name);
-        }
-
-        return { secret: made, oldValueFile: null, droppedGrants: 0 };
-      }
-
-      const outcome = await upsertSecret(db, secret, input.rebind === true);
-
-      if (outcome.kind === 'binding-changed') {
-        throw buildBindingChangedError(secret.name);
-      }
-
-      return outcome;
-    } catch (error) {
-      files.remove(secret.valueFile);
-      throw error;
-    }
-  };
-
-  // the exact file the commit displaced, then its record; a failure leaves
-  // both to the next start
-  const removeDisplacedFile = async (file: string): Promise<void> => {
-    try {
-      files.remove(file);
-
-      await removeFileRemoval(db, file);
-    } catch (error) {
-      log(`impd: broker: could not remove an old secret value file: ${readErrorMessage(error)}`);
-    }
   };
 
   const refresher = createOAuthRefresher({
@@ -542,7 +244,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
       const live = new Set(granted.map((entry) => `${entry.impId}\n${entry.rule.host}`));
 
-      await terminators.prune((key) => live.has(`${key.impId}\n${key.host}`));
+      await proxy.prune((key) => live.has(`${key.impId}\n${key.host}`));
 
       trust.forgetExcept(new Set(imps.map((imp) => imp.id)));
     } catch (error) {
@@ -550,111 +252,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
   };
 
+  const secrets = createSecretStore({ db, files, log, refresher, applyGrants });
+
   return {
-    addSecret: async (input) => {
-      let rules: readonly BrokerRule[];
-
-      try {
-        rules = resolveRules(input.kind, input.rules);
-      } catch (error) {
-        if (error instanceof SecretRulesError) {
-          throw new ORPCError('BAD_REQUEST', { message: error.message });
-        }
-
-        throw error;
-      }
-
-      if (input.kind === 'oauth' && input.oauth === undefined) {
-        throw new ORPCError('BAD_REQUEST', {
-          message: 'kind oauth needs a token URL and a client id',
-        });
-      }
-
-      if (input.kind !== 'oauth' && input.oauth !== undefined) {
-        throw new ORPCError('BAD_REQUEST', {
-          message: `kind ${input.kind} has no token URL or client id; they are for kind oauth`,
-        });
-      }
-
-      const oauth = input.kind === 'oauth' ? (input.oauth ?? null) : null;
-
-      // under the secret's lock, so a replace never lands in the middle of a
-      // refresh, which rewrites the file the row names
-      const saved = await refresher.withLock(input.name, async () => {
-        const valueFile = buildValueFile(input.name);
-
-        const content =
-          input.kind === 'oauth' ? formatOAuthState(buildPendingState(input.value)) : input.value;
-
-        // the value first, so no row ever names a file that is not there
-        files.write(valueFile, content);
-
-        const written = await writeSecretRow(
-          { name: input.name, kind: input.kind, rules, oauth, valueFile },
-          input,
-        );
-
-        if (written.oldValueFile !== null) {
-          await removeDisplacedFile(written.oldValueFile);
-          await applyGrants();
-        }
-
-        return written;
-      });
-
-      // Only now, with the row committed: a refresh before it could rotate
-      // the token, and a failed commit removes the file that holds the result.
-      // A first refresh that fails still answers; the secret shows why.
-      if (input.kind === 'oauth') {
-        await refresher.refresh(input.name, true);
-      }
-
-      const latest = await findSecret(db, input.name);
-      const shown = await toApiSecret(latest ?? saved.secret);
-
-      return { ...shown, droppedGrants: saved.droppedGrants };
-    },
-
-    listSecrets: async () => {
-      const listed = await listSecrets(db);
-
-      return listed.map((entry) => buildSecretView(entry.secret, entry.imps));
-    },
-
-    refreshSecret: async (name) => {
-      const secret = await findSecret(db, name);
-
-      if (secret === undefined) {
-        throw buildNotFoundError('secret', name);
-      }
-
-      if (secret.kind !== 'oauth') {
-        throw new ORPCError('BAD_REQUEST', { message: `secret ${name} is not an oauth secret` });
-      }
-
-      await refresher.refresh(name, true);
-
-      const current = await findSecret(db, name);
-
-      if (current === undefined) {
-        throw buildNotFoundError('secret', name);
-      }
-
-      return toApiSecret(current);
-    },
-
-    deleteSecret: async (name) => {
-      await refresher.withLock(name, async () => {
-        const valueFile = await removeSecret(db, name);
-
-        if (valueFile === null) {
-          throw buildNotFoundError('secret', name);
-        }
-
-        await removeDisplacedFile(valueFile);
-        await applyGrants();
-      });
-    },
+    addSecret: secrets.addSecret,
+    listSecrets: secrets.listSecrets,
+    refreshSecret: secrets.refreshSecret,
+    deleteSecret: secrets.deleteSecret,
 
     addGrant: async (impName, secretName, authority, filter) => {
       const imp = await requireImp(impName);
@@ -795,7 +399,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       }).hostIp;
 
       const env = buildBrokerEnv({
-        proxyUrl: `http://${gateway}:${String(state.port)}`,
+        proxyUrl: `http://${gateway}:${String(proxy.getPort())}`,
         placeholders: listPlaceholderEnv(granted.map((entry) => entry.kind)),
         placeholder: PLACEHOLDER,
       });
@@ -805,74 +409,19 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
     applyGrants,
 
-    closeTunnels: (impId, keep) => {
-      state.front?.closeTunnels(impId, keep);
-    },
+    closeTunnels: proxy.closeTunnels,
 
-    isGranted: async (impId, host) => (await findRule(impId, host)) !== undefined,
+    isGranted: proxy.isGranted,
 
-    listen: async (port) => {
-      const front = await startBrokerFront(port, {
-        subnet: config.subnet,
-        findPeer: (slot) => findBrokerPeer(db, slot),
-        isGranted: async (impId, host) => (await findRule(impId, host)) !== undefined,
-        openTerminator: terminators.open,
-        resolveTunnelTarget: deps.resolveTunnelTarget ?? resolveTarget,
-        ...(deps.dialTunnel !== undefined && { dialTunnel: deps.dialTunnel }),
-        recordAudit: writeBudgetedAudit,
-        log,
-      });
-
-      const address = front.server.address();
-
-      state.front = front;
-      state.port = typeof address === 'object' && address !== null ? address.port : port;
-
-      return state.port;
-    },
+    listen: proxy.listen,
 
     stop: async () => {
       unwatch();
 
       await refresher.stop();
-      await state.front?.stop();
-      await terminators.stop();
+      await proxy.stop();
     },
   };
-}
-
-function toDate(ms: number | null | undefined): Date | null {
-  return ms === null || ms === undefined ? null : new Date(ms);
-}
-
-// Removes each file a committed delete or replace displaced and impd stopped
-// before removing, then its record; returns the files whose removal failed
-// again, whose records stay for the next start. A file a row names stays.
-async function removeRecordedFiles(
-  db: ImpDatabase,
-  files: Pick<SecretFiles, 'remove'>,
-  valueFiles: ReadonlySet<string>,
-  log: (message: string) => void,
-): Promise<string[]> {
-  const recorded = await listFileRemovals(db);
-
-  const failed: string[] = [];
-
-  for (const file of recorded) {
-    try {
-      if (!valueFiles.has(file)) {
-        files.remove(file);
-      }
-
-      await removeFileRemoval(db, file);
-    } catch (error) {
-      failed.push(file);
-
-      log(`impd: broker: could not remove an old secret value file: ${readErrorMessage(error)}`);
-    }
-  }
-
-  return failed;
 }
 
 function buildClashError(impName: string, secretName: string, clash: Readonly<GrantClash>) {
@@ -881,14 +430,6 @@ function buildClashError(impName: string, secretName: string, clash: Readonly<Gr
     `${impName}/${secretName}`,
     `secret ${clash.secretName} already gives ${impName} a credential for ${clash.host}`,
   );
-}
-
-// a replace with another kind or rules, without rebind
-function buildBindingChangedError(name: string) {
-  return new ORPCError('CONFLICT', {
-    message: `secret ${name} would get other hosts or headers; a rebind (--rebind) drops its grants`,
-    data: { kind: 'secret', name, reason: 'binding_changed' },
-  });
 }
 
 const FORK_SKIP_CAUSES: Readonly<Record<GrantNotCopied['reason'], string>> = {
