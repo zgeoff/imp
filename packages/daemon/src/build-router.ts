@@ -126,7 +126,7 @@ interface ImageOpCall {
 // what each call gets from build-app: who made it, and a signal that aborts
 // when what it authenticated with ends (a logout, a removed token); null
 // for nothing that can end
-export interface RpcContext {
+interface RpcContext {
   readonly caller: Caller;
   readonly ends: AbortSignal | null;
 }
