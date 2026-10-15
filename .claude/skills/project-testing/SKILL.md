@@ -389,9 +389,10 @@ run includes `tailscale` or `moves-tailnet`, `main.ts` reads the `tag:imp-e2e` O
 (`load_tailscale_e2e_authkey` in `scripts/lib.sh`): `IMP_E2E_TAILSCALE_AUTHKEY`, else
 `op read op://imp-e2e/imp-e2e-tailscale-oauth/client-secret`. The `imp` op-mint profile's token
 covers the `imp-e2e` vault and nothing else. `main.ts` drops any `TAILSCALE_AUTHKEY` from its env,
-and without the e2e client it sets `IMP_DEV_TAILNET=0`, so dev's `tag:imp` key in `.env` never joins
-an e2e node. An instance that joined as `tag:imp` before keeps its node state: run with `--clean`
-once.
+and without the e2e client it sets `IMP_DEV_TAILNET=0`, so a `tag:imp` key in `.env` never joins an
+e2e node. A dev instance with `IMP_TAILSCALE_OP=1` reads the same client and joins as `tag:imp-e2e`
+(`docs/runbooks/e2e-tailnet.md`). An instance that joined as `tag:imp` before keeps its node state:
+run with `--clean` once.
 
 The `e2e/lib/*.test.ts` unit tests run in plain `bun test` and need no KVM, Docker or dev instance.
 Some start real processes: `reset-baseline.test.ts` boots impd's app in process (`createImpd` on the

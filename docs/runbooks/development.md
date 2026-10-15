@@ -118,8 +118,9 @@ does.
 
 The per-imp names case of the tailscale suite skips unless `IMP_E2E_TAILNET_NAMES=1`: it needs the
 Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default
-`op://cloud/imp-tailscale-oauth`, fields `client-id` and `client-secret`) and the tailnet policy in
-[per-imp names](../guides/tailscale.md#per-imp-names).
+`op://imp-e2e/imp-e2e-tailscale-services`, fields `client-id` and `client-secret`) and the tailnet
+policy in [per-imp names](../guides/tailscale.md#per-imp-names). The tailnet suites join as
+`tag:imp-e2e`, which impz owns ([the e2e tailnet tag](./e2e-tailnet.md)).
 
 `IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
 `scripts/dev/dev.sh`. These variables tune a run:

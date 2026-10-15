@@ -193,8 +193,67 @@ test('#load_tailscale_authkey asks op once in a run after an op miss', () => {
   expect(result.stdout.toString()).toBe('1\n');
 
   expect(readFileSync(op.calls, 'utf8')).toBe(
-    'op read op://cloud/imp-tailscale-authkey/credential\n',
+    'op read op://imp-e2e/imp-e2e-tailscale-oauth/client-secret\n',
   );
+});
+
+test("#load_tailscale_authkey joins a dev instance with impz's tag:imp-e2e client from op, ephemeral and preauthorized, untraced", () => {
+  const ctx = setupTest();
+  const op = createStubBin(ctx.dir, 'op', "echo 'tskey-client-fake-for-the-trace-check'");
+
+  // the comparison runs untraced: only the function's own trace is checked
+  const result = Bun.spawnSync(
+    [
+      'bash',
+      '-x',
+      '-c',
+      `source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey; echo "found $?"
+      { set +x; } 2>/dev/null
+      [ "$TAILSCALE_AUTHKEY" = 'tskey-client-fake-for-the-trace-check?ephemeral=true&preauthorized=true' ] && echo match
+      echo "$IMP_TAILSCALE_TAGS"`,
+      'bash',
+      new URL('lib.sh', import.meta.url).pathname,
+    ],
+    {
+      env: {
+        PATH: `${op.bin}:${process.env['PATH'] ?? ''}`,
+        HOME: ctx.dir,
+        IMP_TAILSCALE_OP: '1',
+      },
+    },
+  );
+
+  expect(result.stdout.toString()).toBe('found 0\nmatch\ntag:imp-e2e\n');
+  expect(result.stderr.toString()).not.toContain('tskey-client-fake-for-the-trace-check');
+
+  expect(readFileSync(op.calls, 'utf8')).toBe(
+    'op read op://imp-e2e/imp-e2e-tailscale-oauth/client-secret\n',
+  );
+});
+
+test('#load_tailscale_authkey keeps the tags IMP_TAILSCALE_TAGS sets for a client secret from op', () => {
+  const ctx = setupTest();
+  const op = createStubBin(ctx.dir, 'op', "echo 'tskey-client-fake-other'");
+
+  const result = Bun.spawnSync(
+    [
+      'bash',
+      '-c',
+      'source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey; echo "found $? [$IMP_TAILSCALE_TAGS]"',
+      'bash',
+      new URL('lib.sh', import.meta.url).pathname,
+    ],
+    {
+      env: {
+        PATH: `${op.bin}:${process.env['PATH'] ?? ''}`,
+        HOME: ctx.dir,
+        IMP_TAILSCALE_OP: '1',
+        IMP_TAILSCALE_TAGS: 'tag:sandbox-dev',
+      },
+    },
+  );
+
+  expect(result.stdout.toString()).toBe('found 0 [tag:sandbox-dev]\n');
 });
 
 test('#load_tailscale_authkey never asks op without IMP_TAILSCALE_OP=1', () => {
