@@ -38,7 +38,7 @@ import { requireUplinkRoute, resolveTunnelTarget } from './tunnel-target';
 // guests reach on their gateway, a plain tunnel to an ungranted host, and a
 // TLS terminator per granted host that sends the real credential on.
 
-export interface BrokerProxy {
+interface BrokerProxy {
   // true when a grant of the imp covers the host
   readonly isGranted: (impId: string, host: string) => Promise<boolean>;
 
@@ -57,7 +57,7 @@ export interface BrokerProxy {
   readonly stop: () => Promise<void>;
 }
 
-export interface BrokerProxyDeps {
+interface BrokerProxyDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
   readonly files: Pick<SecretFiles, 'read'>;

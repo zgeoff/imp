@@ -34,7 +34,7 @@ export interface AddSecretInput {
   readonly rebind?: boolean | undefined;
 }
 
-export interface SecretStore {
+interface SecretStore {
   readonly addSecret: (input: AddSecretInput) => Promise<SecretAdded>;
   readonly listSecrets: () => Promise<Secret[]>;
 
@@ -43,7 +43,7 @@ export interface SecretStore {
   readonly deleteSecret: (name: string) => Promise<void>;
 }
 
-export interface SecretStoreDeps {
+interface SecretStoreDeps {
   readonly db: ImpDatabase;
   readonly files: SecretFiles;
   readonly log: (message: string) => void;
