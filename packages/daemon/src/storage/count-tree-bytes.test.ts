@@ -3,6 +3,7 @@ import { linkSync, mkdirSync, statSync, symlinkSync, writeFileSync } from 'node:
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildStubWideDir } from '../test-utils/build-stub-wide-dir';
 import { countTreeBytes } from './count-tree-bytes';
 
 async function setupTest() {
@@ -58,6 +59,18 @@ test('it never counts the target of a symlink', async () => {
   symlinkSync(outside, join(ctx.dir, 'tree', 'elsewhere'));
 
   expect(countTreeBytes(join(ctx.dir, 'tree'))).resolves.toBe(0);
+});
+
+test('it counts a tree with 700,000 sibling directories', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(join(ctx.dir, 'hostname'), 'v'.repeat(20_000));
+
+  const wide = buildStubWideDir(ctx.dir, 700_000);
+
+  expect(countTreeBytes(ctx.dir, { readDir: wide.readDir })).resolves.toBe(
+    statSync(join(ctx.dir, 'hostname')).blocks * 512 - 512,
+  );
 });
 
 test('it counts a tree that does not exist yet as 0', async () => {
