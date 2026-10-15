@@ -1,4 +1,4 @@
-# Boots NixOS VMs with nixosModules.imp, as test/test-bootstrap.sh --stub
+# Boots NixOS VMs with nixosModules.imp, as e2e/test-bootstrap.sh --stub
 # does for bootstrap.sh. No imp boots; that needs the release image
 # (docs/guides/nixos.md#test-it). Needs KVM, with nesting for the VMs'
 # /dev/kvm.

@@ -159,13 +159,6 @@ async function setupTest() {
 
   const url = `http://127.0.0.1:${String(port)}`;
 
-  // the image a test's imp boots from, with a rootfs where its digest names
-  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
-
-  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
-
-  await createImage(db, image);
-
   const stdin = new PassThrough();
 
   const output: string[] = [];
@@ -186,6 +179,7 @@ async function setupTest() {
     stack,
     rootToken,
     dataDir,
+    db,
     impd,
     client: createImpClient({ url, token: rootToken }),
     url,
@@ -199,6 +193,13 @@ async function setupTest() {
 
 test('it streams output and stdin and exits with the command’s code', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const exec = buildStubExecReplies({
@@ -234,6 +235,13 @@ test('it streams output and stdin and exits with the command’s code', async ()
 
 test('it runs an exec in the agent, outside the container, when asked for outer', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -261,6 +269,13 @@ test('it runs an exec in the agent, outside the container, when asked for outer'
 
 test('it names the cause and runs nothing when impd refuses a required broker', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -288,6 +303,13 @@ test.each([
   ['a numbered signal', 34, 162],
 ])('it exits 128 + n when %s ends the command', async (_name, signal, expected) => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -387,6 +409,13 @@ test('it exits 255 for an IMP_URL that is not an http URL', async () => {
 
 test('it exits 127 when the command cannot start', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -416,6 +445,13 @@ test('it exits 255 and names the refusal for an imp impd does not have', async (
 
 test('it explains INNER_DOWN and exits 255', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -533,6 +569,13 @@ test('it ends the session and closes the socket when impd faults with a frame on
 
 test('it exits 255 when the agent connection drops after started without an exit', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -611,6 +654,13 @@ test('it exits 255 and names the address when nothing listens there', async () =
 
 test('it keeps the IMP_URL path prefix of an impd behind a proxy', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -632,6 +682,13 @@ test('it keeps the IMP_URL path prefix of an impd behind a proxy', async () => {
 
 test('it exits 141 quietly and stops the command when its output goes away', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agentClosed = Promise.withResolvers<void>();
@@ -663,6 +720,13 @@ test('it exits 141 quietly and stops the command when its output goes away', asy
 
 test('it exits 255 and names the failure when an output write fails other than by a closed pipe', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -733,6 +797,13 @@ test('it exits 255 and says the connection was lost once the window to attach ag
 
 test('it pauses stdin while the socket buffers more than the high-water mark', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(
@@ -784,6 +855,13 @@ test('it pauses stdin while the socket buffers more than the high-water mark', a
 
 test('it resumes stdin once the socket buffer drains', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(
@@ -846,6 +924,13 @@ test('it resumes stdin once the socket buffer drains', async () => {
 
 test('it starts a named session and detaches on the detach key without a signal', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agentClosed = Promise.withResolvers<void>();
@@ -907,6 +992,13 @@ test('it starts a named session and detaches on the detach key without a signal'
 
 test('it detaches on the detach key in its kitty form', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agentClosed = Promise.withResolvers<void>();
@@ -952,6 +1044,13 @@ test('it detaches on the detach key in its kitty form', async () => {
 
 test('it clears the screen before the replay of a session it attaches to', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -984,6 +1083,13 @@ test('it clears the screen before the replay of a session it attaches to', async
 
 test('it attaches again by itself when impd loses the agent connection of a session', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(
@@ -1044,6 +1150,13 @@ test('it attaches again by itself when impd loses the agent connection of a sess
 
 test('it attaches again by itself when the terminal fell behind', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(
@@ -1099,6 +1212,13 @@ test('it attaches again by itself when the terminal fell behind', async () => {
 
 test('it attaches again by itself when impd restarts under a session', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(
@@ -1175,6 +1295,13 @@ test('it attaches again by itself when impd restarts under a session', async () 
 
 test('it sends keys typed while it attaches again to the new session', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(
@@ -1243,6 +1370,13 @@ test.each([['\u001D'], ['\u001B[93;5u'], ['\u001B[27;5;93~']])(
   'it detaches on the detach key %p while it attaches again',
   async (key) => {
     const ctx = await setupTest();
+
+    const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+    await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+    await createImage(ctx.db, image);
+
     const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
     await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -1279,6 +1413,13 @@ test.each([['\u001D'], ['\u001B[93;5u'], ['\u001B[27;5;93~']])(
 
 test('it gives up with 130 on ctrl-c while it attaches again', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -1313,6 +1454,13 @@ test('it gives up with 130 on ctrl-c while it attaches again', async () => {
 
 test('it exits 254 without attaching again once another client attached', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(
@@ -1376,6 +1524,13 @@ test('it exits 254 without attaching again once another client attached', async 
 
 test('it exits 254 without attaching again when another client takes the session over', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
@@ -1406,6 +1561,13 @@ test('it exits 254 without attaching again when another client takes the session
 
 test('it doubles the pause before each try, up to 8 s, while impd stays down under a session', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // an agent whose session runs on until impd goes away
@@ -1463,6 +1625,13 @@ test('it doubles the pause before each try, up to 8 s, while impd stays down und
 
 test('it fails with the last reason once the window to attach again is over, while impd stays down under a session', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // an agent whose session runs on until impd goes away
@@ -1522,6 +1691,13 @@ test('it fails with the last reason once the window to attach again is over, whi
 
 test('it sends the detach key as input to a plain exec and never attaches it again', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   const agent = await startStubAgent(
@@ -1556,6 +1732,13 @@ test('it sends the detach key as input to a plain exec and never attaches it aga
 
 test('it ends the CLI at once on a signal before impd answers the start, without sending it', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the agent never answers the start, as when impd hangs waking the imp
@@ -1599,6 +1782,13 @@ test('it ends the CLI at once on a signal before impd answers the start, without
 
 test('it sends the first SIGINT to the command and ends the CLI on the second', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   // the command ignores SIGINT, so only the second one ends anything
@@ -1650,6 +1840,13 @@ test('it sends the first SIGINT to the command and ends the CLI on the second', 
 
 test('it takes the terminal out of raw mode when an output write calls process.exit', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
   await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {

@@ -30,10 +30,10 @@ function setupTest() {
   });
 
   const scripts = join(dir, 'root', 'scripts');
-  const tests = join(dir, 'root', 'test');
+  const e2e = join(dir, 'root', 'e2e');
 
   mkdirSync(join(scripts, 'dev'), { recursive: true });
-  mkdirSync(tests);
+  mkdirSync(e2e);
 
   for (const name of ['zfs-host-test.sh', 'lib.sh']) {
     copyFileSync(new URL(name, import.meta.url).pathname, join(scripts, name));
@@ -45,7 +45,7 @@ function setupTest() {
 
   createStubZfs(stubs);
   createStubRepoScript(join(scripts, 'dev'), 'dev.sh', sudo.calls);
-  createStubRepoScript(tests, 'test-e2e.sh', sudo.calls);
+  createStubRepoScript(e2e, 'test-e2e.sh', sudo.calls);
   createStubRepoScript(scripts, 'test-zfs.sh', sudo.calls);
 
   // the script reads the loaded module's version before it does anything
@@ -56,7 +56,7 @@ function setupTest() {
   return {
     dir,
     stubs,
-    tests,
+    e2e,
     moduleVersion,
     calls: sudo.calls,
     path: `${sudo.bin}:${process.env['PATH'] ?? ''}`,
@@ -760,7 +760,7 @@ test('it stops the suites, the moves suites’ B, the instance and the pool when
 
   // a run that holds the instance until something stops it, and a dev.sh
   // that logs which instance each call is for
-  createStubRepoScript(ctx.tests, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
+  createStubRepoScript(ctx.e2e, 'test-e2e.sh', ctx.calls, `: >'${started}'; exec sleep 30`);
 
   createStubRepoScript(
     join(ctx.dir, 'root', 'scripts', 'dev'),

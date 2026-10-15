@@ -299,7 +299,7 @@ What the restored database means at start:
 
 ## Checks
 
-`test/test-e2e.sh --clean` drives a real instance through every feature, one suite each: the
+`e2e/test-e2e.sh --clean` drives a real instance through every feature, one suite each: the
 [development guide](../runbooks/development.md#end-to-end-tests) lists them, from the lifecycle and
 the scale test to the chaos suite and the backup restore drill. The development guide lists the
 other checks.

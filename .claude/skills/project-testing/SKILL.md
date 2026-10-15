@@ -21,7 +21,7 @@ the rules for writing tests live in the testing skill.
 | Dashboard components    | `bun run test:dashboard`                                               | Nothing beyond Bun                                                                      |
 | Agent Go tests          | `scripts/test-go.sh` (JSON to `$GO_TEST_JSONFILE`, or a new temp file) | Go from `agent/go.mod`; the root-only tests sit behind the `root` build tag             |
 | Agent Go tests as root  | `cd agent && sudo -E env "PATH=$PATH" go test -tags root -race ./...`  | Root, a writable cgroup2                                                                |
-| End to end              | `test/test-e2e.sh`                                                     | KVM, Docker; some suites need more (below)                                              |
+| End to end              | `e2e/test-e2e.sh`                                                      | KVM, Docker; some suites need more (below)                                              |
 | Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun run test:host`      | Root or unprivileged namespaces, `nft`, `iptables`, `ip6tables`, `ip`, `ping`, `sysctl` |
 | NixOS module evaluation | `nix build -L --no-link .#checks.x86_64-linux.eval`                    | Nix with flakes                                                                         |
 | NixOS VMs               | `nix build -L --no-link .#checks.x86_64-linux.vm`                      | Nix with `system-features = kvm nixos-test`, KVM with nesting                           |
@@ -83,7 +83,7 @@ and runs one MSW server (`packages/test-utils/src/mock-server.ts`) for the whole
 `onUnhandledRequest: 'error'`. The server intercepts `fetch` only; `node:http` clients and
 WebSockets stay native. While it listens, the global `fetch` sends a request to a loopback host or
 over a unix socket to the native fetch (`route-fetch.ts`), and every other request to MSW. The
-end-to-end suites run with `test/e2e/bunfig.toml`, whose preload (`preload-e2e.ts`) restores env
+end-to-end suites run with `e2e/bunfig.toml`, whose preload (`preload-e2e.ts`) restores env
 overrides and seeds faker, with no MSW server. `updateEnv`, `invariant` and `waitFor` live in
 `packages/test-utils/src`, with `buildStubAnswerQueue`, which hands out a dependency's scripted
 answers in order and throws on a call past the last one.
@@ -154,21 +154,21 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
 
 ## End-to-end harness
 
-`test/test-e2e.sh` runs `test/e2e/main.ts`. The harness:
+`e2e/test-e2e.sh` runs `e2e/main.ts`. The harness:
 
 1. Brings the dev instance down and up with `scripts/dev/dev.sh` (`--reuse` keeps a running one),
-   then checks the container's privileges against `deploy/` with `test/e2e/lib/privileges.ts`.
+   then checks the container's privileges against `deploy/` with `e2e/lib/privileges.ts`.
 2. Reads the API token with `scripts/dev/dev.sh token` and sets `IMP_TOKEN` and `IMP_HOST_IMAGE`.
 3. Resets the baseline for every suite's prefix (below), then builds the fixture images the selected
    suites list and impd does not have yet. This startup reset removes only what a suite prefix
    names, so an `e2e-` imp that matches no suite prefix survives it (the end-of-run cleanup in step
    6 still takes every `e2e-` imp and image). A removal impd refuses, such as `CONFLICT` for an
    image another imp boots, fails setup, and no suite runs.
-4. Runs each suite's journey files, in the order of `SUITES` in `test/e2e/lib/suites.ts`. A suite's
-   `journeys` list names its files under `test/e2e/suites/` in run order (`proxy` has four); a suite
+4. Runs each suite's journey files, in the order of `SUITES` in `e2e/lib/suites.ts`. A suite's
+   `journeys` list names its files under `e2e/suites/` in run order (`proxy` has four); a suite
    without one runs `<name>.e2e.ts` (`listJourneys`). Each journey file runs as its own process
-   group (`test/e2e/lib/run-suite.ts`),
-   `bun test --config=test/e2e/bunfig.toml --bail --timeout 3600000 ./test/e2e/suites/<journey>.e2e.ts`
+   group (`e2e/lib/run-suite.ts`),
+   `bun test --config=e2e/bunfig.toml --bail --timeout 3600000 ./e2e/suites/<journey>.e2e.ts`
    (`buildJourneyArgv`). `suites.test.ts` checks that every `*.e2e.ts` file belongs to exactly one
    suite. The first SIGINT or SIGTERM stops the running journey's group and runs no more journeys; a
    second exits at once. The harness forgets the journey's group as soon as it exits, before any
@@ -190,8 +190,8 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
    the ZFS backend that reset also empties the run's root dataset (below). It also fails a suite
    when the impd log since one of its journeys started shows a boot-template fallback (the `chaos`
    suite may cause one). A suite passes only when every journey passed, and its time runs from its
-   start to its last reset. The loop is `runSuites` in `test/e2e/lib/run-suites.ts`, which takes
-   each step as a dependency; `run-suites.test.ts` checks the order of runs, reboots, resets and
+   start to its last reset. The loop is `runSuites` in `e2e/lib/run-suites.ts`, which takes each
+   step as a dependency; `run-suites.test.ts` checks the order of runs, reboots, resets and
    re-creations, between the journeys of one suite too.
 
    A suite's `settings` in `suites.ts`, a function of the instance that returns impd environment,
@@ -211,7 +211,7 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
 
    A suite's `fixtures` name what runs beside the instance for all its journeys: `host-b`, the moves
    suites' second instance on a Docker network, or `host-b-tailnet`, the same on the tailnet under
-   its own name (`buildHostBFixture` in `test/e2e/lib/move-hosts.ts`, with the options of
+   its own name (`buildHostBFixture` in `e2e/lib/move-hosts.ts`, with the options of
    `readMoveOptions`). The harness starts a fixture before the suite's first journey and before the
    reboot onto its settings, since the instance joins the fixture's network; after each journey,
    once the instance's reset is done, it resets the fixture (`resetBaseline` on B with the suite's
@@ -234,18 +234,17 @@ where its namespace probe fails; `bun run test:host` runs exactly those files.
 
 The wipe of `--clean`, of a re-creation and of a host B made from nothing deletes the data dir as
 root, so the harness wipes only a dir under `<repo>/.data/` or one that holds an `imp.xfs`
-(`resolveWipeTarget` in `test/e2e/lib/wipe-target.ts`). On the ZFS backend
-(`IMP_STORAGE_BACKEND=zfs`, as `scripts/zfs-host-test.sh` runs it) it first asks `readZfsOwner` in
-`test/e2e/lib/zfs-owner.ts`, wherever the dir sits, so a proven pool's root is emptied along with
-the data; a dir it cannot prove falls back to the two rules above. The proof: the owner file
-`imp-e2e-zfs-owner` that `zfs-host-test.sh` writes into it parses, its root is `IMP_ZFS_ROOT` and
-sits in its pool, its vdev sits beside the data dir, and `zpool status -P` lists that vdev in that
-pool. Then the wipe keeps the owner file, and `resetZfsRoot` destroys the root dataset with all its
-descendants (`zfs destroy -R`) and makes it again. `zpool` and `zfs` run in a privileged container
-of the host image. `zfs-owner.test.ts` checks each proof and the reset against a stand-in command
-runner; no test runs them on a real pool.
+(`resolveWipeTarget` in `e2e/lib/wipe-target.ts`). On the ZFS backend (`IMP_STORAGE_BACKEND=zfs`, as
+`scripts/zfs-host-test.sh` runs it) it first asks `readZfsOwner` in `e2e/lib/zfs-owner.ts`, wherever
+the dir sits, so a proven pool's root is emptied along with the data; a dir it cannot prove falls
+back to the two rules above. The proof: the owner file `imp-e2e-zfs-owner` that `zfs-host-test.sh`
+writes into it parses, its root is `IMP_ZFS_ROOT` and sits in its pool, its vdev sits beside the
+data dir, and `zpool status -P` lists that vdev in that pool. Then the wipe keeps the owner file,
+and `resetZfsRoot` destroys the root dataset with all its descendants (`zfs destroy -R`) and makes
+it again. `zpool` and `zfs` run in a privileged container of the host image. `zfs-owner.test.ts`
+checks each proof and the reset against a stand-in command runner; no test runs them on a real pool.
 
-The baseline reset, `resetBaseline` in `test/e2e/lib/reset-baseline.ts`, takes impd's client
+The baseline reset, `resetBaseline` in `e2e/lib/reset-baseline.ts`, takes impd's client
 (`createInstanceClient` in `imp-cli.ts`, the run's root token) and a list of prefixes. It first ends
 the move of each such imp that a failed move left marked (`moves.abort`), since impd refuses to
 remove a marked imp with `MOVING`; an abort that cannot reach the move's target rejects the reset.
@@ -295,21 +294,21 @@ the journeys after it still run on them.
 
 Each `socket-builds` test starts its own host-mode imp-docker-proxy container,
 `<IMP_DEV_NAME>-docker-proxy-host-mode-<id>` on `/run/imp-docker/host-mode-<id>.sock`
-(`buildHostModeProxyArgv` in `test/e2e/lib/host-mode-proxy.ts`), and removes both when it ends. A
-unix socket path holds 107 bytes, which a worktree's `.cache/e2e/ssh-*` dir can pass, so `ssh-agent`
+(`buildHostModeProxyArgv` in `e2e/lib/host-mode-proxy.ts`), and removes both when it ends. A unix
+socket path holds 107 bytes, which a worktree's `.cache/e2e/ssh-*` dir can pass, so `ssh-agent`
 keeps its ssh control and forward sockets, and `ssh` its forward sockets, in a `mkdtemp` dir under
-`TMPDIR`, and `startLocalSshAgent` (`test/e2e/lib/ssh.ts`) makes its agent's socket in one of its
-own there, which its `stop()` removes. A journey that checks something keeps an imp awake past the
-idle timeout waits with `waitAwakePastIdle` (`test/e2e/lib/awake-past-idle.ts`): the idle loop moves
-an imp's `lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
+`TMPDIR`, and `startLocalSshAgent` (`e2e/lib/ssh.ts`) makes its agent's socket in one of its own
+there, which its `stop()` removes. A journey that checks something keeps an imp awake past the idle
+timeout waits with `waitAwakePastIdle` (`e2e/lib/awake-past-idle.ts`): the idle loop moves an imp's
+`lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
 `lastActiveAt` reaches the idle timeout past the release has stayed awake that long; its wake count
 and `sleptAt` must stay as the wait first read them once the imp ran, so a sleep and a wake in
 between fail it. The wait polls `imp ls`, which records no activity, so the journey must not exec in
 the imp during it.
 
 A journey file also runs alone against an instance that is up:
-`bun test --config=test/e2e/bunfig.toml ./test/e2e/suites/sleep-memory.e2e.ts`. Nothing then resets
-the baseline or builds missing fixture images for it. `runDevScript` passes the run's
+`bun test --config=e2e/bunfig.toml ./e2e/suites/sleep-memory.e2e.ts`. Nothing then resets the
+baseline or builds missing fixture images for it. `runDevScript` passes the run's
 `IMP_RAM_BUDGET_MIB` and `IMP_IDLE_TIMEOUT_S` (from `config.ts`) under whatever `process.env` sets:
 a suite that reboots the instance onto its own tuning sets them in `process.env`, and that must win.
 So a shell's `IMP_RAM_BUDGET_MIB` or `IMP_IDLE_TIMEOUT_S` wins when a suite file runs alone; through
@@ -336,7 +335,7 @@ two CI runs:
 `HOST_TESTS_GROUP` (2) names the group whose runner also runs `bun run test:host`, so those tests
 run once.
 
-Fixture images come from `images/base` (`base`, a slow Docker build) and `test/e2e/fixtures/`
+Fixture images come from `images/base` (`base`, a slow Docker build) and `e2e/fixtures/`
 (`e2e-tiny`, `e2e-bare`, `e2e-ws`, `e2e-git`, `e2e-ra`). A fixture's name carries a hash of its
 sources, so a changed fixture builds anew.
 
@@ -387,14 +386,13 @@ and without the e2e client it sets `IMP_DEV_TAILNET=0`, so dev's `tag:imp` key i
 an e2e node. An instance that joined as `tag:imp` before keeps its node state: run with `--clean`
 once.
 
-The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and need no KVM, Docker or dev
-instance. Some start real processes: `reset-baseline.test.ts` boots impd's app in process
-(`createImpd` on the stub VMM), and `run-suite.test.ts` spawns Bun processes and their children. A
-test or stand-in that runs git, or a tool that runs it (`git receive-pack`, `git http-backend`),
-spawns it through `runGitCommand`, `runGitChecked` or `createGitFreeEnv` in
-`test/e2e/lib/git-env.ts`: a git hook exports `GIT_DIR` and the other variables
-`git rev-parse --local-env-vars` lists into `bun test`, and a git child that inherits them works on
-this checkout whatever its `-C` says.
+The `e2e/lib/*.test.ts` unit tests run in plain `bun test` and need no KVM, Docker or dev instance.
+Some start real processes: `reset-baseline.test.ts` boots impd's app in process (`createImpd` on the
+stub VMM), and `run-suite.test.ts` spawns Bun processes and their children. A test or stand-in that
+runs git, or a tool that runs it (`git receive-pack`, `git http-backend`), spawns it through
+`runGitCommand`, `runGitChecked` or `createGitFreeEnv` in `e2e/lib/git-env.ts`: a git hook exports
+`GIT_DIR` and the other variables `git rev-parse --local-env-vars` lists into `bun test`, and a git
+child that inherits them works on this checkout whatever its `-C` says.
 
 ## ZFS
 
@@ -451,14 +449,14 @@ this checkout whatever its `-C` says.
   in the work dir, an `imp-zfs` or `imp-zfs-mv-b` container, and an `imp-zfs-mv` network that is
   already there; so a second run in the same dir is refused. It claims `<dir>/data` and
   `<dir>/data-mv-b`, the moves suites' B, with `mkdir`. It makes B's root dataset
-  `<IMP_ZFS_ROOT>-mv-b` beside the instance's, which `readHostBZfsRoot` in
-  `test/e2e/lib/move-hosts.ts` gives B, and once the pool and both datasets exist it writes an owner
-  file `imp-e2e-zfs-owner` with each root into each data dir, which lets `main.ts` make either
-  instance anew (see the end-to-end harness). The e2e run goes in the background, its output through
-  `tee` into `<dir>/e2e.log`, so TERM (143) or INT (130) reaches the trap at once and cleanup stops
-  it first. Its EXIT cleanup releases only what the run made: once the run started the instance, it
-  takes a B the run left up down with `dev.sh down`, its docker proxy and volumes included, collects
-  the impd log, stops the instance and removes the move network, destroys the pool only when
+  `<IMP_ZFS_ROOT>-mv-b` beside the instance's, which `readHostBZfsRoot` in `e2e/lib/move-hosts.ts`
+  gives B, and once the pool and both datasets exist it writes an owner file `imp-e2e-zfs-owner`
+  with each root into each data dir, which lets `main.ts` make either instance anew (see the
+  end-to-end harness). The e2e run goes in the background, its output through `tee` into
+  `<dir>/e2e.log`, so TERM (143) or INT (130) reaches the trap at once and cleanup stops it first.
+  Its EXIT cleanup releases only what the run made: once the run started the instance, it takes a B
+  the run left up down with `dev.sh down`, its docker proxy and volumes included, collects the impd
+  log, stops the instance and removes the move network, destroys the pool only when
   `zpool status -P` lists this run's `bench.img` (the whole path), and removes that file only when
   no pool lists it and `zpool` could say so. A pool that will not go keeps its file and fails the
   run. One exception: when `zpool` says the pool is busy and `dmesg --since` the pool's create shows
@@ -556,14 +554,14 @@ and how the call was made.
   `fail-fast: false` so every group reports. Each runs `scripts/ci/check-kvm.sh` first, hands the
   cpu cgroup controller to containers, turns KSM on, picks `/mnt/imp-e2e` or `.data/ci` as
   `IMP_DEV_DATA`, builds inputs with `.github/actions/e2e-build`, adds `imp-e2e-registry.test` to
-  `/etc/hosts`, and runs `test/test-e2e.sh --group <n>` with `E2E_RAM_BUDGET_MIB=4096` and no
+  `/etc/hosts`, and runs `e2e/test-e2e.sh --group <n>` with `E2E_RAM_BUDGET_MIB=4096` and no
   Tailscale key. Only group 2 runs the host networking tests as root with `IMP_HOST_TESTS=required`,
   only group 1 sets up Playwright's browser (`if: matrix.browser`), and only group 1 on a push to
   `main` writes the build caches (`WRITE_CACHE`, which `.github/actions/e2e-build` takes as
   `write-cache`). `Cache Bun Packages` is a plain `actions/cache` step in all three groups, so any
   group may save the Bun package cache when its key misses. Each uploads `.cache/e2e/` and
-  `packages/dashboard/.test-results/` as `e2e-results-<n>`. `test/e2e/lib/ci-groups.test.ts` pins
-  these against the workflow file.
+  `packages/dashboard/.test-results/` as `e2e-results-<n>`. `e2e/lib/ci-groups.test.ts` pins these
+  against the workflow file.
 - **`e2e`** (a required check) is the aggregate: it needs `e2e-group` and passes only when
   `needs.e2e-group.result` is `success`.
 - **`zfs`** (not required) runs `scripts/ci/check-kvm.sh`, installs ZFS, runs `scripts/test-zfs.sh`
@@ -575,7 +573,7 @@ and how the call was made.
 
 ## Stand-ins by boundary
 
-Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/` or `packages/`.
+Paths are under `packages/daemon/src/` unless they start with `e2e/`, `scripts/` or `packages/`.
 
 | Boundary                     | Stand-in                                                                                           | What it replaces                                                                       |
 | ---------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
@@ -660,8 +658,8 @@ Paths are under `packages/daemon/src/` unless they start with `test/`, `scripts/
 | tailscale CLI                | `test-utils/build-stub-tailscale.ts` (`buildStubTailscale`)                                        | `tailscale whois --json` and `status --json`, as `runWhois`'s `run`                    |
 | MCP upstream                 | `test-utils/build-stub-mcp-transport.ts`                                                           | The `HttpTransport` to an imp's MCP server: calls held open until ended                |
 | tailscale whois              | A `whois` function passed to `createTailnetIdentities`                                             | `tailscale whois --json` (`runWhois`)                                                  |
-| Connector upstreams          | `test-utils/start-stub-broker-tls-upstream.ts` (6); `test/e2e/lib/start-stub-upstream.ts`          | github.com, api.github.com, an OAuth token endpoint                                    |
-| Git over SSH                 | `test/e2e/lib/start-stub-git-ssh-server.ts` (`startStubGitSshServer`)                              | A forge's SSH git: one allowed key, push to `repo.git` only                            |
+| Connector upstreams          | `test-utils/start-stub-broker-tls-upstream.ts` (6); `e2e/lib/start-stub-upstream.ts`               | github.com, api.github.com, an OAuth token endpoint                                    |
+| Git over SSH                 | `e2e/lib/start-stub-git-ssh-server.ts` (`startStubGitSshServer`)                                   | A forge's SSH git: one allowed key, push to `repo.git` only                            |
 | Cloudflare API               | `test-utils/build-stub-cloudflare-api.ts` (15)                                                     | `api.cloudflare.com/client/v4`, with each token scoped to its zones                    |
 | ACME server                  | `test-utils/start-stub-acme-server.ts` (`startStubAcmeServer`)                                     | A CA up to the challenge, on loopback: acme-client's axios is outside MSW              |
 | Host networks                | `test-utils/build-stub-public-network.ts` (8)                                                      | Guests on taps, an uplink to the internet, a tailnet peer                              |
@@ -832,7 +830,7 @@ Host networking runs the real tools: `host/scripts/setup-net.host.test.ts` runs
 ruleset with `nft`, each in a fresh network namespace through `test-utils/run-in-netns.ts`.
 
 The Pebble suite, `https/acme/acme-issuer.pebble.ts`, starts its own Pebble and challtestsrv for
-each test through `test/e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
+each test through `e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
 `imp-acme-it-<pid>-<random>`, with a cert store and Pebble's minica PEM in a temp dir.
 `startPebbleStack(stack, prefix, { minicaDir })` refuses a container or network name that docker
 already shows before it makes anything, defers the removal of each container and the network into
@@ -920,13 +918,12 @@ file leaves every host on its real origin.
   token endpoint and a rule's plain-HTTP upstream are MSW handlers, not entries in the file.
 - **End to end.** `scripts/dev/dev.sh` sets
   `IMP_BROKER_TEST_UPSTREAMS=/data/broker-test-upstreams.json`. The `connectors` suite starts
-  `test/e2e/lib/start-stub-upstream.ts` (`startStubUpstream`, tested in
-  `start-stub-upstream.test.ts`) on the container's gateway address. The stub serves git smart HTTP
-  behind Basic auth, checks the bearer token, and runs an OAuth token endpoint, over a CA and leaf
-  that `openssl` makes per run. The suite writes `<IMP_DEV_DATA>/broker-test-upstreams.json` with
-  the stub's `caPem` and origin, and removes it at the end; the harness's baseline reset removes it
-  too. The `moves` suite writes the same file into the target host's data dir, and removes it from
-  both hosts.
+  `e2e/lib/start-stub-upstream.ts` (`startStubUpstream`, tested in `start-stub-upstream.test.ts`) on
+  the container's gateway address. The stub serves git smart HTTP behind Basic auth, checks the
+  bearer token, and runs an OAuth token endpoint, over a CA and leaf that `openssl` makes per run.
+  The suite writes `<IMP_DEV_DATA>/broker-test-upstreams.json` with the stub's `caPem` and origin,
+  and removes it at the end; the harness's baseline reset removes it too. The `moves` suite writes
+  the same file into the target host's data dir, and removes it from both hosts.
 - **Guest trust.** The guest trusts the broker's own CA through impd's CA bundle step, as
   `docs/guides/connectors.md` describes; the test-upstreams `ca` stays on the host side.
 
@@ -963,9 +960,9 @@ file leaves every host on its real origin.
   `/dev/loop-control` and loop devices for its XFS file.
 - The end-to-end harness drives the container that `scripts/dev/dev.sh` starts: `IMP_DEV_NAME`
   (default `imp-dev`), with data in `IMP_DEV_DATA` (default `.data/dev`, a sparse `imp.xfs`) and the
-  API on `localhost:7070` plus `IMP_DEV_PORT_OFFSET`. `test/e2e/lib/instance.ts` takes the API URL
-  from `IMP_URL` when it is set, and throws when `IMP_DEV_PORT_OFFSET` is set without
-  `IMP_DEV_NAME`. The token comes from `scripts/dev/dev.sh token`, so it is the dev instance's.
+  API on `localhost:7070` plus `IMP_DEV_PORT_OFFSET`. `e2e/lib/instance.ts` takes the API URL from
+  `IMP_URL` when it is set, and throws when `IMP_DEV_PORT_OFFSET` is set without `IMP_DEV_NAME`. The
+  token comes from `scripts/dev/dev.sh token`, so it is the dev instance's.
 - `--clean` logs the instance out of the tailnet, removes the container, and wipes its data dir and
   the moves host's. `main.ts` refuses to wipe a data dir that is outside `.data/` and holds no
   `imp.xfs`.
@@ -976,23 +973,23 @@ file leaves every host on its real origin.
   `IMP_DEV_NAME` and `IMP_DEV_PORT_OFFSET`.
 - The `registry` suite trusts its registry's certificate through Docker's fixed per-registry path,
   `/etc/docker/certs.d/<name>:<port>`, with `createRegistryTrust` in
-  `test/e2e/lib/create-registry-trust.ts`. It makes that directory with `sudo mkdir` and no
-  `--parents`, so a directory already there is refused untouched; a failed owner-file write or
-  certificate copy removes the directory again; and its release removes only that directory, once,
-  never `/etc/docker/certs.d` itself. `create-registry-trust.test.ts` runs it in a temp root with no
-  sudo (`certsRoot`, `asRoot`). Each test takes the trust itself and releases it with
-  `onTestFinished` right after, since `--bail` skips `afterAll` once any test fails. Taking it
-  writes an owner file, `imp-e2e-owner` (the process's pid and its start time from
-  `/proc/<pid>/stat`), into the directory; when this process's start time cannot be read it makes
-  nothing, since no later run could prove the directory. A process killed mid-test still leaves the
-  directory, so each acquisition first runs `removeStaleRegistryTrusts` for the registry's host: it
-  removes a `<host>:*` directory only when its owner file parses and its pid's start time is not the
-  recorded one (the process is gone, or its pid now names another). A directory with no owner file,
-  one that does not parse, one that records no start time, and one whose owner still runs all stay,
-  and `mkdir` then refuses the last three if they hold the same port. Each `registry-*` journey
-  starts its own registry and trusts its own certificate (`test/e2e/lib/registry-steps.ts`).
-  `startRegistry` refuses a container name already taken before it makes anything, labels the
-  container `imp-e2e-instance=<IMP_DEV_NAME>`, and defers its removal into the journey's stack once
+  `e2e/lib/create-registry-trust.ts`. It makes that directory with `sudo mkdir` and no `--parents`,
+  so a directory already there is refused untouched; a failed owner-file write or certificate copy
+  removes the directory again; and its release removes only that directory, once, never
+  `/etc/docker/certs.d` itself. `create-registry-trust.test.ts` runs it in a temp root with no sudo
+  (`certsRoot`, `asRoot`). Each test takes the trust itself and releases it with `onTestFinished`
+  right after, since `--bail` skips `afterAll` once any test fails. Taking it writes an owner file,
+  `imp-e2e-owner` (the process's pid and its start time from `/proc/<pid>/stat`), into the
+  directory; when this process's start time cannot be read it makes nothing, since no later run
+  could prove the directory. A process killed mid-test still leaves the directory, so each
+  acquisition first runs `removeStaleRegistryTrusts` for the registry's host: it removes a
+  `<host>:*` directory only when its owner file parses and its pid's start time is not the recorded
+  one (the process is gone, or its pid now names another). A directory with no owner file, one that
+  does not parse, one that records no start time, and one whose owner still runs all stay, and
+  `mkdir` then refuses the last three if they hold the same port. Each `registry-*` journey starts
+  its own registry and trusts its own certificate (`e2e/lib/registry-steps.ts`). `startRegistry`
+  refuses a container name already taken before it makes anything, labels the container
+  `imp-e2e-instance=<IMP_DEV_NAME>`, and defers its removal into the journey's stack once
   `docker run` succeeds; `createMovedTag` defers each tag's removal as soon as the tag exists. Each
   journey first runs `removeStaleRegistries`, which removes only the containers named
   `e2e-reg-registry-*` that carry this instance's label, and logs and leaves the rest.

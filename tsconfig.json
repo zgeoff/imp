@@ -9,7 +9,7 @@
   "include": [
     "packages/*/src/**/*.ts",
     "packages/client/smoke/*.ts",
-    "test/**/*.ts",
+    "e2e/**/*.ts",
     "scripts/**/*.ts",
     "deploy/**/*.ts",
     "images/**/*.ts",

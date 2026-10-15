@@ -394,7 +394,7 @@ jobs:
         run: scripts/release/check-client-runtimes.sh "$TARBALL"
 
   # Boots real microVMs: the fast end-to-end set in its three groups
-  # (FAST_GROUPS in test/e2e/lib/suites.ts, test/test-e2e.sh --group N),
+  # (FAST_GROUPS in e2e/lib/suites.ts, e2e/test-e2e.sh --group N),
   # each against a dev instance on its own runner's KVM. The `e2e` job below
   # is the required check over all three.
   e2e-group:
@@ -546,7 +546,7 @@ jobs:
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
       # outside acceptance a missed timing limit only warns.
       - name: End-to-end tests
-        run: test/test-e2e.sh --group ${{ matrix.group }}
+        run: e2e/test-e2e.sh --group ${{ matrix.group }}
 
       # The steps below also run after a failure or a timeout, with or
       # without a container, so none of them may fail the job.

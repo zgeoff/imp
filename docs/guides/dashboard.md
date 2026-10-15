@@ -67,7 +67,7 @@ then logs out. The `dashboard` suite of the
 Playwright's pinned Chromium and runs it; it is in the `fast` set CI runs:
 
 ```sh
-test/test-e2e.sh --only dashboard
+e2e/test-e2e.sh --only dashboard
 ```
 
 On its own, it reads `IMP_URL` (default: the dev instance at `7070 + IMP_DEV_PORT_OFFSET`) and

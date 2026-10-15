@@ -137,13 +137,6 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
-
-  // the default image, which every imp the tests create boots
-  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
-
-  await createImage(db, image);
-
   const app = impd.api.app.listen({ port: 0, hostname: '127.0.0.1' });
 
   stack.defer(async () => {
@@ -156,6 +149,8 @@ async function setupTest() {
 
   return {
     stack,
+    dataDir,
+    db,
     sendRequest,
     rootToken,
     client: createImpClient({ url: 'http://impd.test', token: rootToken, fetch: sendRequest }),
@@ -761,6 +756,12 @@ test('it lists no refused broker requests from an impd without them', async () =
 test('it grants a secret for the methods and paths given', async () => {
   const ctx = await setupTest();
 
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
 
@@ -780,6 +781,12 @@ test('it grants a secret for the methods and paths given', async () => {
 
 test('it grants a secret for the whole host without --methods or --paths', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
@@ -833,6 +840,12 @@ test('it makes no filtered grant on an impd from before grant filters', async ()
 
 test('it lists each grant with the methods and paths it covers', async () => {
   const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
 
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });

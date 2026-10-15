@@ -282,7 +282,7 @@ docker exec imp-host imp rm check
   `tests` output; nix-unit comes from the pinned nixpkgs). Then it builds the generated files and
   checks the env file's keys and the scripts in them. It needs no KVM. `nix-unit --flake .#tests`
   runs the cases alone.
-- `vm` boots two NixOS VMs with the module, as `test/test-bootstrap.sh --stub` does for
+- `vm` boots two NixOS VMs with the module, as `e2e/test-bootstrap.sh --stub` does for
   `bootstrap.sh`. One has a ZFS pool on a second disk and a stand-in image that runs the real
   `tailscale-up.sh` against a fake `tailscale`. It checks the env file, the kernel settings, that
   the host has no imp firewall rules, and the three ways the node comes up: a first join with the
