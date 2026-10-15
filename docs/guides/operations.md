@@ -366,6 +366,11 @@ To recover:
 3. Reboot the host.
 4. Check that impd sees a clear flag: `curl -s http://127.0.0.1:7070/health`. Expect
    `"warnings":[]`.
+
+   A `host needs a reboot: a kernel oops` warning here means another task oopsed in the new boot.
+   impd still cleared the holds of the earlier boot, so go on to step 5, then recover from the new
+   oops from step 1.
+
 5. Start each imp that the oops held: `imp start <name>`. impd cleared its hold at start, when it
    read the flag clear or a new boot id, and logged
    `impd: <name>: the host rebooted since a kernel oops held its disk`. The imp boots cold from its
