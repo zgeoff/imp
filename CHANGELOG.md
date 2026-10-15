@@ -2,10 +2,11 @@
 
 ## [2.0.2](https://github.com/zgeoff/impz/compare/v2.0.1...v2.0.2) (2026-10-15)
 
-
 ### Bug Fixes
 
-* **geo-979:** drop method-override headers on a filtered grant ([#402](https://github.com/zgeoff/impz/issues/402)) ([0dac0aa](https://github.com/zgeoff/impz/commit/0dac0aa4f04763f0adb719538ee27da89406d06d))
+- **geo-979:** drop method-override headers on a filtered grant
+  ([#402](https://github.com/zgeoff/impz/issues/402))
+  ([0dac0aa](https://github.com/zgeoff/impz/commit/0dac0aa4f04763f0adb719538ee27da89406d06d))
 
 ## [2.0.1](https://github.com/zgeoff/impz/compare/v2.0.0...v2.0.1) (2026-10-15)
 
