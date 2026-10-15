@@ -378,7 +378,8 @@ brew install zgeoff/tap/impz                                                 # w
 
 `install.sh` checks the binary against the release's `SHA256SUMS` before it installs it, and checks
 its provenance attestation too when the `gh` CLI is on `PATH` and logged in. `IMP_INSTALL_VERSION`
-pins a release and `IMP_INSTALL_DIR` picks the directory.
+pins a release and `IMP_INSTALL_DIR` picks the directory. A release from before the CLI's rename to
+`impz` installs as `imp`, the name it had then.
 
 macOS quarantines a binary downloaded with a browser, and Gatekeeper then refuses to run it. Clear
 the flag once (Homebrew and `install.sh` use curl, which sets no quarantine flag):

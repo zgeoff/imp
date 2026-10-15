@@ -1,5 +1,13 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { $ } from 'bun';
@@ -69,8 +77,8 @@ test('it installs the latest release after checking its checksum and provenance'
   expect(releases.requests).toStrictEqual([
     '/latest',
     '/tag/v1.2.3',
-    '/download/v1.2.3/impz-linux-x64',
     '/download/v1.2.3/SHA256SUMS',
+    '/download/v1.2.3/impz-linux-x64',
   ]);
 
   expect(gh.readCalls()).toStrictEqual([
@@ -119,8 +127,8 @@ test('it installs the release IMP_INSTALL_VERSION names without asking for the l
   });
 
   expect(releases.requests).toStrictEqual([
-    '/download/v1.0.0/impz-linux-x64',
     '/download/v1.0.0/SHA256SUMS',
+    '/download/v1.0.0/impz-linux-x64',
   ]);
 });
 
@@ -162,8 +170,8 @@ test('it installs the release a v-prefixed IMP_INSTALL_VERSION names', async () 
   });
 
   expect(releases.requests).toStrictEqual([
-    '/download/v1.0.0/impz-linux-x64',
     '/download/v1.0.0/SHA256SUMS',
+    '/download/v1.0.0/impz-linux-x64',
   ]);
 });
 
@@ -330,6 +338,97 @@ test('it names an imp binary from before the rename and leaves it in place', asy
   expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe('#!/bin/sh\necho 1.6.0\n');
 });
 
+test('it installs a release from before the rename as imp, with provenance from the old repository', async () => {
+  const ctx = setupTest();
+  const binary = '#!/bin/sh\necho 1.6.0\n';
+
+  const releases = startStubGithubReleases({
+    latest: 'v2.0.0',
+    assets: {
+      'v1.6.0/imp-linux-x64': binary,
+      'v1.6.0/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+    },
+  });
+
+  createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'x86_64' });
+
+  const gh = createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
+
+  const result = await $`sh ${join(import.meta.dir, 'install.sh')}`
+    .env({
+      PATH: `${ctx.bin}:${join(ctx.dir, 'install')}:${process.env['PATH'] ?? ''}`,
+      HOME: ctx.dir,
+      IMP_RELEASES_URL: releases.url,
+      IMP_INSTALL_DIR: join(ctx.dir, 'install'),
+      IMP_INSTALL_VERSION: '1.6.0',
+    })
+    .nothrow()
+    .quiet();
+
+  expect({
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode,
+  }).toStrictEqual({
+    stdout: [
+      'impz: downloading imp-linux-x64 v1.6.0',
+      'impz: provenance verified',
+      `impz: installed 1.6.0 to ${ctx.dir}/install/imp`,
+      '',
+    ].join('\n'),
+    stderr: '',
+    exitCode: 0,
+  });
+
+  expect(releases.requests).toStrictEqual([
+    '/download/v1.6.0/SHA256SUMS',
+    '/download/v1.6.0/imp-linux-x64',
+  ]);
+
+  expect(gh.readCalls()).toStrictEqual([
+    'auth status',
+    expect.stringMatching(/^attestation verify \S+\/imp-linux-x64 -R zgeoff\/imp$/u),
+  ]);
+
+  expect(readdirSync(join(ctx.dir, 'install'))).toStrictEqual(['imp']);
+});
+
+test('it installs the latest release when it is from before the rename', async () => {
+  const ctx = setupTest();
+  const binary = '#!/bin/sh\necho 1.6.0\n';
+
+  const releases = startStubGithubReleases({
+    latest: 'v1.6.0',
+    assets: {
+      'v1.6.0/imp-linux-x64': binary,
+      'v1.6.0/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+    },
+  });
+
+  createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'x86_64' });
+  createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
+
+  const result = await $`sh ${join(import.meta.dir, 'install.sh')}`
+    .env({
+      PATH: `${ctx.bin}:${join(ctx.dir, 'install')}:${process.env['PATH'] ?? ''}`,
+      HOME: ctx.dir,
+      IMP_RELEASES_URL: releases.url,
+      IMP_INSTALL_DIR: join(ctx.dir, 'install'),
+    })
+    .nothrow()
+    .quiet();
+
+  expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
+    stdout: [
+      'impz: downloading imp-linux-x64 v1.6.0',
+      'impz: provenance verified',
+      `impz: installed 1.6.0 to ${ctx.dir}/install/imp`,
+      '',
+    ].join('\n'),
+    exitCode: 0,
+  });
+});
+
 test('it installs the binary for the platform uname names', async () => {
   const ctx = setupTest();
   const binary = '#!/bin/sh\necho 1.2.3\n';
@@ -427,7 +526,7 @@ test('it installs nothing when SHA256SUMS lists no binary for the platform', asy
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'impz: downloading impz-linux-x64 v1.2.3\n',
+    stdout: '',
     stderr: 'impz: SHA256SUMS for v1.2.3 lists no impz-linux-x64\n',
     exitCode: 1,
   });
@@ -616,7 +715,7 @@ test('it fails when the release has no binary to download', async () => {
 
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
-    assets: { 'v1.2.3/SHA256SUMS': 'sums' },
+    assets: { 'v1.2.3/SHA256SUMS': `${'0'.repeat(64)}  impz-linux-x64\n` },
   });
 
   createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'x86_64' });
@@ -670,7 +769,7 @@ test('it fails when the release has no SHA256SUMS to download', async () => {
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'impz: downloading impz-linux-x64 v1.2.3\n',
+    stdout: '',
     stderr: expect.toEndWith('impz: cannot download SHA256SUMS for v1.2.3\n'),
     exitCode: 1,
   });
