@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,27 +9,27 @@ import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
-import { buildApiListenOptions } from './api-listen-options';
-import { PROCEDURE_ACCESS } from './auth/access-policy';
-import { runWhois } from './auth/tailnet-identity';
-import { loadConfig } from './config';
-import { createImpd } from './create-impd';
-import { listApiCalls } from './db/api-audit';
-import { writeAuditEntry } from './db/broker-audit';
-import { createImage } from './db/images';
-import { openDatabase } from './db/open-database';
-import { PEER_HEADER } from './proxy/forwarded-peers';
-import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
-import { createXfsBackend } from './storage/xfs-backend';
-import { buildMockNewAuditEntry } from './test-utils/build-mock-new-audit-entry';
-import { buildMockNewImage } from './test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
-import { buildStubExecGuest } from './test-utils/build-stub-exec-guest';
-import { buildStubTailscale } from './test-utils/build-stub-tailscale';
-import { buildStubVmm } from './test-utils/build-stub-vmm';
-import { findFreePorts } from './test-utils/find-free-ports';
-import { startStubExecAgent } from './test-utils/start-stub-exec-agent';
-import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
+import { buildApiListenOptions } from '../api-listen-options';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import { listApiCalls } from '../db/api-audit';
+import { writeAuditEntry } from '../db/broker-audit';
+import { createImage } from '../db/images';
+import { openDatabase } from '../db/open-database';
+import { PEER_HEADER } from '../proxy/forwarded-peers';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewAuditEntry } from '../test-utils/build-mock-new-audit-entry';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
+import { buildStubTailscale } from '../test-utils/build-stub-tailscale';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
+import { tryExecSocket, tryTunnelSocket } from '../test-utils/try-impd-sockets';
+import { PROCEDURE_ACCESS } from './access-policy';
+import { runWhois } from './tailnet-identity';
 
 interface SetupOptions {
   // the `tailscale` CLI that impd's whois runs; its peers are the test's
