@@ -72,8 +72,25 @@ digest as `images/examples/hello` names it, works on both.
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
   `.dockerignore` is an ordinary file, and the ignore file can leave itself out. The Dockerfile
   always goes, because docker reads it from the context, so `COPY .` copies it even when the ignore
-  file matches it. Symlinks stay links, and files keep their modes. On a terminal, a progress line
-  shows the upload, then how long impd has built.
+  file matches it. Symlinks stay links, and files keep their modes.
+- **What the CLI prints.** Progress and the build's output go to stderr, so `--json` leaves stdout
+  to the image alone. On a terminal, one line shows the upload, then the phase, its time and the
+  Dockerfile step, with the step output above it. When stderr is a file or a pipe, as for an agent
+  or a log, the CLI prints a plain line at each phase and step and every 30 s while nothing changes,
+  and the step output as it comes, in the form of `docker build --progress=plain`:
+
+  ```text
+  imp image build: building, 0m00s
+  #5 [2/3] RUN make all
+  imp image build: building, 0m02s, [2/3] RUN make all
+  #5 cc -o widget main.c
+  #5 DONE
+  ```
+
+  `--quiet` (`-q`) prints neither; an error still prints. `imp image builds` lists the builds impd
+  runs now, from any shell: the image name, where the context came from, when the build started, its
+  phase, its step and its builder imp. It needs a token with `read` on the whole host.
+
 - **The stream.** The tar goes out as it is made, to `POST /images/build`, with its exact length as
   the Content-Length. Neither the CLI nor impd holds it in memory. impd writes it to a temp file
   under `<IMP_DATA_DIR>/uploads`, builds from it, and deletes it. It clears that directory when it
@@ -86,9 +103,14 @@ digest as `images/examples/hello` names it, works on both.
 
   ```json
   {"type":"progress","phase":"upload","elapsedMs":0}
-  {"type":"progress","phase":"build","elapsedMs":15000}
+  {"type":"log","text":"#5 [2/3] RUN make all"}
+  {"type":"progress","phase":"build","elapsedMs":2100,"step":"[2/3] RUN make all"}
+  {"type":"log","text":"#5 cc -o widget main.c"}
   {"type":"image","image":{"name":"hello","ref":"imp/hello:latest","...":"..."}}
   ```
+
+  A progress event carries `step` once a Dockerfile step has started, and impd sends one at each new
+  step. Each line of the build's output comes as a `log` event.
 
   An error ends the stream as `{"type":"error","code":"...","message":"..."}`, with the code an oRPC
   call would give. A client skips an event type it does not know. The stream exists because a
@@ -262,11 +284,12 @@ logs a warning at start and at every build. Use it only when every caller with `
 with the host (the caution above).
 
 The SDK has the same upload:
-`client.buildImage(name, context, { dockerfile, size, signal, onProgress })`, where `context` is a
-tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds only that much
-disk; without it, impd holds the whole limit. It reads the answer as a stream and calls `onProgress`
-with each progress event; an impd from before the stream answers JSON at the end, and sends no
-progress. It throws an `ORPCError` as a contract call would.
+`client.buildImage(name, context, { dockerfile, size, signal, onProgress, onLog })`, where `context`
+is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds only that
+much disk; without it, impd holds the whole limit. It reads the answer as a stream and calls
+`onProgress` with each progress event and `onLog` with each line of the build's output; an impd from
+before the stream answers JSON at the end, and sends neither. It throws an `ORPCError` as a contract
+call would.
 
 ## Long calls
 
@@ -280,13 +303,16 @@ its answer ([the answer](#build-an-image)); the oRPC calls have streamed twins:
 | `images.buildStream` | `images.build` | `pack`, `build`                         |
 
 Each yields a progress event (`{ type: "progress", phase, elapsedMs }`) as it starts, at each new
-phase and every 15 s, then `{ type: "image", image }`. A failure throws its `ORPCError` through the
-iterator. oRPC also sends a keepalive comment every 5 s. impd writes the audit row as the work ends,
-with its outcome; a refused call is audited at once, as any refused call. `system.info` lists
-`imageOpStream` among the features of an impd that has them. `imp image add`,
-`imp image build --on-host` and `imp template create` use them when impd does, and show the phase
-and its time on a terminal; with an older impd they call `images.add` or `images.build`, which
-answer only at the end. The dashboard calls `images.add`.
+phase and step and every 15 s, then `{ type: "image", image }`. `images.buildStream` with
+`logs: true` yields a `log` event for each line of the build's output too; an older client, which
+reads every event but the image as progress, leaves it out. A failure throws its `ORPCError` through
+the iterator. oRPC also sends a keepalive comment every 5 s. impd writes the audit row as the work
+ends, with its outcome; a refused call is audited at once, as any refused call. `system.info` lists
+`imageOpStream` among the features of an impd that has them, and `imageBuilds` for one that sends
+steps and log events and answers `images.builds`. `imp image add`, `imp image build --on-host` and
+`imp template create` use them when impd does, and show the phase and its time on a terminal; with
+an older impd they call `images.add` or `images.build`, which answer only at the end. The dashboard
+calls `images.add`.
 
 When the client goes, impd stops what it can:
 

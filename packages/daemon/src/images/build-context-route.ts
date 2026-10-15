@@ -2,7 +2,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { IMAGE_BUILD_STREAM_TYPE, ImageBuildQuerySchema } from '@imp/api';
-import type { Image, ImageBuildPhase, ImageBuildQuery } from '@imp/api';
+import type { Image, ImageBuildQuery } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { ApiAudit } from '../audit/api-audit';
 import { checkAccess, findAccess } from '../auth/access-policy';
@@ -14,7 +14,8 @@ import { readErrorMessage } from '../read-error-message';
 import { buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import { createBuildEventStream } from './build-event-stream';
-import type { Repeat } from './build-event-stream';
+import type { BuildReport, Repeat } from './build-event-stream';
+import type { BuildRun } from './create-build-runs';
 import type { ImageService } from './image-service';
 
 const PROCEDURE = 'images.build';
@@ -34,7 +35,7 @@ export interface BuildContextRoute {
 
 export interface BuildContextDeps {
   readonly config: Pick<Config, 'dataDir' | 'buildContextMaxBytes'>;
-  readonly images: Pick<ImageService, 'buildImageFromContext' | 'claimBuildSlot'>;
+  readonly images: Pick<ImageService, 'buildImageFromContext' | 'claimBuildSlot' | 'startBuildRun'>;
 
   // holds room for the uploaded tar while it is on disk
   readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
@@ -74,7 +75,8 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
     query: ImageBuildQuery,
     limitBytes: number,
     signal: AbortSignal,
-    setPhase: (phase: ImageBuildPhase) => void,
+    report: Readonly<BuildReport>,
+    setBuilder: (name: string) => void,
   ): Promise<ImageRecord> => {
     const tarPath = join(uploadsDir, `${Bun.randomUUIDv7()}.tar`);
 
@@ -83,12 +85,13 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
         await writeBody(request, tarPath, limitBytes, deps.config.buildContextMaxBytes);
 
         signal.throwIfAborted();
-
-        setPhase('build');
+        report.setPhase('build');
 
         return deps.images.buildImageFromContext(tarPath, query.name, query.dockerfile, {
           signal,
-          setPhase,
+          setPhase: report.setPhase,
+          output: report.output,
+          setBuilder,
         });
       });
     } finally {
@@ -130,12 +133,27 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
       }
 
       // refused with a real status, before a stream answers 200
-      let reserved: { readonly limitBytes: number; readonly release: () => void };
+      let reserved: {
+        readonly limitBytes: number;
+        readonly run: BuildRun;
+        readonly release: () => void;
+      };
 
       try {
+        const limitBytes = readLimit(request, deps.config.buildContextMaxBytes);
+        const releaseSlot = deps.images.claimBuildSlot();
+
+        // images.builds lists the build from its upload on
+        const run = deps.images.startBuildRun(parsed.data.name, 'upload');
+
         reserved = {
-          limitBytes: readLimit(request, deps.config.buildContextMaxBytes),
-          release: deps.images.claimBuildSlot(),
+          limitBytes,
+          run,
+          release: () => {
+            run.end();
+
+            releaseSlot();
+          },
         };
       } catch (error) {
         return sendFailure(error);
@@ -143,10 +161,34 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
 
       const runToOutcome = async (
         signal: AbortSignal,
-        setPhase: (phase: ImageBuildPhase) => void,
+        report: Readonly<BuildReport>,
       ): Promise<BuildOutcome> => {
+        const run = reserved.run;
+
+        // what the stream hears, images.builds hears too
+        const tracked: BuildReport = {
+          setPhase: (phase) => {
+            run.setPhase(phase);
+            report.setPhase(phase);
+          },
+          output: {
+            emitLog: report.output.emitLog,
+            setStep: (step) => {
+              run.setStep(step);
+              report.output.setStep(step);
+            },
+          },
+        };
+
         try {
-          const image = await runBuild(request, parsed.data, reserved.limitBytes, signal, setPhase);
+          const image = await runBuild(
+            request,
+            parsed.data,
+            reserved.limitBytes,
+            signal,
+            tracked,
+            run.setBuilder,
+          );
 
           deps.audit.record(
             { procedure: PROCEDURE, actor: caller, impName: null, startedAt },
@@ -169,8 +211,8 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
       if (isStreamAccepted(request)) {
         return createBuildEventStream(
           request.signal,
-          async (signal, setPhase) => {
-            const outcome = await runToOutcome(signal, setPhase);
+          async (signal, report) => {
+            const outcome = await runToOutcome(signal, report);
 
             return outcome.ok
               ? { type: 'image', image: outcome.image }
@@ -184,8 +226,10 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
         );
       }
 
-      const outcome = await runToOutcome(request.signal, () => {
-        // the JSON answer shows no phase
+      // the JSON answer shows no phase and no output
+      const outcome = await runToOutcome(request.signal, {
+        setPhase: () => {},
+        output: { emitLog: () => {}, setStep: () => {} },
       });
 
       return outcome.ok ? Response.json(outcome.image) : sendError(outcome.failure);

@@ -242,6 +242,7 @@ export function buildImpdStorage(config: Config, deps: Readonly<ImpdDeps>): Impd
     diskBudget,
     readBuilders: () => buildersHolder.builders,
     log,
+    ...(deps.now !== undefined && { now: deps.now }),
     ...deps.images,
   });
 

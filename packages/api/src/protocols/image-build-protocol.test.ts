@@ -165,8 +165,35 @@ test('#ImageBuildEventSchema accepts an error event', () => {
   expect(ImageBuildEventSchema.safeParse(payload).data).toStrictEqual(payload);
 });
 
+test('#ImageBuildEventSchema accepts a progress event with its step', () => {
+  const payload = {
+    type: 'progress',
+    phase: 'build',
+    elapsedMs: 1500,
+    step: '[2/4] RUN make all',
+  } as const;
+
+  expect(ImageBuildEventSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
+test('#ImageBuildEventSchema accepts a log event', () => {
+  const payload = { type: 'log', text: '#5 0.312 compiling main.c' } as const;
+
+  expect(ImageBuildEventSchema.safeParse(payload).data).toStrictEqual(payload);
+});
+
+test('#ImageBuildEventSchema rejects a log event longer than its limit', () => {
+  const result = ImageBuildEventSchema.safeParse({ type: 'log', text: 'x'.repeat(8193) });
+
+  expect(result.error?.issues).toPartiallyContain({ path: ['text'] });
+});
+
 test('#ImageBuildEventSchema rejects an unknown event type', () => {
-  const result = ImageBuildEventSchema.safeParse({ type: 'log', phase: 'build', elapsedMs: 1500 });
+  const result = ImageBuildEventSchema.safeParse({
+    type: 'warning',
+    phase: 'build',
+    elapsedMs: 1500,
+  });
 
   expect(result.error?.issues).toPartiallyContain({ path: ['type'], code: 'invalid_union' });
 });

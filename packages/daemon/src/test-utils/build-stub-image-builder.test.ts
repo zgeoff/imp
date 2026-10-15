@@ -67,6 +67,39 @@ test('it records the Dockerfile of each context a build gets on stdin', async ()
   expect(builder.builtDockerfiles).toStrictEqual(['FROM scratch\n']);
 });
 
+test('it writes the plain progress a test gives to the stderr of a build', async () => {
+  const ctx = await setupTest();
+
+  const builder = buildStubImageBuilder({
+    exported: [],
+    repoDigest: 'sha256:1',
+    buildLog: '#4 [2/2] RUN make all\n#4 DONE 0.5s\n',
+  });
+
+  await writeFile(join(ctx.dir, 'Dockerfile'), 'FROM scratch\n');
+
+  Bun.spawnSync(['tar', '-C', ctx.dir, '-cf', join(ctx.dir, 'context.tar'), 'Dockerfile']);
+
+  const answered = await builder.builders.withBuilder(new AbortController().signal, (exec) =>
+    exec(['docker', 'build', '-'], {
+      signal: new AbortController().signal,
+      stdinPath: join(ctx.dir, 'context.tar'),
+    }),
+  );
+
+  expect(answered.stderr).toBe('#4 [2/2] RUN make all\n#4 DONE 0.5s\n');
+});
+
+test('it names its builder as a real builder imp is named', async () => {
+  const builder = buildStubImageBuilder({ exported: [], repoDigest: 'sha256:1' });
+
+  const name = await builder.builders.withBuilder(new AbortController().signal, (_exec, named) =>
+    Promise.resolve(named),
+  );
+
+  expect(name).toMatch(/^imp-build-[a-z]{8}$/v);
+});
+
 test('it streams its export chunks for the container its create made', async () => {
   const builder = buildStubImageBuilder({
     exported: [new TextEncoder().encode('ab'), new TextEncoder().encode('cd')],

@@ -39,10 +39,10 @@ test('#createBuildEventStream sends progress as soon as the build moves to anoth
 
   const response = createBuildEventStream(
     new AbortController().signal,
-    (_signal, setPhase) => {
+    (_signal, report) => {
       clock.now = 2500;
 
-      setPhase('build');
+      report.setPhase('build');
 
       return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
     },
@@ -53,6 +53,60 @@ test('#createBuildEventStream sends progress as soon as the build moves to anoth
 
   expect(text.split('\n')[1]).toBe(
     JSON.stringify({ type: 'progress', phase: 'build', elapsedMs: 2500 }),
+  );
+});
+
+test('#createBuildEventStream sends progress with the step as soon as a step starts', async () => {
+  const clock = { now: 0 };
+
+  const response = createBuildEventStream(
+    new AbortController().signal,
+    (_signal, report) => {
+      report.setPhase('build');
+
+      clock.now = 4000;
+
+      report.output.setStep('[2/3] RUN make all');
+
+      return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
+    },
+    { keepaliveMs: 10_000, now: () => clock.now },
+  );
+
+  const text = await response.text();
+
+  expect(text.split('\n')[2]).toBe(
+    JSON.stringify({
+      type: 'progress',
+      phase: 'build',
+      elapsedMs: 4000,
+      step: '[2/3] RUN make all',
+    }),
+  );
+});
+
+test('#createBuildEventStream sends each line of the build output as a log event, in order', async () => {
+  const response = createBuildEventStream(
+    new AbortController().signal,
+    (_signal, report) => {
+      report.output.emitLog('#5 [2/3] RUN make all');
+      report.output.emitLog('#5 cc -o widget main.c');
+
+      return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
+    },
+    { keepaliveMs: 10_000, now: () => 0 },
+  );
+
+  const text = await response.text();
+
+  expect(text).toBe(
+    [
+      JSON.stringify({ type: 'progress', phase: 'upload', elapsedMs: 0 }),
+      JSON.stringify({ type: 'log', text: '#5 [2/3] RUN make all' }),
+      JSON.stringify({ type: 'log', text: '#5 cc -o widget main.c' }),
+      JSON.stringify({ type: 'error', code: 'BAD_REQUEST', message: 'no' }),
+      '',
+    ].join('\n'),
   );
 });
 

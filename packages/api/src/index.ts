@@ -5,6 +5,7 @@ export { LeaseLabelSchema } from './schemas/lease-schema';
 export type { Lease, LeaseSummary } from './schemas/lease-schema';
 
 export {
+  IMAGE_BUILD_LOG_MAX_CHARS,
   IMAGE_BUILD_PATH,
   IMAGE_BUILD_STREAM_TYPE,
   ImageBuildErrorSchema,
@@ -15,6 +16,7 @@ export {
 
 export type {
   ImageBuildEvent,
+  ImageBuildLog,
   ImageBuildPhase,
   ImageOpEvent,
   ImageBuildProgress,
@@ -80,6 +82,8 @@ export type {
 
 export type { DroppedStorage, OrphanStorage, StorageGc } from './schemas/storage-schema';
 export { ImageRefSchema } from './schemas/image-ref-schema';
+export { ImageBuildRunSchema, ImageBuildSourceSchema } from './schemas/image-build-run-schema';
+export type { ImageBuildRun, ImageBuildSource } from './schemas/image-build-run-schema';
 export { ImageSchema, ImageSourceSchema } from './schemas/image-schema';
 export type { Image, ImageSource } from './schemas/image-schema';
 

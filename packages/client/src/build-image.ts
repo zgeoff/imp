@@ -19,6 +19,10 @@ export interface BuildImageOptions {
   // each progress event impd streams: what it does, and for how long; an
   // impd from before the stream sends none
   readonly onProgress?: (progress: ImageBuildProgress) => void;
+
+  // each line of the build's output as impd streams it, without its
+  // newline; an impd from before the log events sends none
+  readonly onLog?: (line: string) => void;
 }
 
 export interface BuildImageDeps {
@@ -72,5 +76,5 @@ export async function buildImage(
 
   const response = await (deps.fetch ?? fetch)(request);
 
-  return readBuildAnswer(response, options.onProgress);
+  return readBuildAnswer(response, options.onProgress, options.onLog);
 }

@@ -18,6 +18,9 @@ export interface ImageBuildOptions {
   readonly dir: string;
   readonly name: string;
   readonly dockerfile: string | undefined;
+
+  // no progress and no build output; errors still print
+  readonly quiet?: boolean;
 }
 
 // A tar of the entries, made as impd reads it: the pack waits while the
@@ -71,15 +74,18 @@ export async function runImageBuild(
     },
   );
 
+  const quiet = options.quiet === true;
+
   const output = {
-    isTTY: process.stderr.isTTY,
+    // the upload's line is for a terminal only
+    isTTY: process.stderr.isTTY && !quiet,
     write: (text: string) => {
       process.stderr.write(text);
     },
   };
 
   const progress = createCopyProgress(output, Date.now, 'imp image build');
-  const status = createBuildStatus(output, 'imp image build');
+  const status = createBuildStatus(output, 'imp image build', quiet);
 
   const size = await countTarBytes(entries);
 
@@ -93,12 +99,17 @@ export async function runImageBuild(
         size,
         ...(options.dockerfile !== undefined && { dockerfile: options.dockerfile }),
 
-        // the upload's line ends where the build's starts
+        // the upload's line ends where the build's starts; off a terminal
+        // the upload shows as a line of its own
         onProgress: (event) => {
-          if (event.phase !== 'upload') {
+          if (event.phase !== 'upload' || !output.isTTY) {
             progress.finish();
             status.show(event);
           }
+        },
+        onLog: (line) => {
+          progress.finish();
+          status.printLog(line);
         },
       },
     );

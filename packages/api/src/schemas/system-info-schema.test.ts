@@ -69,6 +69,7 @@ test('it accepts the system info of a host with every part turned on', () => {
       databaseCopy: true,
       imageBuildStream: true,
       imageOpStream: true,
+      imageBuilds: true,
       execRequire: true,
       oauthGrants: true,
       secretFilesGc: true,

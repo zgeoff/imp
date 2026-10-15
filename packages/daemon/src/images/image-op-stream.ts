@@ -1,6 +1,6 @@
 import type { Image, ImageBuildPhase, ImageOpEvent } from '@imp/api';
 import { runOnInterval } from './build-event-stream';
-import type { Repeat } from './build-event-stream';
+import type { BuildReport, Repeat } from './build-event-stream';
 
 export interface ImageOpStreamOptions {
   readonly firstPhase: ImageBuildPhase;
@@ -17,6 +17,10 @@ export interface ImageOpStreamOptions {
 
   // the keepalive's timer; runOnInterval by default
   readonly repeat?: Repeat;
+
+  // the build's output goes as log events; a client from before them reads
+  // any event but the image as progress
+  readonly logs?: boolean;
 }
 
 type Outcome =
@@ -24,24 +28,47 @@ type Outcome =
   | { readonly ok: false; readonly error: unknown };
 
 // What images.addStream and images.buildStream yield: progress now, at each
-// phase and keepalive, then the image. The audit row is written as the work
-// ends, even after its client went.
+// phase, step and keepalive, then the image; with `logs`, each output line in
+// order. The audit row is written as the work ends, even after its client went.
 export async function* runImageOp(
-  run: (signal: AbortSignal, setPhase: (phase: ImageBuildPhase) => void) => Promise<Image>,
+  run: (signal: AbortSignal, report: BuildReport) => Promise<Image>,
   options: Readonly<ImageOpStreamOptions>,
 ): AsyncGenerator<ImageOpEvent> {
   const startedAt = options.now();
-  const state = { phase: options.firstPhase, changed: Promise.withResolvers<void>() };
 
-  const setPhase = (phase: ImageBuildPhase): void => {
-    state.phase = phase;
+  const state = {
+    phase: options.firstPhase,
+    step: null as string | null,
+    changed: Promise.withResolvers<void>(),
+  };
 
-    state.changed.resolve();
+  // the lines not yet yielded; none is kept once the client went
+  const lines: string[] = [];
+
+  const report: BuildReport = {
+    setPhase: (phase) => {
+      state.phase = phase;
+
+      state.changed.resolve();
+    },
+    output: {
+      emitLog: (line) => {
+        if (options.logs === true && !options.signal.aborted) {
+          lines.push(line);
+          state.changed.resolve();
+        }
+      },
+      setStep: (step) => {
+        state.step = step;
+
+        state.changed.resolve();
+      },
+    },
   };
 
   const runToOutcome = async (): Promise<Outcome> => {
     try {
-      const image = await run(options.signal, setPhase);
+      const image = await run(options.signal, report);
 
       options.record(null);
 
@@ -55,20 +82,41 @@ export async function* runImageOp(
 
   const outcome = runToOutcome();
   const repeat = options.repeat ?? runOnInterval;
+  const shown = { phase: state.phase, step: state.step };
 
+  const buildProgress = (): ImageOpEvent => {
+    shown.phase = state.phase;
+    shown.step = state.step;
+
+    return {
+      type: 'progress',
+      phase: state.phase,
+      elapsedMs: options.now() - startedAt,
+      ...(state.step !== null && { step: state.step }),
+    };
+  };
+
+  yield buildProgress();
+
+  // then each line, and progress at each phase, step and keepalive
   for (;;) {
-    yield { type: 'progress', phase: state.phase, elapsedMs: options.now() - startedAt };
-    const tick = Promise.withResolvers<null>();
+    const tick = Promise.withResolvers<'tick'>();
 
     const stopTimer = repeat(options.keepaliveMs, () => {
-      tick.resolve(null);
+      tick.resolve('tick');
     });
 
     const ended = await Promise.race([outcome, tick.promise, state.changed.promise]);
 
     stopTimer();
 
-    if (ended !== null && ended !== undefined) {
+    state.changed = Promise.withResolvers<void>();
+
+    for (const text of lines.splice(0)) {
+      yield { type: 'log', text };
+    }
+
+    if (ended !== 'tick' && ended !== undefined) {
       if (!ended.ok) {
         throw ended.error;
       }
@@ -78,6 +126,8 @@ export async function* runImageOp(
       return;
     }
 
-    state.changed = Promise.withResolvers<void>();
+    if (ended === 'tick' || shown.phase !== state.phase || shown.step !== state.step) {
+      yield buildProgress();
+    }
   }
 }

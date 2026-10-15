@@ -39,6 +39,9 @@ import type { BuildEngine, EngineRun } from './build-engine';
 import { createBuildSlots } from './build-slots';
 import { BUILDER_IMAGE } from './builder-imps';
 import type { Builders } from './builder-imps';
+import { createBuildRuns } from './create-build-runs';
+import type { BuildRuns } from './create-build-runs';
+import type { BuildOutput } from './create-build-steps';
 import { DockerBuildError, runDockerBuild } from './docker-build';
 import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
 import type { ExternalImage } from './dockerfile-check';
@@ -78,10 +81,13 @@ const InspectSchema = z.tuple([
 ]);
 
 // what a streamed add or build hears of: `signal` aborts when the client
-// goes, and `setPhase` hears each phase as it starts
+// goes, `setPhase` hears each phase as it starts, `output` a build's lines
+// and steps, and `setBuilder` the builder imp an isolated build runs in
 interface ImageOpOptions {
   readonly signal?: AbortSignal;
   readonly setPhase?: (phase: ImageBuildPhase) => void;
+  readonly output?: BuildOutput | undefined;
+  readonly setBuilder?: (name: string) => void;
 }
 
 interface AddImageOptions {
@@ -125,6 +131,10 @@ export interface ImageService {
   // one of the build slots an upload and an on-host build share;
   // TOO_MANY_REQUESTS when all are taken
   readonly claimBuildSlot: () => () => void;
+
+  // an upload's entry in images.builds; buildImage makes its own
+  readonly startBuildRun: BuildRuns['start'];
+  readonly listBuildRuns: BuildRuns['list'];
   readonly listImages: () => Promise<ImageRecord[]>;
   readonly removeImage: (name: string) => Promise<void>;
 
@@ -192,6 +202,9 @@ export interface ImageServiceDeps {
 
   // the environment of images.add's docker calls; impd's own by default
   readonly dockerEnv?: Readonly<Record<string, string>>;
+
+  // the start time of each build images.builds lists; Date.now by default
+  readonly now?: () => number;
 }
 
 // how long the builder image's pull onto the host engine may take; a hung
@@ -316,6 +329,7 @@ function pickPin(
 
 export function createImageService(deps: ImageServiceDeps): ImageService {
   const storageGate = deps.storageGate;
+  const buildRuns = createBuildRuns(deps.now ?? Date.now);
 
   // one build per docker image ID at a time
   const building = createSingleFlight<number>();
@@ -722,9 +736,22 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // The host build (IMP_BUILD_ISOLATION=host): the tag's name and the
   // Dockerfile's path are all of the client's that reach the engine, checked
   // again by imp-docker-proxy. Its RUN steps reach what the engine reaches.
-  const runHostBuild = (tarPath: string, tag: string, dockerfile: string, signal: AbortSignal) =>
+  const runHostBuild = (
+    tarPath: string,
+    tag: string,
+    dockerfile: string,
+    signal: AbortSignal,
+    output: BuildOutput | undefined,
+  ) =>
     deps.diskBudget.withRoom(statSync(tarPath).size, () =>
-      runDockerBuild({ dockerHost: deps.config.dockerHost, tarPath, tag, dockerfile, signal }),
+      runDockerBuild({
+        dockerHost: deps.config.dockerHost,
+        tarPath,
+        tag,
+        dockerfile,
+        signal,
+        output,
+      }),
     );
 
   const writeGuestRootfsAndRow = async (guest: Readonly<GuestRootfs>): Promise<ImageRecord> => {
@@ -901,7 +928,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
           deps.log(HOST_BUILD_WARNING);
 
           await writePinnedContext(createBuildEngine(runOnHost));
-          await runHostBuild(rewrittenPath, tag, dockerfile, signal);
+          await runHostBuild(rewrittenPath, tag, dockerfile, signal, options.output);
 
           return null;
         }
@@ -912,14 +939,20 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
           throw new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is starting; try again' });
         }
 
-        return builders.withBuilder(signal, async (exec) => {
+        return builders.withBuilder(signal, async (exec, builderName) => {
+          options.setBuilder?.(builderName);
           const started = performance.now();
 
           await writePinnedContext(createBuildEngine(toEngineRun(exec)));
 
           const pinned = performance.now();
 
-          await runGuestBuild(exec, { tarPath: rewrittenPath, dockerfile, signal });
+          await runGuestBuild(exec, {
+            tarPath: rewrittenPath,
+            dockerfile,
+            signal,
+            output: options.output,
+          });
 
           const ran = performance.now();
 
@@ -1022,8 +1055,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
         // images.build has no signal: its call waits for the image
         return await buildFromContext(tarPath, name, dockerfile, {
+          ...options,
           signal: options.signal ?? new AbortController().signal,
-          ...(options.setPhase !== undefined && { setPhase: options.setPhase }),
         });
       } finally {
         rmSync(tarPath, { force: true });
@@ -1050,15 +1083,39 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       }),
     buildImage: async (contextDir, name, dockerfile, options = {}) => {
       const release = buildSlots.claim();
+      const run = buildRuns.start(name, 'host');
 
       try {
-        return await buildOnHost(contextDir, name, dockerfile, options);
+        return await buildOnHost(contextDir, name, dockerfile, {
+          ...options,
+          setPhase: (phase) => {
+            run.setPhase(phase);
+            options.setPhase?.(phase);
+          },
+          output: {
+            emitLog: (line) => {
+              options.output?.emitLog(line);
+            },
+            setStep: (step) => {
+              run.setStep(step);
+              options.output?.setStep(step);
+            },
+          },
+          setBuilder: (builder) => {
+            run.setBuilder(builder);
+            options.setBuilder?.(builder);
+          },
+        });
       } finally {
+        run.end();
+
         release();
       }
     },
     buildImageFromContext: buildFromContext,
     claimBuildSlot: buildSlots.claim,
+    startBuildRun: buildRuns.start,
+    listBuildRuns: buildRuns.list,
     listImages: () => listImages(deps.db),
     removeImage: async (name) => {
       const image = await findImageByName(deps.db, name);

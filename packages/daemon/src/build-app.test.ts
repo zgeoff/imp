@@ -250,6 +250,7 @@ test('it serves system.info from config and the database', async () => {
       databaseCopy: true,
       imageBuildStream: true,
       imageOpStream: true,
+      imageBuilds: true,
       execRequire: true,
       oauthGrants: true,
       secretFilesGc: true,

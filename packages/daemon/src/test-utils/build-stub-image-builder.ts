@@ -28,6 +28,9 @@ export interface StubImageBuilderOptions {
 
   // a step that fails in the engine with this stderr and exit 1
   readonly failures?: Readonly<Partial<Record<StubBuilderStep, string>>>;
+
+  // the plain progress a build writes to stderr; `#1 DONE` by default
+  readonly buildLog?: string;
 }
 
 // the engine steps a test can fail: the pin inspect of a pulled image,
@@ -39,6 +42,9 @@ const BUILT_CONFIG = '{"Cmd":["/bin/sh"],"Env":["PATH=/bin"]}';
 
 // the container `docker create` makes in the builder
 export const STUB_BUILDER_CONTAINER = 'e'.repeat(64);
+
+// the builder imp's name, as a real builder's `imp-build-<8 letters>`
+const STUB_BUILDER_NAME = 'imp-build-stubstub';
 
 // the step a builder's docker call is, when a test can fail it
 function readStep(argv: string, ref: string): StubBuilderStep | null {
@@ -114,7 +120,7 @@ export function buildStubImageBuilder(options: Readonly<StubImageBuilderOptions>
 
       builtDockerfiles.push(new TextDecoder().decode(dockerfile.stdout));
 
-      return { stderr: '#1 DONE\n' };
+      return { stderr: options.buildLog ?? '#1 DONE\n' };
     }
 
     if (argv === 'image inspect --format {{json .Config}} imp-build:latest') {
@@ -142,7 +148,7 @@ export function buildStubImageBuilder(options: Readonly<StubImageBuilderOptions>
       counts.live += 1;
 
       // the builder goes however the build ends
-      return Promise.try(run, createGuestExec(guest.open)).finally(() => {
+      return Promise.try(run, createGuestExec(guest.open), STUB_BUILDER_NAME).finally(() => {
         counts.live -= 1;
       });
     },

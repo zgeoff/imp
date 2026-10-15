@@ -34,27 +34,42 @@ export const ImageBuildErrorSchema = z.object({ code: z.string(), message: z.str
 // what impd is doing: reading an upload, packing an on-host context,
 // building, pulling a ref, unpacking it into a disk, or copying an imp's disk
 // into a template
-const ImageBuildPhaseSchema = z.enum(['upload', 'pack', 'build', 'pull', 'unpack', 'copy']);
+export const ImageBuildPhaseSchema = z.enum(['upload', 'pack', 'build', 'pull', 'unpack', 'copy']);
+
+// the most of a build's output one log event carries
+export const IMAGE_BUILD_LOG_MAX_CHARS = 8192;
 
 // A stream starts with a progress event and repeats one while the build runs;
 // it ends with the image or the error. A client skips an event it does not
-// know, so a newer impd can add one.
+// know, so a newer impd can add one. `step` reads `[3/7] RUN make all`.
 const ImageBuildProgressSchema = z.object({
   type: z.literal('progress'),
   phase: ImageBuildPhaseSchema,
   elapsedMs: z.number().nonnegative(),
+  step: z.string().optional(),
+});
+
+// lines of the build's output as docker's plain progress prints them,
+// without the last newline
+const ImageBuildLogSchema = z.object({
+  type: z.literal('log'),
+  text: z.string().max(IMAGE_BUILD_LOG_MAX_CHARS),
 });
 
 export const ImageBuildEventSchema = z.discriminatedUnion('type', [
   ImageBuildProgressSchema,
+  ImageBuildLogSchema,
   z.object({ type: z.literal('image'), image: ImageBuildResultSchema }),
   ImageBuildErrorSchema.extend({ type: z.literal('error') }),
 ]);
 
 // what images.addStream and images.buildStream yield: the same progress, and
 // the image last; a failure throws through the iterator, as any oRPC error
+
+// a buildStream whose input asks for them sends log events too
 export const ImageOpEventSchema = z.discriminatedUnion('type', [
   ImageBuildProgressSchema,
+  ImageBuildLogSchema,
   z.object({ type: z.literal('image'), image: ImageSchema }),
 ]);
 
@@ -63,5 +78,7 @@ export type ImageOpEvent = z.infer<typeof ImageOpEventSchema>;
 export type ImageBuildPhase = z.infer<typeof ImageBuildPhaseSchema>;
 
 export type ImageBuildProgress = z.infer<typeof ImageBuildProgressSchema>;
+
+export type ImageBuildLog = z.infer<typeof ImageBuildLogSchema>;
 
 export type ImageBuildEvent = z.input<typeof ImageBuildEventSchema>;

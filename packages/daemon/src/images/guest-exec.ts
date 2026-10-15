@@ -26,6 +26,9 @@ interface GuestRunOptions {
   // kept
   readonly onStdout?: (chunk: Uint8Array) => Promise<void>;
 
+  // each stderr chunk as it comes; its tail is kept as well
+  readonly onStderr?: (chunk: Uint8Array) => void;
+
   // a step that does not exit by then is killed
   readonly timeoutMs?: number;
   readonly signal: AbortSignal;
@@ -147,6 +150,7 @@ export function createGuestExec(
       for await (const event of stream.events()) {
         if (event.type === 'stderr') {
           stderr.writeChunk(event.data);
+          options.onStderr?.(event.data);
         } else if (event.type === 'stdout') {
           await takeStdout(event.data);
         } else if (event.type === 'exit') {

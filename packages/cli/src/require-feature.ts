@@ -16,6 +16,7 @@ const FEATURES = {
   tokenImageAdd: 'has no token image adds',
   brokerRefusals: 'has no audit of refused broker requests',
   grantFilters: 'has no grant filters',
+  imageBuilds: 'has no list of running image builds',
 } as const;
 
 type Feature = keyof typeof FEATURES;

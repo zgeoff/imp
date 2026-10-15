@@ -583,7 +583,7 @@ export function buildRouter(deps: RouterDeps) {
         };
 
         return runImageOp(
-          async (signal, setPhase) => {
+          async (signal, report) => {
             // a template copies an imp's disk under its lock: no client
             // stops it, as with images.add
             const image =
@@ -591,7 +591,7 @@ export function buildRouter(deps: RouterDeps) {
                 ? await deps.templates.createTemplate(input.imp, input.name)
                 : await deps.images.addImage(input.ref, input.name, {
                     signal,
-                    setPhase,
+                    setPhase: report.setPhase,
                     onResolved,
                   });
 
@@ -602,19 +602,23 @@ export function buildRouter(deps: RouterDeps) {
       }),
       buildStream: os.images.buildStream.handler((context) =>
         runImageOp(
-          async (signal, setPhase) => {
+          async (signal, report) => {
             const image = await deps.images.buildImage(
               context.input.contextDir,
               context.input.name,
               context.input.dockerfile,
-              { signal, setPhase },
+              { signal, setPhase: report.setPhase, output: report.output },
             );
 
             return toApiImage(image);
           },
-          buildImageOpOptions(context, 'images.buildStream', 'pack'),
+          {
+            ...buildImageOpOptions(context, 'images.buildStream', 'pack'),
+            logs: context.input.logs === true,
+          },
         ),
       ),
+      builds: os.images.builds.handler(() => deps.images.listBuildRuns()),
       build: os.images.build.handler(async (context) => {
         // a client that goes stops the build on the engine, which may run
         // past any fetch limit

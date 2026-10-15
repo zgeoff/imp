@@ -217,21 +217,35 @@ test('#checkAccess leaves a list to its handler for a caller with patterns', asy
   expect(refusal).toBeNull();
 });
 
-test.each([['secrets.add'], ['secrets.refresh'], ['backups.restore'], ['tokens.create']])(
-  '#checkAccess refuses the host-wide call %s to a caller with patterns',
-  async (path) => {
-    const caller = buildMockCaller({ imps: ['dev-*'] });
+test('#checkAccess lets a host-wide read caller list the running image builds', async () => {
+  const refusal = await checkAccess(
+    findAccess('images.builds'),
+    buildMockCaller({ scope: 'read' }),
+    {},
+    () => Promise.resolve(null),
+  );
 
-    const refusal = await checkAccess(findAccess(path), caller, { name: 'dev-a' }, () =>
-      Promise.resolve(null),
-    );
+  expect(refusal).toBeNull();
+});
 
-    expect(refusal).toStrictEqual({
-      message: `token ${caller.name} is limited to some imps; this call is host-wide`,
-      reason: null,
-    });
-  },
-);
+test.each([
+  ['secrets.add'],
+  ['secrets.refresh'],
+  ['backups.restore'],
+  ['tokens.create'],
+  ['images.builds'],
+])('#checkAccess refuses the host-wide call %s to a caller with patterns', async (path) => {
+  const caller = buildMockCaller({ imps: ['dev-*'] });
+
+  const refusal = await checkAccess(findAccess(path), caller, { name: 'dev-a' }, () =>
+    Promise.resolve(null),
+  );
+
+  expect(refusal).toStrictEqual({
+    message: `token ${caller.name} is limited to some imps; this call is host-wide`,
+    reason: null,
+  });
+});
 
 test.each([
   ['grants.add', 'dev-a', 'gh'],

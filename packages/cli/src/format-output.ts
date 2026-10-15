@@ -8,6 +8,7 @@ import type {
   Grant,
   Identity,
   Image,
+  ImageBuildRun,
   Imp,
   Network,
   OAuthApproval,
@@ -24,6 +25,7 @@ import type {
   SystemInfo,
   Token,
 } from '@imp/api';
+import { formatDuration } from '@imp/shared';
 
 type Row = readonly string[];
 
@@ -456,6 +458,22 @@ export function formatImages(images: readonly Image[]): string {
       image.ref,
       image.digest.slice(0, 19),
       `${String(Math.round(image.sizeBytes / 1_048_576))} MiB`,
+    ]),
+  );
+}
+
+// a build's start to the second, and its age at `nowMs`
+export function formatImageBuilds(builds: readonly ImageBuildRun[], nowMs: number): string {
+  return formatTable(
+    ['NAME', 'SOURCE', 'STARTED', 'ELAPSED', 'PHASE', 'STEP', 'BUILDER'],
+    builds.map((build) => [
+      build.name,
+      build.source,
+      build.startedAt.toISOString().replace(/\.\d+Z$/v, 'Z'),
+      formatDuration(Math.max(0, nowMs - build.startedAt.getTime())),
+      build.phase,
+      build.step ?? '-',
+      build.builder ?? '-',
     ]),
   );
 }

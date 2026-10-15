@@ -160,6 +160,76 @@ test('it pins, builds and exports in its builder, with no host engine call', asy
   ]);
 });
 
+test('it lists an on-host build with its builder and step while it runs, and sends its output', async () => {
+  const ctx = await setupTest();
+
+  const exporting = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const lines: string[] = [];
+
+  const builder = buildStubImageBuilder({
+    exported: [buildFilesTar(ctx.dir, { hello: 'from the builder\n' })],
+    repoDigest: `sha256:${'a'.repeat(64)}`,
+    buildLog: '#4 [2/2] RUN make all\n#4 0.301 cc -o widget main.c\n#4 DONE 0.5s\n',
+    onExport: async () => {
+      exporting.resolve();
+
+      await release.promise;
+    },
+  });
+
+  const images = createImageService({
+    config: loadConfig({ IMP_DATA_DIR: ctx.dataDir }),
+    db: ctx.db,
+    storage: ctx.storage,
+    storageGate: createStorageGate(),
+    diskBudget: ctx.recordedBudget,
+    readBuilders: () => builder.builders,
+    log: () => {},
+    now: () => Date.parse('2026-05-06T07:08:09.000Z'),
+  });
+
+  await mkdir(join(ctx.dir, 'context'));
+
+  await Bun.write(join(ctx.dir, 'context', 'Dockerfile'), 'FROM base.test/a:1\nRUN make all\n');
+
+  const building = images.buildImage(join(ctx.dir, 'context'), 'web', undefined, {
+    output: {
+      emitLog: (line) => {
+        lines.push(line);
+      },
+      setStep: () => {},
+    },
+  });
+
+  await exporting.promise;
+
+  const running = images.listBuildRuns();
+
+  release.resolve();
+
+  await building;
+
+  expect(running).toStrictEqual([
+    {
+      name: 'web',
+      source: 'host',
+      startedAt: new Date('2026-05-06T07:08:09.000Z'),
+      phase: 'unpack',
+      step: '[2/2] RUN make all',
+      builder: 'imp-build-stubstub',
+    },
+  ]);
+
+  expect(lines).toStrictEqual([
+    '#4 [2/2] RUN make all',
+    '#4 0.301 cc -o widget main.c',
+    '#4 DONE 0.5s',
+  ]);
+
+  expect(images.listBuildRuns()).toStrictEqual([]);
+});
+
 test('it holds disk in 256 MiB steps as the export grows, not at the image cap', async () => {
   const ctx = await setupTest();
 

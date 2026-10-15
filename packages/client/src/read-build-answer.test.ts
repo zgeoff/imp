@@ -33,6 +33,37 @@ test('it skips a line it does not know and reads on to the image', async () => {
   });
 });
 
+test('it hands each log line to onLog and progress with its step to onProgress', async () => {
+  const image = buildMockImage({ name: 'web' });
+  const progress = mock<(event: ImageBuildProgress) => void>();
+  const log = mock<(line: string) => void>();
+
+  const answer = new Response(
+    [
+      '{"type":"log","text":"#4 [2/3] RUN make all"}',
+      '{"type":"progress","phase":"build","elapsedMs":3000,"step":"[2/3] RUN make all"}',
+      '{"type":"log","text":"#4 0.31 cc -o widget main.c"}',
+      JSON.stringify({ type: 'image', image }),
+      '',
+    ].join('\n'),
+    { headers: { 'content-type': IMAGE_BUILD_STREAM_TYPE } },
+  );
+
+  await readBuildAnswer(answer, progress, log);
+
+  expect(log.mock.calls).toStrictEqual([
+    ['#4 [2/3] RUN make all'],
+    ['#4 0.31 cc -o widget main.c'],
+  ]);
+
+  expect(progress).toHaveBeenCalledExactlyOnceWith({
+    type: 'progress',
+    phase: 'build',
+    elapsedMs: 3000,
+    step: '[2/3] RUN make all',
+  });
+});
+
 test('it throws INTERNAL_SERVER_ERROR for a stream cut short before the image', () => {
   const answer = new Response('{"type":"progress","phase":"build","elapsedMs":15000}\n', {
     headers: { 'content-type': IMAGE_BUILD_STREAM_TYPE },

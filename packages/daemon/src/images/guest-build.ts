@@ -4,10 +4,12 @@ import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import type { StartTimer } from '../process/clock';
 import { startRealTimer } from '../process/start-real-timer';
 import { countTreeBytes } from '../storage/count-tree-bytes';
+import type { BuildOutput } from './create-build-steps';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
 import { PIN_INSPECT_FORMAT, PinInspectSchema, formatPlatform, pickRepoDigest } from './image-pin';
+import { makePlainLines } from './make-plain-lines';
 import { planRootfsOverhead } from './rootfs-plan';
 import { UNPACK_TAR_ARGS, assertUnpacked } from './unpack-export';
 
@@ -28,6 +30,9 @@ export interface GuestBuildOptions {
   // the Dockerfile's path inside the context
   readonly dockerfile: string;
   readonly signal: AbortSignal;
+
+  // hears each line of the build's plain progress, and its steps
+  readonly output?: BuildOutput | undefined;
 }
 
 // The build, on the builder's engine, its context on stdin. A failed build's
@@ -49,7 +54,11 @@ export async function runGuestBuild(
       options.dockerfile,
       '-',
     ],
-    { stdinPath: options.tarPath, signal: options.signal },
+    {
+      stdinPath: options.tarPath,
+      signal: options.signal,
+      ...(options.output !== undefined && { onStderr: makePlainLines(options.output) }),
+    },
   );
 
   if (result.exitCode !== 0) {
