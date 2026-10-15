@@ -11,7 +11,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/zgeoff/imp/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proc"
 )
 
 // helperEnv makes the test binary run RunHelper on its arguments.

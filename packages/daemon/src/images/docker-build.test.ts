@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { parseQuery } from '../docker-proxy/router';
 import { checkBuildQuery } from '../docker-proxy/rules';
 import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';

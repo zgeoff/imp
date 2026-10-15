@@ -7,18 +7,18 @@ tailnet member. Each has a scope, and it can be limited to some imps.
 
 impd makes the root token on its first start and keeps it in `<dataDir>/token`
 (`/var/lib/imp/token`), readable by the owner only. It has every scope on every imp, and it is not
-in the token list: `imp token rm` cannot remove it. To change it, stop impd, delete the file and
+in the token list: `impz token rm` cannot remove it. To change it, stop impd, delete the file and
 start impd again. A new root token ends every dashboard session.
 
 ## Scopes
 
 Scopes nest: `manage` includes `exec`, and `exec` includes `read`.
 
-| Scope    | What it may do                                                                                                                                                                                                                                                                                                                           |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                                                                                      |
-| `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp, and take its [leases](./leases.md); kill a session; add, restart and remove a service, and `imp logs`.                                           |
-| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root; `imp move` from this host. Host-wide: images, secrets and grants, networks, backups, `imp gc`, `imp db copy`, tokens, taking in an `imp move`, and `imp exec --agent`. |
+| Scope    | What it may do                                                                                                                                                                                                                                                                                                                                  |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `impz info`, and the backup list for a token with no imp patterns.                                                                                                            |
+| `exec`   | Run things in imps: `impz exec`, `impz console`, `attach`, `impz proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp, and take its [leases](./leases.md); kill a session; add, restart and remove a service, and `impz logs`.                                              |
+| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `impz set` CPU limits and HTTP port; checkpoints; `impz cp`, to copy files in and out, as root; `impz move` from this host. Host-wide: images, secrets and grants, networks, backups, `impz gc`, `impz db copy`, tokens, taking in an `impz move`, and `impz exec --agent`. |
 
 `packages/daemon/src/auth/access-policy.ts` maps every procedure to its scope. The map covers every
 path of the API contract, so a new procedure without an entry fails the typecheck, and impd refuses
@@ -35,14 +35,14 @@ such as `dev-*`. Such a token:
   answer names the rest in `grantsNotCopied`. A host-wide caller copies every grant
   ([forks and grants](./connectors.md#secrets-and-grants)).
 - must name the imp it creates. impd never picks a name for it.
-- sees only its imps in lists, in the event stream, in the grants of `imp secret ls`, in
-  `imp net ls`, and in both audit logs. Rows of the API audit log that name no imp are hidden from
+- sees only its imps in lists, in the event stream, in the grants of `impz secret ls`, in
+  `impz net ls`, and in both audit logs. Rows of the API audit log that name no imp are hidden from
   it.
 - cannot make host-wide calls, whatever its scope: images, secrets and grants, networks, backups,
-  tokens and `imp exec --agent`, which runs as root outside the imp's container
+  tokens and `impz exec --agent`, which runs as root outside the imp's container
   ([outer exec](../architecture/guest/agent.md#execs-and-services)). A grant hands a host secret to
   an imp, so a `dev-*` token could otherwise grant itself any secret; a network reaches every imp on
-  it. It cannot pass `--net` to `imp new` either. A token made with a list of secrets may grant
+  it. It cannot pass `--net` to `impz new` either. A token made with a list of secrets may grant
   those ([granting secrets](#granting-secrets)), and no others. A token given an image ref prefix
   may add images under its own names ([adding images](#adding-images)), and build none.
 
@@ -60,17 +60,17 @@ totals tell it why a wake waits.
 Only a `manage` token with no patterns manages tokens.
 
 ```sh
-imp token new ci --scope exec --imps 'dev-*'   # prints the secret once, on stdout
-imp token ls                                   # names, scopes, imps, grantable secrets, SSH keys
-imp token whoami                               # who impd takes this CLI for
-imp token set agent --grantable 'gh,npm'       # change the secrets it may grant
-imp token set nixie --image-ref-prefix ghcr.io/zgeoff/nixie-   # let it add its images
-imp token rm ci
+impz token new ci --scope exec --imps 'dev-*'   # prints the secret once, on stdout
+impz token ls                                   # names, scopes, imps, grantable secrets, SSH keys
+impz token whoami                               # who impd takes this CLI for
+impz token set agent --grantable 'gh,npm'       # change the secrets it may grant
+impz token set nixie --image-ref-prefix ghcr.io/zgeoff/nixie-   # let it add its images
+impz token rm ci
 ```
 
 The secret is `imp_<id>.<secret>`. impd keeps only the SHA-256 of the secret: the secret has 256
 random bits, so a slow hash adds nothing. A call finds the token by its id and compares the hash in
-constant time. Use the secret as any token: `imp login`, `IMP_TOKEN`, or the dashboard's login.
+constant time. Use the secret as any token: `impz login`, `IMP_TOKEN`, or the dashboard's login.
 
 The dashboard has a **Tokens** page for a `manage` token with no patterns. It shows the secret of a
 new token once, with a copy button.
@@ -85,12 +85,12 @@ A `manage` token with imp patterns can also be given secrets it may grant to its
 from them. A client then manages the credentials of its own imps without host-wide `manage`:
 
 ```sh
-imp token new agent --scope manage --imps 'agent-*' --grantable 'gh,npm'
+impz token new agent --scope manage --imps 'agent-*' --grantable 'gh,npm'
 ```
 
 The API takes the list as `grantable` on `tokens.create`: 1 to 32 secret names, no two the same.
 Each secret must exist; a missing one fails with `NOT_FOUND`. A list without `manage`, or on a token
-with no patterns, fails with `BAD_REQUEST`. `imp token ls` and `tokens.whoami` show the list.
+with no patterns, fails with `BAD_REQUEST`. `impz token ls` and `tokens.whoami` show the list.
 
 `grants.add` and `grants.delete` from such a token need both the imp within its patterns and the
 secret on its list. Each refusal is `FORBIDDEN` with `data.reason`:
@@ -110,7 +110,7 @@ only `read` on the imp, as before.
 The list names each secret as it was when the token was made. Every secret has a random generation,
 set when it is created and kept by a rotation. A rebind, or a secret deleted and made again under
 the name, gives it another ([rotate or rebind](./connectors.md#rotate-or-rebind)), so the list no
-longer covers it: the host owner names it again with `imp token set`
+longer covers it: the host owner names it again with `impz token set`
 ([change the list](#change-the-list)). impd reads the secret's generation at each call, never from
 the token's cache, and reads it again, with the token, in the transaction that makes or removes the
 grant. A token removed between the check and the transaction fails with `UNAUTHORIZED`; a secret
@@ -123,7 +123,7 @@ In this version, such a token may not fork an imp or move one: `imps.fork`, `mov
 imp's grants to the target, so it could hand an imp a secret the list does not name. A fork would
 copy only the grants on the list, checked again in the copy's transaction, but stays refused in this
 version all the same. `moves.abort` stays open to it. The refusal holds while the list names any
-secret, even one that is gone; a list cleared with `imp token set` lifts it. Grants stay with the
+secret, even one that is gone; a list cleared with `impz token set` lifts it. Grants stay with the
 imp through sleep, wake, a checkpoint restore and a restart of impd. A destroyed imp takes its
 grants with it, and an imp made from a [template](./templates.md) gets none. The fork and move
 refusal covers the token's dashboard sessions and the SSH keys bound to it too. `backups.restore`
@@ -131,7 +131,7 @@ stays host-wide.
 
 An impd older than 0.27.0 drops `grantable` unread and makes a token with no list. Before a client
 sends `grantable`, it checks that `system.info()` has `features.grantableTokens`.
-`imp token new --grantable` does that check, and against an older impd it fails before it makes the
+`impz token new --grantable` does that check, and against an older impd it fails before it makes the
 token.
 
 ### Change the list
@@ -140,8 +140,8 @@ A `manage` token with no patterns changes another token's list in place. The tok
 its SSH keys, its scope and its patterns, so its clients keep working:
 
 ```sh
-imp token set agent --grantable 'gh,npm,pypi'   # the whole new list
-imp token set agent --grantable ''              # no list
+impz token set agent --grantable 'gh,npm,pypi'   # the whole new list
+impz token set agent --grantable ''              # no list
 ```
 
 The API call is `tokens.update` with `name` and `grantable`: the whole new list, 0 to 32 secret
@@ -161,9 +161,9 @@ ends too; `grants.add` makes it again. Grants on imps outside the patterns stay.
 
 A grant, a revoke or a fork copy reads the token's list again in its own transaction, so a call
 checked before the change and run after it cannot use a secret taken off. The audit log
-(`imp audit --kind api`) records each `tokens.update` with its caller and outcome.
+(`impz audit --kind api`) records each `tokens.update` with its caller and outcome.
 
-An impd older than 0.34.0 has no `tokens.update`. `imp token set` checks that `system.info()` has
+An impd older than 0.34.0 has no `tokens.update`. `impz token set` checks that `system.info()` has
 `features.tokenUpdate` first.
 
 ## Adding images
@@ -173,8 +173,8 @@ registry itself, so a service that runs its guests on impd adds its released ima
 without the host owner adding each one first:
 
 ```sh
-imp token new nixie --scope manage --imps 'nixie-*' --image-ref-prefix ghcr.io/zgeoff/nixie-
-imp token set nixie --image-ref-prefix ''   # take the permission away
+impz token new nixie --scope manage --imps 'nixie-*' --image-ref-prefix ghcr.io/zgeoff/nixie-
+impz token set nixie --image-ref-prefix ''   # take the permission away
 ```
 
 The token adds an image only when all of these hold, and each other add is `FORBIDDEN`:
@@ -190,15 +190,15 @@ The token adds an image only when all of these hold, and each other add is `FORB
 The prefix is a registry host with a dot, a port or `localhost`, then the start of a path. A bare
 path such as `zgeoff/nixie-` fails with `BAD_REQUEST`, because docker would read it as a repository
 on Docker Hub. The prefix is the host owner's choice when they make the token or change it with
-`imp token set`, never the token's: a token with patterns cannot call `tokens.update`. A prefix on a
-token without `manage`, or with no patterns, fails with `BAD_REQUEST`. `imp token ls` and
-`imp token whoami` show it. A name the token adds again points at the new image, as for any add, and
-imps made before keep theirs.
+`impz token set`, never the token's: a token with patterns cannot call `tokens.update`. A prefix on
+a token without `manage`, or with no patterns, fails with `BAD_REQUEST`. `impz token ls` and
+`impz token whoami` show it. A name the token adds again points at the new image, as for any add,
+and imps made before keep theirs.
 
 The API takes `imageRefPrefix` on `tokens.create` and `tokens.update`, where `null` takes it away.
 `images.add` and `images.addStream` from the token run the checks above before they pull anything.
 An OAuth grant never adds an image, whatever its token may. An impd older than this feature drops
-`imageRefPrefix` unread, so `imp token new` and `imp token set` check that `system.info()` has
+`imageRefPrefix` unread, so `impz token new` and `impz token set` check that `system.info()` has
 `features.tokenImageAdd` first.
 
 ## Each way in
@@ -227,11 +227,11 @@ covers binding, moving keys out of the file, and `IMP_SSH_AUTHORIZED_KEYS`.
 
 ### MCP
 
-`imp mcp` calls impd with the CLI's token, so impd enforces that token's scope. Run it with a scoped
-token to give an agent a real limit:
+`impz mcp` calls impd with the CLI's token, so impd enforces that token's scope. Run it with a
+scoped token to give an agent a real limit:
 
 ```sh
-IMP_TOKEN=$(imp token new agent --scope manage --imps 'agent-*') imp mcp --prefix agent-
+IMP_TOKEN=$(impz token new agent --scope manage --imps 'agent-*') impz mcp --prefix agent-
 ```
 
 The server's `--prefix` guard stays a convenience. impd's own MCP endpoint, `/mcp`, takes a token
@@ -241,10 +241,10 @@ per client instead, and its tools follow that token's scope and patterns: see
 ### OAuth grants
 
 On the [public MCP route](./mcp.md#public-route), a client signs in and a named token approves it
-with `imp oauth approve`. The grant gets at most that token's scope and patterns, and no secrets.
+with `impz oauth approve`. The grant gets at most that token's scope and patterns, and no secrets.
 impd checks both on every request, and the audit log names the caller `<client>/<grant id>`.
-Removing the token ends every grant it approved. `imp oauth grant ls` lists the grants, and
-`imp oauth grant rm` ends one.
+Removing the token ends every grant it approved. `impz oauth grant ls` lists the grants, and
+`impz oauth grant rm` ends one.
 
 ## Tailnet identity
 

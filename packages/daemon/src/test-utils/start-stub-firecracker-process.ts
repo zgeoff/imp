@@ -1,6 +1,6 @@
 import { onTestFinished } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 
 // A process whose /proc cmdline reads `firecracker ... --api-sock <socket>`,
 // as a real one's does; it serves nothing. It is killed when the test ends.

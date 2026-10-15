@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runChildTests } from '@imp/test-utils/run-child-tests';
+import { runChildTests } from '@impz/test-utils/run-child-tests';
 import { startOtlpExport } from './start-otlp-export';
 
 // An export that starts sets the global meter and tracer providers, which the
@@ -17,8 +17,8 @@ async function setupTest() {
     dir,
     exportPath: JSON.stringify(join(import.meta.dir, 'start-otlp-export.ts')),
     apiPath: JSON.stringify(Bun.resolveSync('@opentelemetry/api', import.meta.dir)),
-    updateEnvPath: JSON.stringify(Bun.resolveSync('@imp/test-utils/update-env', import.meta.dir)),
-    invariantPath: JSON.stringify(Bun.resolveSync('@imp/test-utils/invariant', import.meta.dir)),
+    updateEnvPath: JSON.stringify(Bun.resolveSync('@impz/test-utils/update-env', import.meta.dir)),
+    invariantPath: JSON.stringify(Bun.resolveSync('@impz/test-utils/invariant', import.meta.dir)),
 
     // the child runs no preload, so it registers the run's matchers itself
     matchersPath: JSON.stringify(Bun.resolveSync('@zgeoff/bun-test-extended', import.meta.dir)),

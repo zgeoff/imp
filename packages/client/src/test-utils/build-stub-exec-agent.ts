@@ -4,9 +4,9 @@ import {
   decodeJsonPayload,
   encodeFrame,
   encodeJsonFrame,
-} from '@imp/daemon/src/agent-client/frame-codec';
-import type { AgentFrame } from '@imp/daemon/src/agent-client/frame-codec';
-import type { StubAgentHandler } from '@imp/daemon/src/test-utils/start-stub-agent';
+} from '@impz/daemon/src/agent-client/frame-codec';
+import type { AgentFrame } from '@impz/daemon/src/agent-client/frame-codec';
+import type { StubAgentHandler } from '@impz/daemon/src/test-utils/start-stub-agent';
 import * as z from 'zod';
 
 // the bytes `big` writes to each of stdout and stderr

@@ -12,8 +12,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // dialTimeout bounds the connect, so a filtered port fails instead of

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
+import { buildMockImp } from '@impz/api/test-utils/build-mock-imp';
 import { runCli } from '../test-utils/start-cli';
 import { formatTop, readCpuArgs } from './cpu';
 
@@ -97,7 +97,7 @@ test('#setCommand refuses a set with no change before any call', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: imp set needs --cpu-limit, --cpu-weight, --cpus or --http-port\n',
+    stderr: 'impz: impz set needs --cpu-limit, --cpu-weight, --cpus or --http-port\n',
     code: 2,
   });
 });

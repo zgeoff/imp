@@ -372,7 +372,7 @@ test('it lets a guest reach no host port, over IPv4 or IPv6 link-local', async (
   expect(apiOverIpv6).toBe('closed');
 });
 
-// SSH commands get the credential broker's variables as `imp exec` does
+// SSH commands get the credential broker's variables as `impz exec` does
 // (docs/guides/connectors.md); the guest only ever sees the placeholder
 test('it gives an imp with a grant the broker variables over ssh', async () => {
   const ctx = await setupTest();

@@ -1,18 +1,18 @@
-import type { SessionLog } from '@imp/api';
+import type { SessionLog } from '@impz/api';
 import type { ImpClient } from '../create-imp-client';
 import { formatOutput, formatSessionLogs } from '../format-output';
 import { requireFeature } from '../require-feature';
 import { UsageError } from '../usage-error';
 
-// `imp sessions logs|log|log-rm`: the session logs impd keeps on the host
+// `impz sessions logs|log|log-rm`: the session logs impd keeps on the host
 // (docs/guides/session-logs.md). None of them wakes the imp.
 
 // what the verbs call
 type SessionLogClient = Pick<ImpClient, 'sessions' | 'system'>;
 
-const LOGS_USAGE = 'usage: imp sessions logs <name> [session]';
-const LOG_USAGE = 'usage: imp sessions log <name> <session> [generation] [--from <offset>]';
-const LOG_RM_USAGE = 'usage: imp sessions log-rm <name> [session] [generation]';
+const LOGS_USAGE = 'usage: impz sessions logs <name> [session]';
+const LOG_USAGE = 'usage: impz sessions log <name> <session> [generation] [--from <offset>]';
+const LOG_RM_USAGE = 'usage: impz sessions log-rm <name> [session] [generation]';
 
 export async function listSessionLogs(
   client: SessionLogClient,
@@ -93,7 +93,7 @@ export async function writeSessionLog(
 
   // the output of one generation only: a reader who named none learns which
   if (named === undefined) {
-    console.error(`imp: generation ${executionGeneration}`);
+    console.error(`impz: generation ${executionGeneration}`);
   }
 
   for (;;) {
@@ -106,7 +106,7 @@ export async function writeSessionLog(
 
     if (read.gap !== undefined) {
       console.error(
-        `imp: bytes ${String(read.gap.from)} to ${String(read.gap.to)} are not in the log`,
+        `impz: bytes ${String(read.gap.from)} to ${String(read.gap.to)} are not in the log`,
       );
     }
 

@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
 import type { McpPrincipal } from '../http/create-http-transport';
 import { createImpGuard } from '../imp-guard';
 

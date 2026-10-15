@@ -1,5 +1,5 @@
-import { ImpEventSchema } from '@imp/api';
-import type { ImpEvent } from '@imp/api';
+import { ImpEventSchema } from '@impz/api';
+import type { ImpEvent } from '@impz/api';
 import { metrics } from '@opentelemetry/api';
 import { SCOPE } from '../telemetry/scope';
 

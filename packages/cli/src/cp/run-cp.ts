@@ -1,4 +1,4 @@
-import { countFileBytes, listLocalEntries, writeLocalEntries } from '@imp/local-tar';
+import { countFileBytes, listLocalEntries, writeLocalEntries } from '@impz/local-tar';
 import { loadCliConfig } from '../cli-config';
 import type { CliConfig } from '../cli-config';
 import { printError } from '../run-action';
@@ -22,7 +22,7 @@ export interface CpOptions {
 }
 
 function writeWarning(text: string): void {
-  console.error(`imp: ${text}`);
+  console.error(`impz: ${text}`);
 }
 
 function writeGuestStderr(data: Uint8Array): void {
@@ -104,7 +104,7 @@ async function runDownload(config: CliConfig, plan: CpPlan, progress: CopyProgre
   }
 }
 
-// `imp cp`: one side on this machine, the other in an imp
+// `impz cp`: one side on this machine, the other in an imp
 export async function runCp(options: CpOptions): Promise<void> {
   let config: CliConfig | null = null;
 

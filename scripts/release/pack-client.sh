@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build @zgeoff/imp-client and pack the tarball npm publishes, in
+# Build @impz/client and pack the tarball npm publishes, in
 # build/npm/. Prints the tarball's path.
 #
 #   scripts/release/pack-client.sh

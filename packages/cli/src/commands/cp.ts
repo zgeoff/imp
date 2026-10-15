@@ -5,7 +5,7 @@ export const cpCommand = defineCommand({
   meta: {
     name: 'cp',
     description:
-      'Copy a file or directory into or out of an imp (imp cp ./dir box:/srv/dir, imp cp box:/var/log/x .)',
+      'Copy a file or directory into or out of an imp (impz cp ./dir box:/srv/dir, impz cp box:/var/log/x .)',
   },
   args: {
     source: {

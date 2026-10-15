@@ -1,4 +1,4 @@
-import { decodeExecFrame } from '@imp/api';
+import { decodeExecFrame } from '@impz/api';
 import type { ExecPeer } from '../exec/exec-session';
 
 interface StubExecSocketOptions {

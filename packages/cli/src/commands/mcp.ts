@@ -1,4 +1,4 @@
-import type { GuardOptions, ImpGuard } from '@imp/mcp';
+import type { GuardOptions, ImpGuard } from '@impz/mcp';
 import packageJson from '../../package.json' with { type: 'json' };
 import { defineCommand } from '../define-command';
 import { runAction } from '../run-action';
@@ -10,7 +10,7 @@ export const mcpCommand = defineCommand({
   meta: {
     name: 'mcp',
     description:
-      'Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes. For a real limit, run it with a scoped token (imp token new).',
+      'Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes. For a real limit, run it with a scoped token (impz token new).',
   },
   args: {
     prefix: {
@@ -22,7 +22,7 @@ export const mcpCommand = defineCommand({
   },
   run: (context) =>
     runAction(context.host, async (client) => {
-      const mcp = await import('@imp/mcp');
+      const mcp = await import('@impz/mcp');
 
       let guard: ImpGuard;
 

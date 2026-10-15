@@ -1,4 +1,4 @@
-import { IMAGE_BUILD_PATH } from '@imp/api';
+import { IMAGE_BUILD_PATH } from '@impz/api';
 
 // impd from before the build stream in front of a real impd's `handle`: it
 // reads no Accept header on `POST /images/build`, so the real one answers

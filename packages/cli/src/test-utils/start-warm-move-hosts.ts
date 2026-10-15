@@ -1,7 +1,7 @@
-import { TEST_TOKEN } from '@imp/daemon/src/imps/test-imps';
-import { createMoveHosts, createUbuntuImage } from '@imp/daemon/src/moves/test-moves';
-import { invariant } from '@imp/test-utils/invariant';
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
+import { TEST_TOKEN } from '@impz/daemon/src/imps/test-imps';
+import { createMoveHosts, createUbuntuImage } from '@impz/daemon/src/moves/test-moves';
+import { invariant } from '@impz/test-utils/invariant';
 
 // Two impds that can take a warm move, with the ubuntu image, on loopback
 // ports. They cannot share a data dir, so both report the target's facts.

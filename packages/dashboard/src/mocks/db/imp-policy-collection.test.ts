@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { EgressPolicy } from '@imp/api';
+import type { EgressPolicy } from '@impz/api';
 import { impPolicyCollection } from './imp-policy-collection';
 
 test('it creates a default open policy', async () => {

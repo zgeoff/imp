@@ -236,22 +236,31 @@ write_compose_env() {
   fi
 }
 
-imp() {
-  docker exec "$container" imp "$@"
+# The CLI in the running container: impz, or imp in an image from before the
+# CLI's rename, which is the old image while its imps go to sleep. Picked
+# before the sleeps and again once the host restarts on the new image.
+cli=impz
+pick_cli() {
+  cli=impz
+  docker exec "$container" impz --version >/dev/null 2>&1 || cli=imp
+}
+
+impz() {
+  docker exec "$container" "$cli" "$@"
 }
 
 list_awake() {
   local imps
-  imps=$(imp ls --json) || return 1
+  imps=$(impz ls --json) || return 1
   jq -r '.[] | select(.state == "running") | .name' <<<"$imps"
 }
 
-# the counts `imp info` reports; an older impd has none, and the NOTE column
+# the counts `impz info` reports; an older impd has none, and the NOTE column
 # that follows still names each imp
 print_boot_status() {
   local info
-  if ! info=$(imp info --json); then
-    echo "upgrade: imp info failed; see the NOTE column below" >&2
+  if ! info=$(impz info --json); then
+    echo "upgrade: impz info failed; see the NOTE column below" >&2
     return
   fi
   jq -r '
@@ -262,7 +271,7 @@ print_boot_status() {
       | [$status.outdated | to_entries[] | select(.value > 0) | "\(.value) \(.key)"]
       | (if length == 0 then "none" else join(", ") end) as $outdated
       | "upgrade: \($status.coldBoots) imps will boot cold; outdated: \($outdated)"
-    end' <<<"$info" || echo "upgrade: could not read imp info; see the NOTE column below" >&2
+    end' <<<"$info" || echo "upgrade: could not read impz info; see the NOTE column below" >&2
 }
 
 # IMAGE's imp.host-contract label (host/Dockerfile): socket-proxy runs
@@ -441,11 +450,12 @@ if [ "$old" = "$new" ]; then
   exit 0
 fi
 
-# its own line: a failed `imp ls` stops the script before anything restarts
+pick_cli
+# its own line: a failed `impz ls` stops the script before anything restarts
 awake=$(list_awake)
 
 for name in $awake; do
-  if ! imp sleep "$name" >/dev/null; then
+  if ! impz sleep "$name" >/dev/null; then
     echo "upgrade: $name did not sleep; the host still runs $old" >&2
     exit 1
   fi
@@ -455,6 +465,7 @@ done
 install_new_files
 restart_host
 wait_ready
+pick_cli
 
 if [ "$old_contract" = "$new_contract" ]; then
   if [ -n "$compose_file" ] || [ "$new_contract" != socket-proxy ]; then
@@ -472,4 +483,4 @@ if [ -n "$compose_file" ] && [ "$new_contract" = socket-proxy ] && ! proxy_deplo
   echo "upgrade: NOTE: $compose_file still gives imp-host the host's docker.sock; take the imp-docker-proxy service and imp-host's volumes from this release's deploy/compose.yaml" >&2
 fi
 print_boot_status
-imp ls
+impz ls

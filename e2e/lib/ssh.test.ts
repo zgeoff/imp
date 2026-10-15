@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
 import { runCommand } from './instance';
 import { listAgentThroughUnixForward, startLocalSshAgent } from './ssh';

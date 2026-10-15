@@ -1,5 +1,5 @@
 {
-  "name": "@imp/test-utils",
+  "name": "@impz/test-utils",
   "version": "0.0.0",
   "private": true,
   "description": "The test run's preload and the test utils every package shares: env overrides, a seeded faker, waitFor, invariant, the MSW server and the run's in-memory tracer provider",

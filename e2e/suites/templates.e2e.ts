@@ -19,7 +19,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImageIfPresent, removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// `imp template` (docs/guides/templates.md) on the e2e-git image, which has
+// `impz template` (docs/guides/templates.md) on the e2e-git image, which has
 // ssh-keygen. Its USER is `dev`, so root's steps go through sudo.
 
 // one stack for every release, so each imp goes before the template it boots
@@ -111,7 +111,7 @@ test('it copies a running imp into a template whose copies each get their own id
   expect(inUse).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: `imp: CONFLICT: image ${template} is used by 2 imp(s)\n`,
+    stderr: `impz: CONFLICT: image ${template} is used by 2 imp(s)\n`,
   });
 
   await runImp('rm', first);

@@ -1,7 +1,7 @@
 import { expect, onTestFinished } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 
 interface StubFirecrackerOptions {
   readonly apiSocket: string;

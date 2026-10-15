@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { readAgentFixture } from '@imp/test-utils/read-agent-fixture';
+import { readAgentFixture } from '@impz/test-utils/read-agent-fixture';
 import * as z from 'zod';
 import { buildTarArgs } from './build-tar-args';
 

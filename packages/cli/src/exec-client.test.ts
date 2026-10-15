@@ -4,33 +4,33 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { faker } from '@faker-js/faker';
-import { EXEC_CHANNELS } from '@imp/api';
+import { EXEC_CHANNELS } from '@impz/api';
+import { createImpClient } from '@impz/client';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
   encodeFrame,
   encodeJsonFrame,
-} from '@imp/daemon/src/agent-client/frame-codec';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+} from '@impz/daemon/src/agent-client/frame-codec';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubExecReplies } from '@imp/daemon/src/test-utils/build-stub-exec-replies';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecReplies } from '@impz/daemon/src/test-utils/build-stub-exec-replies';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import * as z from 'zod';
 import { runExec } from './exec-client';
 import type { ExecIo } from './exec-client';
@@ -291,7 +291,7 @@ test('it names the cause and runs nothing when impd refuses a required broker', 
 
   expect(ctx.errors as unknown).toStrictEqual([
     expect.stringMatching(
-      /^imp: PRECONDITION_FAILED: the broker is not ready for this exec: .*no grant/u,
+      /^impz: PRECONDITION_FAILED: the broker is not ready for this exec: .*no grant/u,
     ) as unknown,
   ]);
 
@@ -348,7 +348,7 @@ test.each([[null], ['SIGNOPE']])(
     );
 
     expect(code).toBe(255);
-    expect(errors).toStrictEqual(['imp: impd reported an exit with no code and no known signal']);
+    expect(errors).toStrictEqual(['impz: impd reported an exit with no code and no known signal']);
   },
 );
 
@@ -404,7 +404,7 @@ test('it exits 255 for an IMP_URL that is not an http URL', async () => {
   );
 
   expect(code).toBe(255);
-  expect(errors).toStrictEqual(['imp: IMP_URL is not an http(s) URL: localhost:7070']);
+  expect(errors).toStrictEqual(['impz: IMP_URL is not an http(s) URL: localhost:7070']);
 });
 
 test('it exits 127 when the command cannot start', async () => {
@@ -429,7 +429,7 @@ test('it exits 127 when the command cannot start', async () => {
   const code = await runExec({ host: null, name: 'box', argv: ['cmd'], tty: false }, ctx.io);
 
   expect(code).toBe(127);
-  expect(ctx.errors).toStrictEqual(['imp: EXEC_FAILED: cmd: not found']);
+  expect(ctx.errors).toStrictEqual(['impz: EXEC_FAILED: cmd: not found']);
 });
 
 test('it exits 255 and names the refusal for an imp impd does not have', async () => {
@@ -439,7 +439,7 @@ test('it exits 255 and names the refusal for an imp impd does not have', async (
   expect(code).toBe(255);
 
   expect(ctx.errors as unknown).toStrictEqual([
-    expect.stringMatching(/^imp: NOT_FOUND: .*nope/u) as unknown,
+    expect.stringMatching(/^impz: NOT_FOUND: .*nope/u) as unknown,
   ]);
 });
 
@@ -467,7 +467,7 @@ test('it explains INNER_DOWN and exits 255', async () => {
   expect(code).toBe(255);
 
   expect(ctx.errors).toStrictEqual([
-    'imp: INNER_DOWN: the inner container is down (the container in the imp starts again on its own; imp stop and imp start, or imp restore, bring it back)',
+    'impz: INNER_DOWN: the inner container is down (the container in the imp starts again on its own; impz stop and impz start, or impz restore, bring it back)',
   ]);
 });
 
@@ -497,7 +497,7 @@ test('it ends the session and closes the socket when impd faults with a frame on
   expect(code).toBe(255);
 
   expect(errors as unknown).toStrictEqual([
-    expect.stringMatching(/^imp: bad message from impd: /u) as unknown,
+    expect.stringMatching(/^impz: bad message from impd: /u) as unknown,
   ]);
 
   await expect(peer.closed).toResolve();
@@ -529,7 +529,7 @@ test('it ends the session and closes the socket when impd faults with text that 
   expect(code).toBe(255);
 
   expect(errors as unknown).toStrictEqual([
-    expect.stringMatching(/^imp: bad message from impd: /u) as unknown,
+    expect.stringMatching(/^impz: bad message from impd: /u) as unknown,
   ]);
 
   await expect(peer.closed).toResolve();
@@ -561,7 +561,7 @@ test('it ends the session and closes the socket when impd faults with a frame on
   expect(code).toBe(255);
 
   expect(errors as unknown).toStrictEqual([
-    expect.stringMatching(/^imp: bad message from impd: /u) as unknown,
+    expect.stringMatching(/^impz: bad message from impd: /u) as unknown,
   ]);
 
   await expect(peer.closed).toResolve();
@@ -585,7 +585,7 @@ test('it exits 255 when the agent connection drops after started without an exit
   const code = await runExec({ host: null, name: 'box', argv: ['cmd'], tty: false }, ctx.io);
 
   expect(code).toBe(255);
-  expect(ctx.errors).toStrictEqual(['imp: the agent connection closed before the process exited']);
+  expect(ctx.errors).toStrictEqual(['impz: the agent connection closed before the process exited']);
 });
 
 test('it exits 255 and gives the reason when impd faults by closing after started without an exit', async () => {
@@ -612,7 +612,7 @@ test('it exits 255 and gives the reason when impd faults by closing after starte
   );
 
   expect(code).toBe(255);
-  expect(errors).toStrictEqual(['imp: exec connection closed (agent gone)']);
+  expect(errors).toStrictEqual(['impz: exec connection closed (agent gone)']);
 });
 
 test('it exits 255 with the token hint when impd rejects the token', async () => {
@@ -626,7 +626,7 @@ test('it exits 255 with the token hint when impd rejects the token', async () =>
   expect(code).toBe(255);
 
   expect(ctx.errors as unknown).toStrictEqual([
-    expect.stringMatching(/^imp: unauthorized: set IMP_TOKEN/u) as unknown,
+    expect.stringMatching(/^impz: unauthorized: set IMP_TOKEN/u) as unknown,
   ]);
 });
 
@@ -649,7 +649,7 @@ test('it exits 255 and names the address when nothing listens there', async () =
   );
 
   expect(code).toBe(255);
-  expect(errors).toStrictEqual([`imp: cannot reach impd at ${url} (the connection failed)`]);
+  expect(errors).toStrictEqual([`impz: cannot reach impd at ${url} (the connection failed)`]);
 });
 
 test('it keeps the IMP_URL path prefix of an impd behind a proxy', async () => {
@@ -745,7 +745,7 @@ test('it exits 255 and names the failure when an output write fails other than b
   );
 
   expect(code).toBe(255);
-  expect(ctx.errors).toStrictEqual(['imp: write ENOSPC']);
+  expect(ctx.errors).toStrictEqual(['impz: write ENOSPC']);
 });
 
 // on the exec peer: real impd sends detached only after started, and every
@@ -791,7 +791,7 @@ test('it exits 255 and says the connection was lost once the window to attach ag
   expect(peer.received.map((message) => message.type)).toStrictEqual(['start', 'attach']);
 
   expect(errors).toStrictEqual([
-    'imp: detached, the connection was lost: session main (imp attach box main)',
+    'impz: detached, the connection was lost: session main (impz attach box main)',
   ]);
 });
 
@@ -987,7 +987,7 @@ test('it starts a named session and detaches on the detach key without a signal'
   expect(terminal.modes).toStrictEqual([true, false]);
   expect(ctx.output.at(-1)).toStartWith('1:');
   expect(ctx.output.at(-1)).toInclude('\u001B[>4;0m');
-  expect(ctx.errors).toStrictEqual(['imp: detached from session main (imp attach box main)']);
+  expect(ctx.errors).toStrictEqual(['impz: detached from session main (impz attach box main)']);
 });
 
 test('it detaches on the detach key in its kitty form', async () => {
@@ -1363,7 +1363,7 @@ test('it sends keys typed while it attaches again to the new session', async () 
       .map((frame) => new TextDecoder().decode(frame.payload)),
   ).toStrictEqual(['typed']);
 
-  expect(ctx.output.join('')).toInclude('imp: attached again to session main');
+  expect(ctx.output.join('')).toInclude('impz: attached again to session main');
 });
 
 test.each([['\u001D'], ['\u001B[93;5u'], ['\u001B[27;5;93~']])(
@@ -1407,7 +1407,7 @@ test.each([['\u001D'], ['\u001B[93;5u'], ['\u001B[27;5;93~']])(
     const code = await exiting;
 
     expect(code).toBe(0);
-    expect(ctx.errors).toStrictEqual(['imp: detached from session main (imp attach box main)']);
+    expect(ctx.errors).toStrictEqual(['impz: detached from session main (impz attach box main)']);
   },
 );
 
@@ -1518,7 +1518,7 @@ test('it exits 254 without attaching again once another client attached', async 
   ).toStrictEqual(['exec', 'activity']);
 
   expect(ctx.errors).toStrictEqual([
-    'imp: another client attached to session main (imp attach box main)',
+    'impz: another client attached to session main (impz attach box main)',
   ]);
 });
 
@@ -1555,7 +1555,7 @@ test('it exits 254 without attaching again when another client takes the session
   expect(agent.received).toHaveLength(1);
 
   expect(ctx.errors).toStrictEqual([
-    'imp: another client attached to session main (imp attach box main)',
+    'impz: another client attached to session main (impz attach box main)',
   ]);
 });
 
@@ -1686,7 +1686,7 @@ test('it fails with the last reason once the window to attach again is over, whi
 
   expect(code).toBe(255);
   expect(agent.received).toHaveLength(1);
-  expect(errors).toStrictEqual([`imp: cannot reach impd at ${ctx.url} (the connection failed)`]);
+  expect(errors).toStrictEqual([`impz: cannot reach impd at ${ctx.url} (the connection failed)`]);
 });
 
 test('it sends the detach key as input to a plain exec and never attaches it again', async () => {

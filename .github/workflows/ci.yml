@@ -344,7 +344,7 @@ jobs:
         run: bun run build:cli
 
       - name: Run
-        run: dist/imp-linux-x64 --version
+        run: dist/impz-linux-x64 --version
 
       # The release image compiles impd and the CLI in its own stage, with
       # its own install: build that stage too, so a dependency the stage
@@ -352,7 +352,7 @@ jobs:
       - name: Build the release compile stage
         run: docker build --target compile -f host/Dockerfile .
 
-  # Packs @zgeoff/imp-client as the release publishes it, then installs the
+  # Packs @impz/client as the release publishes it, then installs the
   # tarball into an empty project on the oldest Node it supports, and smokes
   # it against impd's app under Node, Bun and a compiled Bun binary.
   client:

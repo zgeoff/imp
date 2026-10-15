@@ -3,7 +3,7 @@ import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listLocalEntries } from '@imp/local-tar';
+import { listLocalEntries } from '@impz/local-tar';
 import { writeContextTar } from './write-context-tar';
 
 async function setupTest() {

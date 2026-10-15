@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { GrantFilterSchema, ImageSourceSchema } from '@imp/api';
+import { GrantFilterSchema, ImageSourceSchema } from '@impz/api';
 import * as z from 'zod';
 import { writeConsistentCopy } from '../db/database-copy';
 import type { ImpDatabase } from '../db/open-database';

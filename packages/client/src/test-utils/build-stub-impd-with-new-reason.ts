@@ -1,4 +1,4 @@
-import { splitLines } from '@imp/shared';
+import { splitLines } from '@impz/shared';
 import * as z from 'zod';
 
 // what this stand-in reads of an events.stream data line, as `/rpc` sends it

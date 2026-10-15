@@ -1,5 +1,5 @@
-import { MCP_PATH } from '@imp/api';
-import type { HttpTransport } from '@imp/mcp';
+import { MCP_PATH } from '@impz/api';
+import type { HttpTransport } from '@impz/mcp';
 import {
   AUTHORIZATION_SERVER_PATH,
   AUTHORIZE_PATH,

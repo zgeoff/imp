@@ -1,10 +1,10 @@
 import { faker } from '@faker-js/faker';
-import { CheckpointSchema, NameSchema } from '@imp/api';
+import { CheckpointSchema, NameSchema } from '@impz/api';
 import { Collection } from '@msw/data';
 import * as z from 'zod';
 
 // impd's checkpoints, each of the imp it names; one without a label, as
-// `imp checkpoint` takes one
+// `impz checkpoint` takes one
 const CHECKPOINT_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 
 const CheckpointRowSchema = CheckpointSchema.extend({

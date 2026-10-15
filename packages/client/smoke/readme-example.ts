@@ -1,5 +1,5 @@
-import { ExecError, createImpClient, isDefinedError, safe } from '@zgeoff/imp-client';
-import type { Imp } from '@zgeoff/imp-client';
+import { ExecError, createImpClient, isDefinedError, safe } from '@impz/client';
+import type { Imp } from '@impz/client';
 
 // The README's examples, which scripts/release/check-client-package.sh checks
 // in a strict project against the published declarations only. It is never

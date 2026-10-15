@@ -21,14 +21,14 @@ const SCHEMA_FILE = join(import.meta.dir, 'schema.ts');
 // the API's own types for the columns that hold one of its values; a column
 // with a default keeps Generated
 const CUSTOM_IMPORTS = {
-  ApiActor: '@imp/api',
-  AuditRefusal: '@imp/api',
-  ColdBootCause: '@imp/api',
-  ImageSource: '@imp/api',
-  ImpKind: '@imp/api',
-  ImpState: '@imp/api',
-  MoveState: '@imp/api',
-  Scope: '@imp/api',
+  ApiActor: '@impz/api',
+  AuditRefusal: '@impz/api',
+  ColdBootCause: '@impz/api',
+  ImageSource: '@impz/api',
+  ImpKind: '@impz/api',
+  ImpState: '@impz/api',
+  MoveState: '@impz/api',
+  Scope: '@impz/api',
 };
 
 // AST nodes, not strings: kysely-codegen parses a string override with the

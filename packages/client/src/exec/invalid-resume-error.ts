@@ -1,4 +1,4 @@
-import type { InvalidResumeData } from '@imp/api';
+import type { InvalidResumeData } from '@impz/api';
 import { ExecError } from './exec-error';
 
 // A resume named an offset past the end of its generation: a client bug.

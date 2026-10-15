@@ -1,16 +1,16 @@
 # Reverse forwards
 
-`imp proxy --reverse` lets a program in an imp reach a unix socket or a port on your machine: an
+`impz proxy --reverse` lets a program in an imp reach a unix socket or a port on your machine: an
 agent in the imp talks to a service on your laptop, or a build in the imp reaches a database you run
 locally. It is `ssh -R` without SSH: it goes to impd with the CLI's token, and needs `exec` scope on
 the imp ([tokens](./tokens.md#scopes)). `ssh -R` works too ([SSH](./ssh.md#remote-forwards)).
 
 ```sh
-imp proxy box --reverse /tmp/app.sock:/run/user/1000/app.sock   # a socket in the imp to one here
-imp proxy box --reverse 9000:8080                               # 127.0.0.1:9000 in the imp to localhost:8080
-imp proxy box --reverse 0:8080                                  # any free port in the imp; it prints which
-imp proxy box --reverse :/run/user/1000/app.sock                # a socket path the imp's agent picks
-imp proxy box 5432 --reverse 9000:8080                          # both directions at once
+impz proxy box --reverse /tmp/app.sock:/run/user/1000/app.sock   # a socket in the imp to one here
+impz proxy box --reverse 9000:8080                               # 127.0.0.1:9000 in the imp to localhost:8080
+impz proxy box --reverse 0:8080                                  # any free port in the imp; it prints which
+impz proxy box --reverse :/run/user/1000/app.sock                # a socket path the imp's agent picks
+impz proxy box 5432 --reverse 9000:8080                          # both directions at once
 ```
 
 Each `--reverse` is `GUEST:LOCAL`, and `--reverse` repeats. Each side is an absolute socket path or
@@ -20,7 +20,7 @@ imp's agent makes under `/run/imp/forward/`. The CLI prints one line for each fo
 
 ## In the imp
 
-- The forward listens as the image's USER, the user `imp exec` runs as. A socket path must be one
+- The forward listens as the image's USER, the user `impz exec` runs as. A socket path must be one
   that user may make, in a directory that exists; impd's own `/run/imp/` is refused. A socket left
   at the path by an earlier forward is replaced; any other file there is refused.
 - A socket is mode 0600, and only the image's user and root get through. A port listens on the imp's
@@ -35,7 +35,7 @@ imp's agent makes under `/run/imp/forward/`. The CLI prints one line for each fo
 
 ## Sleep and wake
 
-- An open connection through a forward keeps the imp awake, as an `imp proxy` connection does. The
+- An open connection through a forward keeps the imp awake, as an `impz proxy` connection does. The
   forward alone does not: an imp with no traffic on it sleeps on its idle timeout.
 - A sleep ends the forward in the imp. The CLI then waits for the imp to wake, without waking it,
   and listens again at the same path or port; it prints a notice each way. A port 0 forward may get
@@ -50,7 +50,7 @@ Stop and start the imp to update it ([operations](./operations.md#upgrade)).
 
 ## From code
 
-`openReverseForward` in `@zgeoff/imp-client` opens a forward over impd's `/tunnel` socket. Its
+`openReverseForward` in `@impz/client` opens a forward over impd's `/tunnel` socket. Its
 `onConnection` gets each client in the imp, for the caller to relay where it likes; `ended` says
 `lost` when a sleep ended the forward, and the caller listens again once the imp runs. The protocol
 is in [daemon](../architecture/network/ingress.md#tunnels-and-reverse-forwards).

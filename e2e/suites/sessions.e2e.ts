@@ -12,7 +12,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { openTerminal } from '../lib/terminal';
 import { waitFor } from '../lib/wait-for';
 
-// Sessions (docs/architecture/agent.md) through `imp console` and `imp attach`
+// Sessions (docs/architecture/agent.md) through `impz console` and `impz attach`
 // on a pseudo-terminal, as a user at a terminal. Ctrl-] (\u001D) detaches.
 
 // one stack for every release, so each terminal closes before its imp goes
@@ -37,7 +37,7 @@ test('it keeps a detached console session through an idle sleep, and redraws it 
 
   await waitForExec(name);
 
-  // imp console starts a session that a detach key leaves running
+  // impz console starts a session that a detach key leaves running
   const entry = await openTerminal(['console', name]);
 
   ctx.stack.defer(() => entry.close());
@@ -54,7 +54,7 @@ test('it keeps a detached console session through an idle sleep, and redraws it 
   const started = await requireSession(name, 'main');
 
   expect(consoleCode).toBe(0);
-  expect(entry.readOutput()).toContain(`detached from session main (imp attach ${name} main)`);
+  expect(entry.readOutput()).toContain(`detached from session main (impz attach ${name} main)`);
   expect(started).toMatchObject({ state: 'running', attached: false, cols: 80, rows: 24 });
 
   // the detached idle session lets the imp sleep, and a list does not wake it
@@ -69,7 +69,7 @@ test('it keeps a detached console session through an idle sleep, and redraws it 
   expect(imp.state).toBe('sleeping');
   expect(imp.sessions).toBe(1);
 
-  // imp attach wakes the imp and shows the session, which redraws at the
+  // impz attach wakes the imp and shows the session, which redraws at the
   // new size
   const attached = await openTerminal(['attach', name], { cols: 100, rows: 30 });
 

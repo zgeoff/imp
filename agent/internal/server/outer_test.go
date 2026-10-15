@@ -9,13 +9,13 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/zgeoff/imp/agent/internal/cgroup"
-	"github.com/zgeoff/imp/agent/internal/exec"
-	"github.com/zgeoff/imp/agent/internal/imagecfg"
-	"github.com/zgeoff/imp/agent/internal/launch"
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/session"
+	"github.com/zgeoff/impz/agent/internal/cgroup"
+	"github.com/zgeoff/impz/agent/internal/exec"
+	"github.com/zgeoff/impz/agent/internal/imagecfg"
+	"github.com/zgeoff/impz/agent/internal/launch"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/session"
 )
 
 // downRunner is an inner container that is down.

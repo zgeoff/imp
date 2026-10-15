@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { Imp } from '@imp/api';
+import type { Imp } from '@impz/api';
 
 type ImpResources = NonNullable<Imp['resources']>;
 

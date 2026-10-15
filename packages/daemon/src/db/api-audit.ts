@@ -1,4 +1,4 @@
-import type { ApiActor, ApiCall } from '@imp/api';
+import type { ApiActor, ApiCall } from '@impz/api';
 import type { Selectable } from 'kysely';
 import { toLikePattern } from '../auth/imp-patterns';
 import type { ImpDatabase } from './open-database';

@@ -13,13 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/cgroup"
-	"github.com/zgeoff/imp/agent/internal/launch"
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/pty"
-	"github.com/zgeoff/imp/agent/internal/reaper"
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/cgroup"
+	"github.com/zgeoff/impz/agent/internal/launch"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/pty"
+	"github.com/zgeoff/impz/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // drainGrace bounds how long output is forwarded after the process exits.

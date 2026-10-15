@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { EXEC_CHANNELS, encodeExecFrame } from '@imp/api';
+import { EXEC_CHANNELS, encodeExecFrame } from '@impz/api';
 import { buildStubExecSocket } from './build-stub-exec-socket';
 
 test('it records a text message parsed as JSON', () => {

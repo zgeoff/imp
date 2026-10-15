@@ -278,7 +278,7 @@ test('it sleeps and wakes a restored imp like any other', async () => {
   expect(marker).toBe('kept');
 });
 
-test('it times imp new from a template: the wall time and its spans', async () => {
+test('it times impz new from a template: the wall time and its spans', async () => {
   const ctx = await setupTest();
 
   const image = resolveImageName('e2e-ws');

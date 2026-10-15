@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
-import type { EgressPolicy, Imp, ImpKind } from '@imp/api';
+import type { EgressPolicy, Imp, ImpKind } from '@impz/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
 import type { ImageRecord } from '../db/images';
@@ -298,7 +298,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
           const totalMs = Math.round(performance.now() - received);
 
-          // the server's side of `imp new`: clone= is the time from the start
+          // the server's side of `impz new`: clone= is the time from the start
           // to the cloned disk, before the boot; size= runs inside boot=, which
           // waits on it, and the boot's own steps are on its line
           context.log(

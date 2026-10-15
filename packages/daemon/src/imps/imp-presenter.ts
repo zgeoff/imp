@@ -1,4 +1,4 @@
-import type { Imp } from '@imp/api';
+import type { Imp } from '@impz/api';
 import { findImageById, listImages } from '../db/images';
 import type { ImpRecord } from '../db/imps';
 import { listLeases } from '../db/leases';

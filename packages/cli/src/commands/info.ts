@@ -1,4 +1,4 @@
-import type { SystemInfo } from '@imp/api';
+import type { SystemInfo } from '@impz/api';
 import { defineCommand } from '../define-command';
 import { formatBootStatus, formatHttps, formatImpInfo, formatJson } from '../format-output';
 import { runAction } from '../run-action';

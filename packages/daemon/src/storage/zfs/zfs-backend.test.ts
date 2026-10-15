@@ -2,7 +2,7 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildStubMoveStream } from '../../test-utils/build-stub-move-stream';
 import { StubZfsCrashError, buildStubZfs } from '../../test-utils/build-stub-zfs';
 import { buildWatchdogSlot } from '../data-layout';
@@ -1023,7 +1023,7 @@ test('#start on an older database keeps the newer checkpoints and the disks it d
     'impd: storage: removed snapshot tank/imp/disks/a@fork-left',
     `impd: storage: kept orphan imp gone (tank/imp/disks/gone): 1.0 MiB, created ${ctx.fake.readCreatedAt('tank/imp/disks/gone').toISOString()}, snapshots: cp-g1, fork-left`,
     `impd: storage: kept orphan checkpoint cp-new (tank/imp/disks/a@cp-new): 0.1 MiB, created ${ctx.fake.readCreatedAt('tank/imp/disks/a@cp-new').toISOString()}, snapshots: none`,
-    'impd: storage: kept 2 orphans the database does not name; `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire',
+    'impd: storage: kept 2 orphans the database does not name; `impz gc --orphans --dry-run` lists what `impz gc --orphans` would retire',
   ]);
 });
 
@@ -1207,7 +1207,7 @@ test('#start after a lost database keeps every disk, image and checkpoint, and l
     `impd: storage: kept orphan image half (tank/imp/images/half): 1.0 MiB, created ${ctx.fake.readCreatedAt('tank/imp/images/half').toISOString()}, snapshots: none`,
     `impd: storage: kept orphan imp v1 (${ctx.dataDir}/imps/v1): 0.0 MiB, created <birth>, snapshots: none`,
     `impd: storage: kept orphan memory m1 (${ctx.dataDir}/mem/m1): 0.0 MiB, created <birth>, snapshots: none`,
-    'impd: storage: kept 7 orphans the database does not name; `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire',
+    'impd: storage: kept 7 orphans the database does not name; `impz gc --orphans --dry-run` lists what `impz gc --orphans` would retire',
   ]);
 });
 

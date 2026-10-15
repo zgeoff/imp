@@ -1,4 +1,4 @@
-import { NameSchema } from '@imp/api';
+import { NameSchema } from '@impz/api';
 
 // Which imps one MCP server may touch. It keeps an agent from destroying an
 // imp it was not given by mistake; the boundary is the scope of the token it

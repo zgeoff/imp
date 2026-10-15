@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { createServer } from 'node:net';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { sendLocalRequest } from './send-local-request';
 
 test('it sends the body, half-closes, and resolves with the whole reply', async () => {

@@ -69,7 +69,7 @@ export interface ImpRuntime {
   readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
 
   // as openExec, for a connection to an address inside the guest; `kind` is
-  // what it counts as while open: an SSH forward or an `imp proxy` tunnel
+  // what it counts as while open: an SSH forward or an `impz proxy` tunnel
   readonly openDial: (
     name: string,
     target: DialTarget,

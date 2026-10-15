@@ -1,5 +1,5 @@
-import type { IMP_ERRORS } from '@imp/api';
-import type { ReadonlyFields } from '@imp/shared';
+import type { IMP_ERRORS } from '@impz/api';
+import type { ReadonlyFields } from '@impz/shared';
 import type * as z from 'zod';
 import { ExecError } from './exec-error';
 

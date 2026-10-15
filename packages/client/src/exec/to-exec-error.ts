@@ -3,7 +3,7 @@ import {
   IMP_ERRORS,
   InvalidResumeDataSchema,
   NoSessionDataSchema,
-} from '@imp/api';
+} from '@impz/api';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
 import { InvalidStateError } from './invalid-state-error';

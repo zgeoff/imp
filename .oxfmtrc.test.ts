@@ -14,9 +14,9 @@ test('it settles a release changelog in one oxfmt pass', () => {
     cwd,
     stdin: Buffer.from(
       '# Changelog\n\n' +
-        '## [0.29.0](https://github.com/zgeoff/imp/compare/v0.28.1...v0.29.0) (2026-10-03)\n\n' +
+        '## [0.29.0](https://github.com/zgeoff/impz/compare/v0.28.1...v0.29.0) (2026-10-03)\n\n' +
         '### ⚠ BREAKING CHANGES\n\n' +
-        '* **images:** imp image build refuses a Dockerfile with a variable ($) in FROM, ' +
+        '* **images:** impz image build refuses a Dockerfile with a variable ($) in FROM, ' +
         `such as FROM \${BASE}; write the base image literally.\n`,
     ),
   });

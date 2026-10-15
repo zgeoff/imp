@@ -1,7 +1,7 @@
 # The CLI
 
-`imp` is the command line for impd. It saves the hosts it logs in to, each with its token, and
-`--host` or `imp use` picks one. `scripts/imp` runs it from the repo.
+`impz` is the command line for impd. It saves the hosts it logs in to, each with its token, and
+`--host` or `impz use` picks one. `scripts/impz` runs it from the repo.
 
 | Command                                    | What it does                                                              |
 | ------------------------------------------ | ------------------------------------------------------------------------- |
@@ -25,7 +25,7 @@
 | `proxy <name> <port>...`                   | reach ports in the imp from this machine (`--reverse` the other way)      |
 | `cp <src> <dest>`                          | copy files and directories into or out of an imp                          |
 | `policy <name> [open\|public\|box\|none]`  | show or set what the imp may reach (`--allow` for box)                    |
-| `net create`, `ls`, `rm`, `join`, `leave`  | private networks between imps (`imp new --net`)                           |
+| `net create`, `ls`, `rm`, `join`, `leave`  | private networks between imps (`impz new --net`)                          |
 | `expose <name>`, `unexpose <name>`         | serve the imp to the internet on your domain (`--auth token\|basic`)      |
 | `image build`, `builds`, `add`, `ls`, `rm` | manage images, and list the builds that run now                           |
 | `template create`, `ls`, `rm`              | make an image from an imp's disk, to create imps from                     |
@@ -38,34 +38,34 @@
 | `completion bash\|zsh\|fish`               | print the shell completion script                                         |
 
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
-`imp new` and `imp set` take `--cpu-limit` and `--cpu-weight` ([CPU limits](./cpu-limits.md)).
+`impz new` and `impz set` take `--cpu-limit` and `--cpu-weight` ([CPU limits](./cpu-limits.md)).
 `--max-memory` (up to 4 × `--memory`) lets the guest grow under memory pressure and shrink when idle
-([elastic memory](../architecture/lifecycle/elastic-memory.md)). `imp new --no-backup` keeps the
+([elastic memory](../architecture/lifecycle/elastic-memory.md)). `impz new --no-backup` keeps the
 imp's disk and checkpoints out of every backup ([backups](./backups.md)).
 [Connectors](./connectors.md) covers secrets and grants; [tokens](./tokens.md) covers scopes and
 tailnet identity. Commands that print imps, images, checkpoints or `info` take `--json`.
-`scripts/imp` runs the CLI from the repo.
+`scripts/impz` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build --on-host` path, an `IMP_URL` that is not an http URL, an unknown
-`--host`). `imp exec` and `imp console` exit with the command's own code, or 128 + n when signal n
+`--host`). `impz exec` and `impz console` exit with the command's own code, or 128 + n when signal n
 ended it, and set these codes themselves:
 
-| Code | When                                                                                 |
-| ---- | ------------------------------------------------------------------------------------ |
-| 2    | a usage error, such as no command after `--`                                         |
-| 127  | the command could not start (`EXEC_FAILED`)                                          |
-| 141  | the CLI's own output closed, as in `imp exec box -- cat big \| head`                 |
-| 254  | another terminal attached to the session and took it over                            |
-| 255  | imp failed: impd unreachable, a rejected token, an unknown imp, a dropped connection |
+| Code | When                                                                                  |
+| ---- | ------------------------------------------------------------------------------------- |
+| 2    | a usage error, such as no command after `--`                                          |
+| 127  | the command could not start (`EXEC_FAILED`)                                           |
+| 141  | the CLI's own output closed, as in `impz exec box -- cat big \| head`                 |
+| 254  | another terminal attached to the session and took it over                             |
+| 255  | impz failed: impd unreachable, a rejected token, an unknown imp, a dropped connection |
 
-`imp console box` starts the session `main`, or attaches to it if it runs (`--session <name>` names
+`impz console box` starts the session `main`, or attaches to it if it runs (`--session <name>` names
 another, `--no-session` gives a shell that ends with the terminal). Without a terminal on stdin, as
 in a script, it runs without a session unless `--session` names one. Ctrl-] detaches
 (`--detach-key ctrl-<key>` or `none`; Escape, Backspace, Tab, Enter and Return cannot be the key),
 and closing the terminal does too: the shell keeps running in the imp, and through a sleep.
-`imp sessions box` lists the sessions without waking the imp, `imp attach box [main]` shows the
-session's recent output and goes on live from any machine, and `imp sessions kill box main` ends
+`impz sessions box` lists the sessions without waking the imp, `impz attach box [main]` shows the
+session's recent output and goes on live from any machine, and `impz sessions kill box main` ends
 one. One terminal is attached at a time: a new attach takes the session over. When impd restarts,
 the imp sleeps, or the connection drops under an attached terminal, the CLI attaches again by itself
 for up to 60 s, waiting 1 s, then 2 s, then 4 s and at most 8 s between tries. Meanwhile the detach

@@ -92,7 +92,7 @@ bash deploy/upgrade.sh
 4. It enables and restarts `imp-docker-proxy`, then restarts the host (with compose, `up -d` of both
    services, or of imp-host alone when the file has no proxy). It waits for `/health` to report
    ready, prints how to roll back (`docker tag` the old image ID, then
-   `systemctl restart imp-docker-proxy imp-host`), prints the boot status counts from `imp info`,
+   `systemctl restart imp-docker-proxy imp-host`), prints the boot status counts from `impz info`,
    and lists the imps.
 
 Imps then wake on demand. Each sleeping imp either restores its memory or boots its disk cold. The
@@ -108,13 +108,13 @@ rule:
 An outdated kernel or agent alone never causes a cold boot: the snapshot still loads. The imp picks
 up the new part only at its next stop and start; a sleep and a wake does not clear it.
 
-`imp info` counts both kinds on its `boot status` line, over running and sleeping imps, for example
+`impz info` counts both kinds on its `boot status` line, over running and sleeping imps, for example
 `3 will boot cold; outdated: 2 agent`. A sleeping imp counts as a cold boot when its snapshot cannot
 load or is gone. A running imp counts when it runs an older Firecracker or an older impd booted it:
-its next sleep writes a snapshot the host cannot load. `imp info --json` has the same numbers under
+its next sleep writes a snapshot the host cannot load. `impz info --json` has the same numbers under
 `bootStatus`.
 
-`imp ls` says what an upgrade means for each imp in its NOTE column:
+`impz ls` says what an upgrade means for each imp in its NOTE column:
 
 | NOTE                                                | Meaning                                                                                         |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -123,19 +123,19 @@ its next sleep writes a snapshot the host cannot load. `imp info --json` has the
 | `outdated: agent`                                   | The imp runs an older agent, kernel or Firecracker than the host has now.                       |
 | `booted by an older impd; its next wake boots cold` | An awake imp whose VM an impd from before this scheme booted. Its snapshot cannot name a drive. |
 
-To pick up the new agent or kernel in an outdated imp, run `imp stop <name>` and `imp start <name>`.
-It loses its memory, not its disk. impd deletes the old drive on its next start, once no imp uses
-it.
+To pick up the new agent or kernel in an outdated imp, run `impz stop <name>` and
+`impz start <name>`. It loses its memory, not its disk. impd deletes the old drive on its next
+start, once no imp uses it.
 
 An imp still on an agent from before protocol `0.8.0` (release v0.7.0 or older) cannot kill the rest
-of a stopped command's process group. When `imp mcp` stops such a command on a timeout or a cancel,
+of a stopped command's process group. When `impz mcp` stops such a command on a timeout or a cancel,
 a child that ignores SIGTERM (a `nohup` job, say) keeps running until the imp restarts. An agent
 from before `0.11.0` kills only the process group, so a child that left it with `setsid` lives on
 ([MCP](./mcp.md)).
 
 An impd from before this scheme kept the drive at `/var/lib/imp/system/imp-system.squashfs`, and a
 VM it booted still runs from that file. impd leaves the file alone. Remove it once no such VM runs:
-`imp ls` shows none with `booted by an older impd`.
+`impz ls` shows none with `booted by an older impd`.
 
 **Roll back** with `docker tag <old image ID> <image>` and the same restart. A rollback to an impd
 from before this upgrade scheme (the first release with `system/drives/`) does not match the hashes
@@ -156,15 +156,15 @@ start. Put a new key in `/etc/imp/imp-host.env` first
 
 ## The RAM budget
 
-impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. `imp info` shows the budget, the
+impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. `impz info` shows the budget, the
 measured use, the committed memory of awake imps, and the imp counts.
 
 - When a boot or a wake would go over, impd sleeps the least recently active imps first.
 - An imp with an open session, a request in flight or a hold is never picked.
 - When nothing can make room, the request fails with `RAM_BUDGET_EXCEEDED`. Free room with
-  `imp sleep` or `imp stop`, or raise the budget.
+  `impz sleep` or `impz stop`, or raise the budget.
 
-To keep an imp awake on purpose, hold it: `imp hold box 2h`. `imp hold box 0` releases it.
+To keep an imp awake on purpose, hold it: `impz hold box 2h`. `impz hold box 0` releases it.
 
 ## Disk space and silent agents
 
@@ -173,7 +173,7 @@ would cut into `IMP_DISK_RESERVE_GIB`; the imp stays awake. Admission fails with
 when the disk kept impd from sleeping an imp to make RAM room. Free disk on the data volume to clear
 it.
 
-An agent that stops answering for `IMP_WATCHDOG_TIMEOUT_S` shows `agent silent since …` in `imp ls`
+An agent that stops answering for `IMP_WATCHDOG_TIMEOUT_S` shows `agent silent since …` in `impz ls`
 and the dashboard, and impd logs it. Set `IMP_WATCHDOG_ACTION=restart` to boot such an imp cold, or
 `snapshot` to keep its memory in `<imp>/watchdog/` first. Backups skip that folder.
 
@@ -182,37 +182,37 @@ and the dashboard, and impd logs it. Set `IMP_WATCHDOG_ACTION=restart` to boot s
 With `IMP_BACKUP_REPOSITORY` set, impd backs up every imp to a restic repository on a schedule
 ([backups](../architecture/storage/backups.md), [settings](./configuration.md#backups)).
 
-- `imp backup ls` shows the restore points and the last prune and check.
-- `impd: backup: CHECK FAILED` in the log, or `FAILED` in `imp backup ls`, means the repository may
-  be damaged: run `imp backup check --subset 100%`, then repair it with `restic repair`
+- `impz backup ls` shows the restore points and the last prune and check.
+- `impd: backup: CHECK FAILED` in the log, or `FAILED` in `impz backup ls`, means the repository may
+  be damaged: run `impz backup check --subset 100%`, then repair it with `restic repair`
   ([restic docs](https://restic.readthedocs.io/en/stable/077_troubleshooting.html)) from a machine
   with the password.
-- `imp backup restore <name> --as <new>` restores next to the original; restored imps are stopped.
+- `impz backup restore <name> --as <new>` restores next to the original; restored imps are stopped.
 
 ## Storage cleanup
 
 impd removes what a crash leaves at start and every hour
-([cleanup](../architecture/storage/disk-space.md#the-sweep)). `imp gc` runs the same sweep now.
+([cleanup](../architecture/storage/disk-space.md#the-sweep)). `impz gc` runs the same sweep now.
 
-- `imp gc --dry-run` lists what would go, and removes nothing.
+- `impz gc --dry-run` lists what would go, and removes nothing.
 - A disk, image, checkpoint or memory snapshot that no row names is an orphan. impd keeps it, with
   its snapshots, and logs `impd: storage: kept orphan …` at start and `impd: gc: kept orphan …` on
   the hourly pass when the set changed: its dataset, snapshot or directory, size, creation time and
-  snapshots. `imp gc` lists them under `kept`.
+  snapshots. `impz gc` lists them under `kept`.
 - Orphans come from a create or a checkpoint that crashed before its row, or from a lost or replaced
   database. After a database restore, check the list before you remove anything: each orphan may be
   an imp.
-- `imp gc` also lists, as kind `secrets`, each directory of secret values that impd kept aside at
+- `impz gc` also lists, as kind `secrets`, each directory of secret values that impd kept aside at
   start, with how many files it holds ([value files](./connectors.md#value-files)). After a database
   restore they may hold the only copy of a value.
-- `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire.
+- `impz gc --orphans --dry-run` lists what `impz gc --orphans` would retire.
 
-**CAUTION:** `imp gc --orphans` deletes every disk, image, checkpoint and memory snapshot the
+**CAUTION:** `impz gc --orphans` deletes every disk, image, checkpoint and memory snapshot the
 database does not name. It cannot be undone. Run it with `--dry-run` first, and only when no orphan
 holds data you need.
 
-**CAUTION:** `imp gc --orphans --secret-files` also deletes every directory of secret values kept
-aside. It cannot be undone. Recover the values you need with `imp secret add` first; `--orphans`
+**CAUTION:** `impz gc --orphans --secret-files` also deletes every directory of secret values kept
+aside. It cannot be undone. Recover the values you need with `impz secret add` first; `--orphans`
 alone leaves these directories.
 
 The API is `system.gc` with `{ dryRun?, orphans?, secretFiles?, removeSecretFiles? }`. It returns
@@ -229,7 +229,7 @@ impd keeps its state in `<data>/db/imp.sqlite` (`<data>` is `IMP_DATA_DIR`), in 
 through impd instead:
 
 ```sh
-imp db copy before-upgrade
+impz db copy before-upgrade
 ```
 
 - It writes `<data>/db-copies/before-upgrade.sqlite` on the impd host with `VACUUM INTO`, in one
@@ -252,7 +252,7 @@ imp db copy before-upgrade
 database names. A copy older than a secret has no row for it, so the first start on that copy
 deletes the secret's value, and it cannot be recovered from the host. Copy `<data>/secrets` aside
 before you restore, and expect each secret added after the copy to be lost until you add it again
-with `imp secret add`.
+with `impz secret add`.
 
 1. Copy `<data>/secrets` aside.
 2. Stop impd with a full stop that sleeps the imps (`systemctl stop imp-host`, or
@@ -272,19 +272,19 @@ What the restored database means at start:
   `the database is at migration <copy's>, newer than this impd's last, <impd's>`. Start the impd
   that wrote the copy, or a newer one.
 - **Storage the copy does not name** (imps, images and checkpoints made after the copy) is kept as
-  orphans, never deleted. Start logs each one as `impd: storage: kept orphan …`, and `imp gc` lists
+  orphans, never deleted. Start logs each one as `impd: storage: kept orphan …`, and `impz gc` lists
   them ([storage cleanup](#storage-cleanup)). Each may be an imp you still need. Retire them with
-  `imp gc --orphans` only after you check the list.
+  `impz gc --orphans` only after you check the list.
 - **Imps whose storage is gone** (removed after the copy) keep their rows. impd checks each imp's VM
   and memory snapshot at start, and marks one it cannot resume as stopped. Its next start fails, and
-  the imp shows `error` with the missing disk. `imp rm` removes the row.
+  the imp shows `error` with the missing disk. `impz rm` removes the row.
 - **Tokens** are as they were at the copy. A token made later no longer works. A token deleted later
   works again, so delete it once more. The SSH keys bound to tokens follow their tokens. The root
   token in `<data>/token` and the keys in `authorized_keys` are files, which a restore does not
   change.
 - **Secrets and grants** are as they were at the copy. The value of a secret added later is deleted
   at start (see the caution above). A secret deleted later is back as a row with no value: re-add it
-  with `imp secret add <name> --replace`, or delete it.
+  with `impz secret add <name> --replace`, or delete it.
 
 ## Logs
 
@@ -294,7 +294,7 @@ What the restored database means at start:
   the proxy refused, with the rule ([the Docker socket](../architecture/host.md#the-docker-socket)).
 - Each imp's serial console and Firecracker log go to `/var/lib/imp/imps/<id>/run/firecracker.log`
   in the container (`scripts/dev/dev.sh shell`).
-- A service's output goes to `/var/log/imp/<name>.log` inside the imp. `imp logs <imp> <service>`
+- A service's output goes to `/var/log/imp/<name>.log` inside the imp. `impz logs <imp> <service>`
   prints it, and `-f` follows it ([services](./services.md)).
 
 ## Checks
@@ -308,20 +308,20 @@ other checks.
 
 User code runs in a container inside the guest
 ([agent](../architecture/guest/agent.md#the-inner-container)). When it is down, or its root was
-wiped, `imp exec` fails with `INNER_DOWN` or `EXEC_FAILED`. `imp exec --agent` runs a command as
+wiped, `impz exec` fails with `INNER_DOWN` or `EXEC_FAILED`. `impz exec --agent` runs a command as
 root in the agent's own world instead, with busybox, while the container is down too. It needs a
 token with host-wide `manage` scope.
 
 ```sh
-imp exec --agent box -- cat /sys/fs/cgroup/user/cgroup.events   # is anything left inside?
-imp exec --agent box -- ls -A /user                              # the user disk
-imp exec --agent box -- dmesg
-imp exec --agent -t box -- sh                                    # a shell
+impz exec --agent box -- cat /sys/fs/cgroup/user/cgroup.events   # is anything left inside?
+impz exec --agent box -- ls -A /user                              # the user disk
+impz exec --agent box -- dmesg
+impz exec --agent -t box -- sh                                    # a shell
 ```
 
 The user disk is at `/user`. A shell there follows the symlinks it finds, and those are the user's:
 `cp x /user/link`, where `link` points at `/run`, writes into the agent's world, not the disk. Read
-the disk with care, and copy files in and out with `imp cp`, which resolves paths inside the
+the disk with care, and copy files in and out with `impz cp`, which resolves paths inside the
 container. Each command shares 32 MiB of memory with the other outer execs. An imp whose agent
 predates protocol `0.16.0` refuses it with `AGENT_OUTDATED`: stop and start the imp to update its
 agent.
@@ -371,17 +371,17 @@ To recover:
    impd still cleared the holds of the earlier boot, so go on to step 5, then recover from the new
    oops from step 1.
 
-5. Start each imp that the oops held: `imp start <name>`. impd cleared its hold at start, when it
+5. Start each imp that the oops held: `impz start <name>`. impd cleared its hold at start, when it
    read the flag clear or a new boot id, and logged
    `impd: <name>: the host rebooted since a kernel oops held its disk`. The imp boots cold from its
    disk.
 
 ## Troubleshooting
 
-| Symptom                                   | Cause and fix                                                                                                            |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `unauthorized` from the CLI               | Log in again: `imp login <url> --name <host>` with the token from `<IMP_DATA_DIR>/token` (`scripts/dev/dev.sh token`).   |
-| A wake logs `cold boot instead of a wake` | The snapshot cannot load on this host; the log and `imp ls` say why. Expected after some upgrades ([upgrade](#upgrade)). |
-| An imp never sleeps                       | Something keeps it active: an open connection in the guest, CPU above `IMP_IDLE_CPU_PERCENT`, or a hold.                 |
-| TLS downloads stall in a guest            | The uplink MTU is smaller than 1500. `dev.sh` sets `IMP_UPLINK_MTU`; set it by hand elsewhere.                           |
-| The tailnet node is `imp-1`               | An old node holds the name. The [Tailscale guide](./tailscale.md#state-and-ephemeral-keys) covers it.                    |
+| Symptom                                   | Cause and fix                                                                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `unauthorized` from the CLI               | Log in again: `impz login <url> --name <host>` with the token from `<IMP_DATA_DIR>/token` (`scripts/dev/dev.sh token`).   |
+| A wake logs `cold boot instead of a wake` | The snapshot cannot load on this host; the log and `impz ls` say why. Expected after some upgrades ([upgrade](#upgrade)). |
+| An imp never sleeps                       | Something keeps it active: an open connection in the guest, CPU above `IMP_IDLE_CPU_PERCENT`, or a hold.                  |
+| TLS downloads stall in a guest            | The uplink MTU is smaller than 1500. `dev.sh` sets `IMP_UPLINK_MTU`; set it by hand elsewhere.                            |
+| The tailnet node is `imp-1`               | An old node holds the name. The [Tailscale guide](./tailscale.md#state-and-ephemeral-keys) covers it.                     |

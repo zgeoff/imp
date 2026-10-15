@@ -9,10 +9,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/disk"
-	"github.com/zgeoff/imp/agent/internal/inner"
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/disk"
+	"github.com/zgeoff/impz/agent/internal/inner"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // defaultFreezeTimeout auto-thaws / if the host never sends thaw, so a host

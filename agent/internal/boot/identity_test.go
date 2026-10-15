@@ -9,7 +9,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
 )
 
 func TestNewMachineIDIsAFreshVersion4UUIDInHexEachCall(t *testing.T) {

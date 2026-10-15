@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { EVENT_VERSION } from '@imp/api';
-import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
-import { invariant } from '@imp/test-utils/invariant';
-import { spanExporter } from '@imp/test-utils/register-tracing';
+import { EVENT_VERSION } from '@impz/api';
+import { buildMockImp } from '@impz/api/test-utils/build-mock-imp';
+import { invariant } from '@impz/test-utils/invariant';
+import { spanExporter } from '@impz/test-utils/register-tracing';
 import { createEventBus } from '../events/event-bus';
 import type { ResourceDelta } from '../imps/resource-sampler';
 import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';

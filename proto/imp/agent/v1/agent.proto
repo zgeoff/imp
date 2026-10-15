@@ -21,7 +21,7 @@ syntax = "proto3";
 
 package imp.agent.v1;
 
-option go_package = "github.com/zgeoff/imp/agent/internal/proto;proto";
+option go_package = "github.com/zgeoff/impz/agent/internal/proto;proto";
 
 // The REQUEST frame: the first frame on every connection. Each op reads its
 // own fields and leaves the rest unset.

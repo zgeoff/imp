@@ -5,9 +5,9 @@ import {
   TUNNEL_CLOSE_PROTOCOL,
   TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_WINDOW_BYTES,
-} from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+} from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { DialStream } from '../agent-client/dial-stream';

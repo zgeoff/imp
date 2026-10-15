@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { startStubEchoExecAgent } from '../test-utils/start-stub-echo-exec-agent';
 import { openAttachStream, openExecStream, openTapStream } from './exec-stream';

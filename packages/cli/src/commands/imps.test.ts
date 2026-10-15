@@ -2,14 +2,14 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createImage } from '@imp/daemon/src/db/images';
-import { createImp, findImpByName, updateImpMove } from '@imp/daemon/src/db/imps';
-import { buildImagePaths, buildImpPaths } from '@imp/daemon/src/storage/data-layout';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildMockNewImp } from '@imp/daemon/src/test-utils/build-mock-new-imp';
-import { startStubInnerAgent } from '@imp/daemon/src/test-utils/start-stub-inner-agent';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { createImage } from '@impz/daemon/src/db/images';
+import { createImp, findImpByName, updateImpMove } from '@impz/daemon/src/db/imps';
+import { buildImagePaths, buildImpPaths } from '@impz/daemon/src/storage/data-layout';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildMockNewImp } from '@impz/daemon/src/test-utils/build-mock-new-imp';
+import { startStubInnerAgent } from '@impz/daemon/src/test-utils/start-stub-inner-agent';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { writeHostConfig } from '../host-store';
 import { buildStubTimeouts } from '../test-utils/build-stub-timeouts';
 import { runCli } from '../test-utils/start-cli';
@@ -66,7 +66,7 @@ test('#new refuses a size that is not a whole positive number', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: not a size: 1.5g (try 512m, 2g, 1t, or MiB as a whole number)\n',
+    stderr: 'impz: not a size: 1.5g (try 512m, 2g, 1t, or MiB as a whole number)\n',
     code: 2,
   });
 });
@@ -76,7 +76,7 @@ test('#new refuses an IMP_URL that is not an http URL', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: IMP_URL is not an http(s) URL: localhost:7070\n',
+    stderr: 'impz: IMP_URL is not an http(s) URL: localhost:7070\n',
     code: 2,
   });
 });
@@ -90,7 +90,7 @@ test('#new refuses --auth without --public before any call to impd', async () =>
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --auth and --user need --public\n',
+    stderr: 'impz: --auth and --user need --public\n',
     code: 2,
   });
 });
@@ -120,7 +120,7 @@ test('#new refuses --public for a token limited to some imps, and creates nothin
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --public needs a token with manage scope on the host; this one is limited\n',
+    stderr: 'impz: --public needs a token with manage scope on the host; this one is limited\n',
     code: 1,
   });
 
@@ -173,7 +173,7 @@ test('#new refuses --no-backup on an impd from before the setting, and creates n
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: this impd has no backup opt-out and would back the imp up anyway; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+      'impz: this impd has no backup opt-out and would back the imp up anyway; nothing was changed. Upgrade impd, or use an older imp CLI\n',
     code: 1,
   });
 
@@ -188,7 +188,7 @@ test('#console refuses a detach key that is not ctrl-<key>', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: String.raw`imp: --detach-key takes ctrl-<key> (a-z but h, i, j and m; @, \, ], ^ or _) or none, got esc
+    stderr: String.raw`impz: --detach-key takes ctrl-<key> (a-z but h, i, j and m; @, \, ], ^ or _) or none, got esc
 `,
     code: 2,
   });
@@ -200,7 +200,7 @@ test('#console refuses an empty session name', async () => {
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
-  expect(result).toStrictEqual({ stdout: '', stderr: 'imp: a session needs a name\n', code: 2 });
+  expect(result).toStrictEqual({ stdout: '', stderr: 'impz: a session needs a name\n', code: 2 });
 });
 
 test.each([
@@ -218,11 +218,11 @@ test.each([
 test.each([
   [
     ['exec', 'box', '--require', 'network', '--', 'true'],
-    'imp: --require takes broker; not network\n',
+    'impz: --require takes broker; not network\n',
   ],
   [
     ['exec', 'box', '--agent', '--require', 'broker', '--', 'true'],
-    'imp: --require does not go with --agent: an exec in the agent gets no broker\n',
+    'impz: --require does not go with --agent: an exec in the agent gets no broker\n',
   ],
 ])('#exec refuses %p before any call to impd', async (args, stderr) => {
   const ctx = await setupTest();
@@ -252,7 +252,7 @@ test('#exec runs nothing for --require on an impd older than 0.30.0, without exe
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: this impd is older than 0.30.0 and would run the command without checking --require; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+      'impz: this impd is older than 0.30.0 and would run the command without checking --require; nothing was changed. Upgrade impd, or use an older imp CLI\n',
     code: 1,
   });
 
@@ -268,7 +268,7 @@ test('#console refuses --log without a session before any call to impd', async (
     env: { ...ctx.home, IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'imps-token' },
   });
 
-  expect(result).toStrictEqual({ stdout: '', stderr: 'imp: --log needs a session\n', code: 2 });
+  expect(result).toStrictEqual({ stdout: '', stderr: 'impz: --log needs a session\n', code: 2 });
 });
 
 test('#console makes no call past the feature check for --log on an impd from before session logs', async () => {
@@ -285,7 +285,7 @@ test('#console makes no call past the feature check for --log on an impd from be
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: this impd has no session logs and would start the session without a log; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+      'impz: this impd has no session logs and would start the session without a log; nothing was changed. Upgrade impd, or use an older imp CLI\n',
     code: 1,
   });
 
@@ -343,7 +343,7 @@ test('#ls lists every saved host and exits 3 when one of them fails', async () =
   ]);
 
   expect(rows[1]).toEndWith('  sending');
-  expect(listed.stderr).toMatch(/^imp: gone: [^\n]+\n$/u);
+  expect(listed.stderr).toMatch(/^impz: gone: [^\n]+\n$/u);
   expect(listed.code).toBe(3);
 });
 
@@ -410,7 +410,7 @@ test('#listAllImps gives up on a host that never answers once its timer runs out
 
   expect(timeouts.timers.map((timer) => timer.ms)).toStrictEqual([5000, 5000]);
   expect(silent.requests).toStrictEqual(['/rpc/imps/list']);
-  expect(printError).toHaveBeenCalledExactlyOnceWith('imp: silent: no answer in 5 s');
+  expect(printError).toHaveBeenCalledExactlyOnceWith('impz: silent: no answer in 5 s');
   expect(code).toBe(3);
 });
 
@@ -523,8 +523,8 @@ test('#ls writes an empty JSON list and exits 1 when no host answers --all --jso
   const failed: unknown = listed.stderr.trimEnd().split('\n');
 
   expect(failed).toStrictEqual([
-    expect.stringMatching(/^imp: away: /u) as unknown,
-    expect.stringMatching(/^imp: gone: /u) as unknown,
+    expect.stringMatching(/^impz: away: /u) as unknown,
+    expect.stringMatching(/^impz: gone: /u) as unknown,
   ]);
 
   expect(listed.code).toBe(1);
@@ -625,7 +625,7 @@ test('#ls refuses --all with --host', async () => {
 
   expect(listed).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --all lists every saved host; drop --host\n',
+    stderr: 'impz: --all lists every saved host; drop --host\n',
     code: 2,
   });
 });
@@ -643,7 +643,7 @@ test('#new refuses --place with --host', async () => {
 
   expect(placed).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --place picks among the saved hosts; drop --host\n',
+    stderr: 'impz: --place picks among the saved hosts; drop --host\n',
     code: 2,
   });
 });
@@ -852,10 +852,10 @@ test('#new skips a host without the image and moves past a RAM refusal under --p
 
   expect(placed.stderr).toBe(
     [
-      'imp: bare: skipped: it has no image base',
-      'imp: placing on big',
-      'imp: big: not enough RAM: 17024 of 16384 MiB in use, 1024 MiB requested, and no idle imp left to sleep; trying the next host',
-      'imp: placing on small',
+      'impz: bare: skipped: it has no image base',
+      'impz: placing on big',
+      'impz: big: not enough RAM: 17024 of 16384 MiB in use, 1024 MiB requested, and no idle imp left to sleep; trying the next host',
+      'impz: placing on small',
       '',
     ].join('\n'),
   );
@@ -905,8 +905,8 @@ test('#new places on a reachable host under --place when another saved host does
   expect({ ...placed, stdout: JSON.parse(placed.stdout) as unknown }).toStrictEqual({
     stdout: sent,
     stderr: [
-      'imp: gone: skipped: Unable to connect. Is the computer able to access the url?',
-      'imp: placing on box',
+      'impz: gone: skipped: Unable to connect. Is the computer able to access the url?',
+      'impz: placing on box',
       '',
     ].join('\n'),
     code: 0,
@@ -938,7 +938,7 @@ test('#new refuses --place when no saved host can take the imp', async () => {
 
   expect(placed).toStrictEqual({
     stdout: '',
-    stderr: 'imp: bare: skipped: it has no image base\nimp: no saved host can take the imp\n',
+    stderr: 'impz: bare: skipped: it has no image base\nimpz: no saved host can take the imp\n',
     code: 1,
   });
 
@@ -978,7 +978,7 @@ test('#new refuses --place for a name a saved host has already', async () => {
 
   expect(placed).toStrictEqual({
     stdout: '',
-    stderr: 'imp: dev exists on laptop already; pick another name\n',
+    stderr: 'impz: dev exists on laptop already; pick another name\n',
     code: 1,
   });
 
@@ -1044,8 +1044,8 @@ test('#new passes over a host whose token is limited, then exposes, under --plac
 
   expect(placed.stderr).toBe(
     [
-      'imp: big: skipped: its token is limited to some imps, which --public and --net need it not to be',
-      'imp: placing on small',
+      'impz: big: skipped: its token is limited to some imps, which --public and --net need it not to be',
+      'impz: placing on small',
       '',
     ].join('\n'),
   );
@@ -1105,7 +1105,7 @@ test('#new names the host of a failure after a placed create, and still writes t
   );
 
   expect(placed.stderr).toBe(
-    'imp: placing on box\nimp: dev was created on box; PRECONDITION_FAILED: public imps need IMP_DOMAIN and IMP_PUBLIC_IP on the host\n',
+    'impz: placing on box\nimpz: dev was created on box; PRECONDITION_FAILED: public imps need IMP_DOMAIN and IMP_PUBLIC_IP on the host\n',
   );
 
   expect(body).toStrictEqual(sent);

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // Status is the outcome of a reaped child.

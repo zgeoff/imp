@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { AgentError } from '../agent-client/agent-connection';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { setSnapshotLoading, writeSnapshotMeta } from '../sleep/snapshot-meta';

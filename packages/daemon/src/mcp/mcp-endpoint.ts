@@ -1,7 +1,7 @@
-import { createHttpTransport, createPatternGuard } from '@imp/mcp';
-import type { HttpTransport } from '@imp/mcp';
-import { createImpClient } from '@zgeoff/imp-client';
-import type { ExecSocket } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
+import type { ExecSocket } from '@impz/client';
+import { createHttpTransport, createPatternGuard } from '@impz/mcp';
+import type { HttpTransport } from '@impz/mcp';
 import packageJson from '../../package.json' with { type: 'json' };
 import { isSameOrigin } from '../auth/authenticate';
 import type { Caller } from '../auth/caller';
@@ -26,7 +26,7 @@ export interface McpEndpointDeps {
   readonly challenge?: string;
 }
 
-// impd's own MCP endpoint (docs/guides/mcp.md#http): the tools of `imp mcp`,
+// impd's own MCP endpoint (docs/guides/mcp.md#http): the tools of `impz mcp`,
 // each call made as the request's caller, so its token's scope and imp
 // patterns limit the agent exactly as they limit the API
 export function createMcpEndpoint(deps: Readonly<McpEndpointDeps>): HttpTransport {

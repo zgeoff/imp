@@ -37,7 +37,7 @@ export function parseRpcAnswer(ok: boolean, raw: unknown): RpcAnswer {
   return { ok, body: z.object({ json: z.unknown() }).parse(raw).json };
 }
 
-// `imp ls --all` and `imp ls --all --json`, cut to the rows that name `name`
+// `impz ls --all` and `impz ls --all --json`, cut to the rows that name `name`
 export function parseHostListing(table: string, json: string, name: string): HostListing {
   const rows = table
     .trimEnd()

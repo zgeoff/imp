@@ -1,4 +1,4 @@
-import type { ExposeResult, PublicAuth } from '@imp/api';
+import type { ExposeResult, PublicAuth } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildMovingError, buildNotFoundError } from '../api-errors';
 import { findImpByName, updateImpExposure } from '../db/imps';

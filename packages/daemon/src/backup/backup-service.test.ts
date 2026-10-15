@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
 import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';

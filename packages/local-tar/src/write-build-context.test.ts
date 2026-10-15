@@ -3,7 +3,7 @@ import { mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { $ } from 'bun';
 import { buildStubTar } from './test-utils/build-stub-tar';
 import { parseTarEntries } from './test-utils/parse-tar-entries';

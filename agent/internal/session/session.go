@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/pty"
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/pty"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // historyLimit is the least output a session keeps for a replay. A session

@@ -1,6 +1,6 @@
+import type { Imp } from '@impz/client';
 import { useMutation } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import type { Imp } from '@zgeoff/imp-client';
 import { useState } from 'react';
 import type { Impd } from '../lib/impd';
 import { useImpd } from '../lib/impd';

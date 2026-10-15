@@ -146,7 +146,7 @@ test('it sleeps an idle imp by itself, wakes it intact on a request, and keeps i
 
   await checkMemoryProof(proof);
 
-  // imp sleep and imp wake keep memory, and the guest clock catches up
+  // impz sleep and impz wake keep memory, and the guest clock catches up
   await runImp('sleep', name);
 
   const slept = await readState(name);

@@ -2,11 +2,11 @@
 
 impz runs on one Linux machine, in one host container, in one of two ways:
 
-- **The release image** for a server: impd, the `imp` CLI, the guest kernel and the system drive are
-  baked in, and nothing from the repo is mounted. [Bootstrap a server](#bootstrap-a-server) sets up
-  a fresh server with one command; [run the release image](#run-the-release-image) covers the steps
-  by hand.
-- **The dev instance** for working on imp: `scripts/dev/dev.sh` builds the host container and runs
+- **The release image** for a server: impd, the `impz` CLI, the guest kernel and the system drive
+  are baked in, and nothing from the repo is mounted. [Bootstrap a server](#bootstrap-a-server) sets
+  up a fresh server with one command; [run the release image](#run-the-release-image) covers the
+  steps by hand.
+- **The dev instance** for working on impz: `scripts/dev/dev.sh` builds the host container and runs
   impd from the repo. The [set up](#set-up) steps below cover it.
 
 ## Needs
@@ -30,7 +30,7 @@ impz runs on one Linux machine, in one host container, in one of two ways:
 1. Clone the repo and install the dependencies:
 
    ```sh
-   git clone https://github.com/zgeoff/imp && cd imp
+   git clone https://github.com/zgeoff/impz && cd impz
    bun install
    ```
 
@@ -58,7 +58,7 @@ impz runs on one Linux machine, in one host container, in one of two ways:
 5. Give the CLI the token:
 
    ```sh
-   scripts/dev/dev.sh token | scripts/imp login http://localhost:7070 --name dev
+   scripts/dev/dev.sh token | scripts/impz login http://localhost:7070 --name dev
    ```
 
    Or `export IMP_TOKEN=$(scripts/dev/dev.sh token)` in each shell.
@@ -66,12 +66,12 @@ impz runs on one Linux machine, in one host container, in one of two ways:
 6. Check it:
 
    ```sh
-   imp info
-   imp new box && imp exec box -- uname -a
+   impz info
+   impz new box && impz exec box -- uname -a
    ```
 
-**NOTE:** The guides write `imp` for the CLI. From the repo, `scripts/imp` runs it; link it onto
-your `PATH` as `imp`, or use `scripts/imp` in its place.
+**NOTE:** The guides write `impz` for the CLI. From the repo, `scripts/impz` runs it; link it onto
+your `PATH` as `impz`, or use `scripts/impz` in its place.
 
 [Configuration](./configuration.md) lists every variable, and [operations](./operations.md) covers
 restarts and day-to-day care.
@@ -112,7 +112,7 @@ to the server and run it as root. Take it from a release tag: it runs the image 
 <!-- x-release-please-start-version -->
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/zgeoff/imp/v1.6.0/deploy/bootstrap.sh
+curl -fsSLO https://raw.githubusercontent.com/zgeoff/impz/v1.6.0/deploy/bootstrap.sh
 install -m 0600 /dev/null /root/ts-key && vi /root/ts-key        # the auth key, one line
 bash bootstrap.sh --dry-run --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
 bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
@@ -170,7 +170,7 @@ The phases run in order:
   orders it after `zfs.target`.
 - **tailscale:** With a key in the env file, waits for the node to be `Running`, then blanks the key
   ([the Tailscale key](#the-tailscale-key)).
-- **health:** Waits for `imp info`, checks that `imp-host` publishes ports on `127.0.0.1` only, and
+- **health:** Waits for `impz info`, checks that `imp-host` publishes ports on `127.0.0.1` only, and
   that a joined tailnet node is `Running`. With IPv6 on, it checks that the container has an IPv6
   default route and that impd logged IPv6 on. Then it creates, runs `uname -a` in, and destroys an
   imp from `ubuntu`, with 512 MiB. `--skip-health` skips it.
@@ -368,12 +368,12 @@ Nothing has run on a real OVH or Vultr server yet.
 
 ## The CLI on another machine
 
-The `imp` CLI is one binary with no runtime to install, for Linux and macOS on arm64 and x64. Each
+The `impz` CLI is one binary with no runtime to install, for Linux and macOS on arm64 and x64. Each
 release attaches it to the GitHub release.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh  # into ~/.local/bin
-brew install zgeoff/tap/imp                                                  # with completions
+curl -fsSL https://raw.githubusercontent.com/zgeoff/impz/main/install.sh | sh  # into ~/.local/bin
+brew install zgeoff/tap/impz                                                 # with completions
 ```
 
 `install.sh` checks the binary against the release's `SHA256SUMS` before it installs it, and checks
@@ -384,14 +384,14 @@ macOS quarantines a binary downloaded with a browser, and Gatekeeper then refuse
 the flag once (Homebrew and `install.sh` use curl, which sets no quarantine flag):
 
 ```sh
-xattr -d com.apple.quarantine ./imp-darwin-arm64
+xattr -d com.apple.quarantine ./impz-darwin-arm64
 ```
 
 Then point it at an impd and its token (impd writes the token to `<IMP_DATA_DIR>/token`):
 
 ```sh
-imp login https://imp.example.ts.net
-imp ls
+impz login https://imp.example.ts.net
+impz ls
 ```
 
 [Configuration](./configuration.md#cli) covers saved hosts, `--host` and shell completions.
@@ -399,28 +399,28 @@ imp ls
 ## Run the release image
 
 The release image runs the compiled impd from `/usr/local/bin/impd` with the kernel and the system
-drive from `/usr/local/share/imp`. `imp info` shows the kernel version and the sha256 of both.
+drive from `/usr/local/share/imp`. `impz info` shows the kernel version and the sha256 of both.
 
 ### Get it
 
 Each release pushes the image to `ghcr.io/zgeoff/imp-host`, tagged with its version and `latest`,
-for linux/amd64 only. The GitHub release has the CLI for Linux and macOS (`imp-linux-x64`,
-`imp-linux-arm64`, `imp-darwin-x64`, `imp-darwin-arm64`), the guest kernel `vmlinux` and the system
-drive `imp-system.squashfs`, both x86_64 and the same bytes as in the image, and `SHA256SUMS` over
-all of them. Check an asset or the image against them:
+for linux/amd64 only. The GitHub release has the CLI for Linux and macOS (`impz-linux-x64`,
+`impz-linux-arm64`, `impz-darwin-x64`, `impz-darwin-arm64`), the guest kernel `vmlinux` and the
+system drive `imp-system.squashfs`, both x86_64 and the same bytes as in the image, and `SHA256SUMS`
+over all of them. Check an asset or the image against them:
 
 ```sh
 sha256sum -c SHA256SUMS
-gh attestation verify imp-linux-x64 -R zgeoff/imp
-gh attestation verify oci://ghcr.io/zgeoff/imp-host:<version> -R zgeoff/imp
+gh attestation verify impz-linux-x64 -R zgeoff/impz
+gh attestation verify oci://ghcr.io/zgeoff/imp-host:<version> -R zgeoff/impz
 ```
 
 <!-- x-release-please-start-version -->
 
 ```sh
 docker pull ghcr.io/zgeoff/imp-host:1.6.0
-gh release download -R zgeoff/imp -p 'imp-linux-x64' -p SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 imp-linux-x64 ~/.local/bin/imp
+gh release download -R zgeoff/impz -p 'impz-linux-x64' -p SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 impz-linux-x64 ~/.local/bin/impz
 ```
 
 <!-- x-release-please-end -->
@@ -547,22 +547,22 @@ The systemd unit needs no drop-in: it stops the container itself before Docker s
 Then, on the host:
 
 ```sh
-docker exec imp-host imp info     # the CLI is in the image and finds the token itself
+docker exec imp-host impz info     # the CLI is in the image and finds the token itself
 ```
 
 ### Images on a server
 
-`imp image build <dir>` uploads the directory from the machine that runs the CLI, so a checkout on
+`impz image build <dir>` uploads the directory from the machine that runs the CLI, so a checkout on
 your laptop is enough ([images](./images.md#build-an-image)):
 
 ```sh
-imp image build images/base --name base
+impz image build images/base --name base
 ```
 
-An image from a public registry goes in with `imp image add <ref>`, which pulls it in a builder imp
+An image from a public registry goes in with `impz image add <ref>`, which pulls it in a builder imp
 ([add an image](./images.md#add-an-image)).
 
-Until an image named `IMP_DEFAULT_IMAGE` (default `base`) exists, `imp new` uses `ubuntu` and impd
+Until an image named `IMP_DEFAULT_IMAGE` (default `base`) exists, `impz new` uses `ubuntu` and impd
 logs a warning at start.
 
 On a new host, impd's first start pulls its builder image (`IMP_BUILD_IMAGE`, the published

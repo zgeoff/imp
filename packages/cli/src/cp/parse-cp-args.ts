@@ -1,7 +1,7 @@
-import { NameSchema } from '@imp/api';
+import { NameSchema } from '@impz/api';
 import { UsageError } from '../usage-error';
 
-// `imp cp ./dir box:/srv/dir` uploads; `imp cp box:/var/log/x .` downloads.
+// `impz cp ./dir box:/srv/dir` uploads; `impz cp box:/var/log/x .` downloads.
 // A side is in an imp when it reads NAME:PATH with a valid imp name; a local
 // path with a colon in its first part starts with ./ instead.
 export interface CpPlan {
@@ -35,7 +35,7 @@ export function parseCpArgs(source: string, target: string): CpPlan {
 
   if ((from === null) === (to === null)) {
     throw new UsageError(
-      'one side of imp cp is in an imp: imp cp ./dir box:/srv/dir, or imp cp box:/var/log/x .',
+      'one side of imp cp is in an imp: impz cp ./dir box:/srv/dir, or impz cp box:/var/log/x .',
     );
   }
 

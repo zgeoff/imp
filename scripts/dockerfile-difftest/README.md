@@ -1,6 +1,6 @@
 # dockerfile-difftest
 
-`imp image build` checks a Dockerfile before the build starts. To do that, impd parses it with a
+`impz image build` checks a Dockerfile before the build starts. To do that, impd parses it with a
 port of the frontend's parser: `packages/daemon/src/images/dockerfile-parse.ts`. The check is sound
 only while impd and the frontend split each Dockerfile the same way. This tool tests that: it
 generates Dockerfiles full of hostile forms and parses each one twice, with the port and with the Go

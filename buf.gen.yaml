@@ -6,7 +6,7 @@ plugins:
   # the plugin version follows google.golang.org/protobuf in agent/go.mod
   - local: [go, -C, agent, tool, protoc-gen-go]
     out: agent
-    opt: module=github.com/zgeoff/imp/agent
+    opt: module=github.com/zgeoff/impz/agent
   - local: protoc-gen-es
     out: packages/daemon/src/agent-client/gen
     opt: [target=ts, json_types=true]

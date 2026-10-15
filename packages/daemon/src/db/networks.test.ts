@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildMockNetworkRecord } from '../test-utils/build-mock-network-record';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';

@@ -1,4 +1,4 @@
-import type { ImpChangeReason } from '@imp/api';
+import type { ImpChangeReason } from '@impz/api';
 import type { Selectable } from 'kysely';
 import { updateImpHold } from './imps';
 import type { ImpRecord } from './imps';

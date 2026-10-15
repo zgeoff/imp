@@ -296,7 +296,7 @@ up() {
         ports+=(-p "127.0.0.1:$((7071 + offset)):${IMP_MCP_PUBLIC_PORT:-7071}")
       fi
     fi
-    # The repo is also mounted at its own path, so `imp image build <dir>`
+    # The repo is also mounted at its own path, so `impz image build <dir>`
     # paths the CLI resolves on this machine exist in the container.
     # Own resolvers: the WSL host's 100.100.100.100 stops answering once the
     # container's own tailscaled starts.

@@ -3,11 +3,11 @@ import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promis
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ImpContract } from '@imp/api';
-import { buildMockBrokerRule } from '@imp/api/test-utils/build-mock-broker-rule';
-import { buildMockOAuthConfig } from '@imp/api/test-utils/build-mock-oauth-config';
-import { server } from '@imp/test-utils/mock-server';
-import { waitFor } from '@imp/test-utils/wait-for';
+import type { ImpContract } from '@impz/api';
+import { buildMockBrokerRule } from '@impz/api/test-utils/build-mock-broker-rule';
+import { buildMockOAuthConfig } from '@impz/api/test-utils/build-mock-oauth-config';
+import { server } from '@impz/test-utils/mock-server';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';

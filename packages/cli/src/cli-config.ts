@@ -28,7 +28,7 @@ export function loadCliConfig(
 
   if (named !== null) {
     if (envToken !== null) {
-      warn(`imp: note: IMP_TOKEN is ignored; ${named} uses its saved token`);
+      warn(`impz: note: IMP_TOKEN is ignored; ${named} uses its saved token`);
     }
 
     return loadSavedHost(env, named, warn);
@@ -64,7 +64,7 @@ function loadSavedHost(env: CliEnv, name: string, warn: (line: string) => void):
 
   if (saved === undefined) {
     throw new UsageError(
-      `no saved host ${name} (see imp host ls, or imp login <url> --name ${name})`,
+      `no saved host ${name} (see impz host ls, or impz login <url> --name ${name})`,
     );
   }
 

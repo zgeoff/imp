@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { canUnshare } from './can-unshare';
 
 test('it answers yes for a failing command when host tests are required', () => {

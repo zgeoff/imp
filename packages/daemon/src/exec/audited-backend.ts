@@ -1,4 +1,4 @@
-import { EVENT_VERSION } from '@imp/api';
+import { EVENT_VERSION } from '@impz/api';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import type { AgentExecRequest } from '../agent-client/exec-stream';
 import { withAuditedOpen } from '../audit/api-audit';
@@ -53,7 +53,7 @@ export function buildAuditedBackend(
   };
 }
 
-// `imp cp` runs the tar tool; its arguments name the path in the audit
+// `impz cp` runs the tar tool; its arguments name the path in the audit
 function readProcedure(request: AgentExecRequest, feature: AgentFeature | undefined): string {
   if (request.outer === true) {
     return 'exec-agent';

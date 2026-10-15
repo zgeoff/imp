@@ -1,5 +1,5 @@
-import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
-import type { ImageBuildEvent, ImageBuildPhase } from '@imp/api';
+import { IMAGE_BUILD_STREAM_TYPE } from '@impz/api';
+import type { ImageBuildEvent, ImageBuildPhase } from '@impz/api';
 import type { BuildOutput } from './create-build-steps';
 import { BUILD_LOG_QUEUE_MAX_BYTES, createLogBudget } from './create-log-budget';
 

@@ -1,4 +1,4 @@
-import { SecretNameSchema } from '@imp/api';
+import { SecretNameSchema } from '@impz/api';
 import type { ReadSecretGeneration, Refusal } from './access-policy';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';

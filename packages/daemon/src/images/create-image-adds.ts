@@ -1,5 +1,5 @@
-import { ImageRefSchema, NameSchema } from '@imp/api';
-import type { ImageBuildPhase } from '@imp/api';
+import { ImageRefSchema, NameSchema } from '@impz/api';
+import type { ImageBuildPhase } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { Config } from '../config';
 import { findImageByName, listImages } from '../db/images';

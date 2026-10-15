@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCommandLinks } from '@imp/test-utils/create-command-links';
+import { createCommandLinks } from '@impz/test-utils/create-command-links';
 import * as z from 'zod';
 import { buildStubBlockDevices } from '../scripts/test-utils/build-stub-block-devices';
 import { buildStubBootstrapDocker } from '../scripts/test-utils/build-stub-bootstrap-docker';
@@ -2333,6 +2333,32 @@ test('#health refuses imp-host publishing a port beyond loopback', () => {
   ).toStrictEqual({
     exitCode: 1,
     stdout: '== health\nimp 0.40.4\n',
+    stderr: 'bootstrap: imp-host publishes a port beyond loopback: 7070/tcp -> 0.0.0.0:7070\n',
+  });
+});
+
+test('#health asks imp in an image from before the CLI was impz', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubBootstrapDocker({
+      impInfo: 'imp 1.6.0',
+      published: '7070/tcp -> 0.0.0.0:7070',
+      runningCLI: 'imp',
+    }),
+  );
+
+  expect(
+    runSourcedFunction({
+      script: new URL('bootstrap.sh', import.meta.url).pathname,
+      fn: 'health',
+      env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '== health\nimp 1.6.0\n',
     stderr: 'bootstrap: imp-host publishes a port beyond loopback: 7070/tcp -> 0.0.0.0:7070\n',
   });
 });

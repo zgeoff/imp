@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 
 // An `mkfs.ext4` in `<dir>/bin` that holds each rootfs write until `release`
 // (the real one runs) or `fail` (that stderr), so a test acts while impd

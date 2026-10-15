@@ -1,5 +1,5 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { buildStubClock } from '../test-utils/build-stub-clock';
 import { createStorageGate } from './storage-gate';
 

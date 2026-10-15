@@ -1,5 +1,5 @@
-import { formatBytes } from '@imp/shared';
-import type { Imp } from '@zgeoff/imp-client';
+import type { Imp } from '@impz/client';
+import { formatBytes } from '@impz/shared';
 import { defineCommand } from '../define-command';
 import {
   formatCpuUse,
@@ -14,7 +14,7 @@ import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
 
-// how often `imp top` asks again when no event comes
+// how often `impz top` asks again when no event comes
 const TOP_REFRESH_MS = 2000;
 
 // a burst of events, such as a wake's, re-lists once
@@ -72,7 +72,7 @@ export const setCommand = defineCommand({
       };
 
       if (Object.keys(change).length === 0) {
-        throw new UsageError('imp set needs --cpu-limit, --cpu-weight, --cpus or --http-port');
+        throw new UsageError('impz set needs --cpu-limit, --cpu-weight, --cpus or --http-port');
       }
 
       const imp = await client.imps.update({ name: context.args.name, ...change });

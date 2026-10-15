@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'bun:test';
-import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
-import type { ImageBuildProgress } from '@imp/api';
-import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
+import { IMAGE_BUILD_STREAM_TYPE } from '@impz/api';
+import type { ImageBuildProgress } from '@impz/api';
+import { buildMockImage } from '@impz/api/test-utils/build-mock-image';
 import { ORPCError } from '@orpc/client';
 import { readBuildAnswer } from './read-build-answer';
 

@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker';
-import { EVENT_VERSION } from '@imp/api';
-import type { ImpEvent } from '@imp/api';
+import { EVENT_VERSION } from '@impz/api';
+import type { ImpEvent } from '@impz/api';
 
 type GovernorDecision = Extract<ImpEvent, { ev: 'GovernorDecision' }>;
 

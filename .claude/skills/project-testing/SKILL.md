@@ -267,10 +267,10 @@ creates one `AsyncDisposableStack`, registers `onTestFinished(() => stack.dispos
 returns it with the run's client (`createInstanceClient`) and the suite's prefix (`readSuitePrefix`
 in `suites.ts`). The test registers each removal on the line after the act that made the thing, with
 `registerRemoval(stack, config.keep, remove)` (`register-removal.ts`):
-`removeImpIfPresent(client, name)` after `imp new`, before the exec wait, and
-`removeImageIfPresent(client, name)` after `imp template create`, and `removeTokenIfPresent`,
-`removeSecretIfPresent` and `removeNetworkIfPresent` after `imp token new`, `imp secret add` and
-`imp net create` (all in `reset-baseline.ts`), so an imp goes before the template it boots and the
+`removeImpIfPresent(client, name)` after `impz new`, before the exec wait, and
+`removeImageIfPresent(client, name)` after `impz template create`, and `removeTokenIfPresent`,
+`removeSecretIfPresent` and `removeNetworkIfPresent` after `impz token new`, `impz secret add` and
+`impz net create` (all in `reset-baseline.ts`), so an imp goes before the template it boots and the
 network it joins. Each passes over a name the journey already removed and throws on any other
 refusal; `reset-baseline.test.ts` checks each against the in-process impd. `scale` registers no
 removal for its fleet, which the harness keeps for `restart` (step 5): the one exception to a
@@ -281,7 +281,7 @@ releases, such as a proxy process or a held socket, still run.
 
 A burst of connections past a guest server's accept backlog (busybox `httpd` on `e2e-tiny`) leaves
 some that the agent's dial completed but the server never accepted; the guest kernel logs
-`Possible SYN flooding` and drops them about 17 s later, which `imp proxy` reports as
+`Possible SYN flooding` and drops them about 17 s later, which `impz proxy` reports as
 `the connection in the imp was lost`. `proxy-tunnel-limit.e2e.ts` holds its connections on an
 `nc -lk -e cat` echo server and proves each with a byte there and back before it opens the next.
 Every suite file works this way; `proxy-refusals`, `socket-refusals` and `socket-builds` make no
@@ -304,8 +304,8 @@ timeout waits with `waitAwakePastIdle` (`e2e/lib/awake-past-idle.ts`): the idle 
 `lastActiveAt` to its tick only while something keeps the imp awake, so a running imp whose
 `lastActiveAt` reaches the idle timeout past the release has stayed awake that long; its wake count
 and `sleptAt` must stay as the wait first read them once the imp ran, so a sleep and a wake in
-between fail it. The wait polls `imp ls`, which records no activity, so the journey must not exec in
-the imp during it.
+between fail it. The wait polls `impz ls`, which records no activity, so the journey must not exec
+in the imp during it.
 
 A journey file also runs alone against an instance that is up:
 `bun test --config=e2e/bunfig.toml ./e2e/suites/sleep-memory.e2e.ts`. Nothing then resets the
@@ -347,7 +347,7 @@ sources, so a changed fixture builds anew.
 | `E2E_SCALE_COUNT`                    | 30          | imps the scale suite creates                           |
 | `E2E_SCALE_MEMORY_MIB`               | 512         | memory of each scale imp                               |
 | `E2E_SCALE_FILL_MIB`                 | 256         | tmpfs each scale imp fills                             |
-| `E2E_MAX_NEW_MS`                     | 3000        | limit for `imp new` plus the first exec                |
+| `E2E_MAX_NEW_MS`                     | 3000        | limit for `impz new` plus the first exec               |
 | `E2E_MAX_CHECKPOINT_MS`              | 500         | limit for a checkpoint of a running imp                |
 | `E2E_CHAOS_ROUNDS`, `E2E_CHAOS_SEED` | 8, random   | the chaos suite's rounds and replay seed               |
 | `IMP_DEV_NAME`                       | `imp-dev`   | the dev container                                      |
@@ -727,7 +727,7 @@ Paths are under `packages/daemon/src/` unless they start with `e2e/`, `scripts/`
     run's MSW server sees them.
 
 The mcp package's tests boot impd's real app with `createImpd` and reach it through the real
-`@zgeoff/imp-client`, on a loopback port where a tool call's exec needs a socket, or with
+`@impz/client`, on a loopback port where a tool call's exec needs a socket, or with
 `impd.api.app.handle` as its `fetch`. A test that needs a tool call to wait holds impd's read of the
 imps with `buildQueryGate`. One stand-in models an impd release from before the fork's grant report:
 `packages/mcp/src/test-utils/build-stub-older-impd-fetch.ts` (`buildStubOlderImpdFetch`) takes
@@ -749,7 +749,7 @@ in-memory transport and takes one JSON-RPC line at a time. The HTTP tests read a
 answers with `read-mcp-answer.ts` (`readMcpAnswer`), and drive the `2026-07-28` protocol with the
 SDK's own client (`@modelcontextprotocol/client`). `exec-tool.test.ts` passes `buildStubRepeat` and
 `buildStubAfter` as its timers, except one timeout test that keeps the default timers and waits its
-one-second deadline. `packages/cli/src/commands/mcp.test.ts` runs `imp mcp` as a subprocess against
+one-second deadline. `packages/cli/src/commands/mcp.test.ts` runs `impz mcp` as a subprocess against
 impd's app on a loopback port.
 
 The broker takes `beforeGrantWrite` (through `createImpd`'s `broker` deps), which runs between a
@@ -796,7 +796,7 @@ transport:
   state and fires only when the test calls `firePending()`.
 - `build-stub-terminal.ts` and `build-stub-wait.ts`: the exec client's terminal modes and the
   reverse forward's retry wait, which ends only when the test releases it or its signal aborts.
-- `build-stub-backoff-clock.ts`: the clock and wait of `imp events`' reconnect backoff. Each wait
+- `build-stub-backoff-clock.ts`: the clock and wait of `impz events`' reconnect backoff. Each wait
   ends at once and moves the clock on by its delay, and a hook runs during one chosen wait, as an
   impd that comes back while the client waits.
 

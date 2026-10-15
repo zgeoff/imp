@@ -1,4 +1,4 @@
-import type { SystemInfo } from '@imp/api';
+import type { SystemInfo } from '@impz/api';
 
 // impd features a call relies on (SystemInfo.features), and what an impd
 // without one is

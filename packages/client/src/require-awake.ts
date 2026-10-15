@@ -1,4 +1,4 @@
-import type { Imp, ImpContract } from '@imp/api';
+import type { Imp, ImpContract } from '@impz/api';
 import { ORPCError } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 

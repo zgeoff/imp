@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { ApprovalCodeSchema } from '@imp/api';
+import { ApprovalCodeSchema } from '@impz/api';
 import {
   createApprovalCode,
   createCode,

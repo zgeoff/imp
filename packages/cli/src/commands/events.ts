@@ -1,10 +1,10 @@
-import type { ImpEvent } from '@imp/api';
-import { ORPCError, UnknownProcedureError } from '@zgeoff/imp-client';
-import type { ServerCheck } from '@zgeoff/imp-client';
+import type { ImpEvent } from '@impz/api';
+import { ORPCError, UnknownProcedureError } from '@impz/client';
+import type { ServerCheck } from '@impz/client';
 import { defineCommand } from '../define-command';
 import { runAction } from '../run-action';
 
-// ends in a row before imp events gives up
+// ends in a row before impz events gives up
 const MAX_FAILURES = 5;
 
 // a stream that lasted this long was healthy; the count starts again
@@ -51,7 +51,7 @@ export async function printEvents(
 
     const backoffMs = Math.min(FIRST_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
 
-    source.warn(`imp: the event stream ended (${ended}); reconnecting in ${String(backoffMs)}ms`);
+    source.warn(`impz: the event stream ended (${ended}); reconnecting in ${String(backoffMs)}ms`);
 
     await source.wait(backoffMs);
   }

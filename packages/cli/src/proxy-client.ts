@@ -9,8 +9,8 @@ import {
   TUNNEL_PATH,
   TUNNEL_WINDOW_BYTES,
   TunnelServerMessageSchema,
-} from '@imp/api';
-import type { TunnelClientMessage, TunnelServerMessage } from '@imp/api';
+} from '@impz/api';
+import type { TunnelClientMessage, TunnelServerMessage } from '@impz/api';
 import { buildWebSocketUrl } from './build-websocket-url';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
@@ -25,7 +25,7 @@ import { UsageError } from './usage-error';
 
 // what runProxy touches besides the network; tests swap it
 export interface ProxyIo {
-  // a line for the user on stderr, after `imp: `
+  // a line for the user on stderr, after `impz: `
   readonly writeNotice: (text: string) => void;
 
   // the clock the quiet time between unreachable notices runs on; Date.now
@@ -66,7 +66,7 @@ async function checkImpExists(config: CliConfig, name: string): Promise<void> {
 
 const PROCESS_IO: ProxyIo = {
   writeNotice: (text) => {
-    console.error(`imp: ${text}`);
+    console.error(`impz: ${text}`);
   },
 };
 
@@ -102,14 +102,14 @@ function buildBindError(error: unknown, name: string, forward: Forward): Error {
     const other = forward.local + 10_000 > 65_535 ? 0 : forward.local + 10_000;
 
     return new Error(
-      `local port ${local} is in use; map another one: imp proxy ${name} ${String(other)}:${remote} (0:${remote} takes any free port)`,
+      `local port ${local} is in use; map another one: impz proxy ${name} ${String(other)}:${remote} (0:${remote} takes any free port)`,
     );
   }
 
   // a port below 1024; plus 8000 keeps it recognisable (80 to 8080)
   if (code === 'EACCES') {
     return new Error(
-      `local port ${local} needs privileges; map a port above 1023: imp proxy ${name} ${String(forward.local + 8000)}:${remote}`,
+      `local port ${local} needs privileges; map a port above 1023: impz proxy ${name} ${String(forward.local + 8000)}:${remote}`,
     );
   }
 
@@ -520,7 +520,7 @@ async function startForwards(
   return { stop, failed };
 }
 
-// `imp proxy`: runs until SIGINT or SIGTERM, then exits 0, or until a reverse
+// `impz proxy`: runs until SIGINT or SIGTERM, then exits 0, or until a reverse
 // forward fails for good
 export async function runProxy(options: ProxyOptions, io: ProxyIo = PROCESS_IO): Promise<void> {
   let config: CliConfig | null = null;

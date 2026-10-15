@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { Imp } from '@imp/api';
+import type { Imp } from '@impz/api';
 
 type DiskUsage = NonNullable<Imp['diskUsage']>;
 

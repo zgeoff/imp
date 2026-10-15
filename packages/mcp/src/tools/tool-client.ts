@@ -1,4 +1,4 @@
-import type { ImpClient } from '@zgeoff/imp-client';
+import type { ImpClient } from '@impz/client';
 
 // The part of the SDK client the tools call
 export interface ToolClient {

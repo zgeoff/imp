@@ -52,7 +52,7 @@ export function createCode(): { readonly text: string; readonly hash: string } {
   return { text, hash: toSecretHash(text) };
 }
 
-// the code a sign-in page shows and `imp oauth approve` takes: 40 bits,
+// the code a sign-in page shows and `impz oauth approve` takes: 40 bits,
 // enough because only a holder of a named imp token can try one, at a
 // limited rate, within its 10 minutes
 export function createApprovalCode(): string {

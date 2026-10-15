@@ -110,7 +110,7 @@
             "name": "SeenSession",
             "path": "packages/daemon/src/sessions/session-cache.ts"
           },
-          // tar-stream's live pack and extract streams, which `imp cp` drives
+          // tar-stream's live pack and extract streams, which `impz cp` drives
           { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },
           // a live socket or listener; reading and writing it is the point
           { "from": "package", "name": ["Socket", "Server"], "package": "node:net" },
@@ -247,7 +247,7 @@
       }
     },
     {
-      // the platform helpers: imports no @imp/* package
+      // the platform helpers: imports no @impz/* package
       "files": ["packages/shared/**"],
       "rules": {
         "no-restricted-imports": [
@@ -260,12 +260,12 @@
               },
               {
                 "group": ["node:*"],
-                "message": "Keep this package runtime-neutral: no node: import in @imp/shared, @imp/api or the client."
+                "message": "Keep this package runtime-neutral: no node: import in @impz/shared, @impz/api or the client."
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -277,22 +277,22 @@
               },
               {
                 "group": [
-                  "@imp/local-tar",
-                  "@imp/local-tar/**",
-                  "@imp/api",
-                  "@imp/api/**",
-                  "@zgeoff/imp-client",
-                  "@zgeoff/imp-client/**",
-                  "@imp/mcp",
-                  "@imp/mcp/**",
-                  "@imp/cli",
-                  "@imp/cli/**",
-                  "@imp/daemon",
-                  "@imp/daemon/**",
-                  "@imp/dashboard",
-                  "@imp/dashboard/**"
+                  "@impz/local-tar",
+                  "@impz/local-tar/**",
+                  "@impz/api",
+                  "@impz/api/**",
+                  "@impz/client",
+                  "@impz/client/**",
+                  "@impz/mcp",
+                  "@impz/mcp/**",
+                  "@impz/cli",
+                  "@impz/cli/**",
+                  "@impz/daemon",
+                  "@impz/daemon/**",
+                  "@impz/dashboard",
+                  "@impz/dashboard/**"
                 ],
-                "message": "@imp/shared imports no @imp/* package."
+                "message": "@impz/shared imports no @impz/* package."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -304,7 +304,7 @@
       }
     },
     {
-      // a leaf: imports only @imp/shared
+      // a leaf: imports only @impz/shared
       "files": ["packages/local-tar/**"],
       "rules": {
         "no-restricted-imports": [
@@ -317,8 +317,8 @@
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -330,20 +330,20 @@
               },
               {
                 "group": [
-                  "@imp/api",
-                  "@imp/api/**",
-                  "@zgeoff/imp-client",
-                  "@zgeoff/imp-client/**",
-                  "@imp/mcp",
-                  "@imp/mcp/**",
-                  "@imp/cli",
-                  "@imp/cli/**",
-                  "@imp/daemon",
-                  "@imp/daemon/**",
-                  "@imp/dashboard",
-                  "@imp/dashboard/**"
+                  "@impz/api",
+                  "@impz/api/**",
+                  "@impz/client",
+                  "@impz/client/**",
+                  "@impz/mcp",
+                  "@impz/mcp/**",
+                  "@impz/cli",
+                  "@impz/cli/**",
+                  "@impz/daemon",
+                  "@impz/daemon/**",
+                  "@impz/dashboard",
+                  "@impz/dashboard/**"
                 ],
-                "message": "@imp/local-tar is a leaf: it may import only @imp/shared."
+                "message": "@impz/local-tar is a leaf: it may import only @impz/shared."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -355,7 +355,7 @@
       }
     },
     {
-      // the contract: imports only @imp/shared
+      // the contract: imports only @impz/shared
       "files": ["packages/api/**"],
       "rules": {
         "no-restricted-imports": [
@@ -368,12 +368,12 @@
               },
               {
                 "group": ["node:*"],
-                "message": "Keep this package runtime-neutral: no node: import in @imp/shared, @imp/api or the client."
+                "message": "Keep this package runtime-neutral: no node: import in @impz/shared, @impz/api or the client."
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -385,20 +385,20 @@
               },
               {
                 "group": [
-                  "@imp/local-tar",
-                  "@imp/local-tar/**",
-                  "@zgeoff/imp-client",
-                  "@zgeoff/imp-client/**",
-                  "@imp/mcp",
-                  "@imp/mcp/**",
-                  "@imp/cli",
-                  "@imp/cli/**",
-                  "@imp/daemon",
-                  "@imp/daemon/**",
-                  "@imp/dashboard",
-                  "@imp/dashboard/**"
+                  "@impz/local-tar",
+                  "@impz/local-tar/**",
+                  "@impz/client",
+                  "@impz/client/**",
+                  "@impz/mcp",
+                  "@impz/mcp/**",
+                  "@impz/cli",
+                  "@impz/cli/**",
+                  "@impz/daemon",
+                  "@impz/daemon/**",
+                  "@impz/dashboard",
+                  "@impz/dashboard/**"
                 ],
-                "message": "@imp/api may import only @imp/shared."
+                "message": "@impz/api may import only @impz/shared."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -410,7 +410,7 @@
       }
     },
     {
-      // the published client: imports only @imp/shared and @imp/api
+      // the published client: imports only @impz/shared and @impz/api
       "files": ["packages/client/**"],
       "rules": {
         "no-restricted-imports": [
@@ -423,12 +423,12 @@
               },
               {
                 "group": ["node:*"],
-                "message": "Keep this package runtime-neutral: no node: import in @imp/shared, @imp/api or the client."
+                "message": "Keep this package runtime-neutral: no node: import in @impz/shared, @impz/api or the client."
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -440,18 +440,18 @@
               },
               {
                 "group": [
-                  "@imp/local-tar",
-                  "@imp/local-tar/**",
-                  "@imp/mcp",
-                  "@imp/mcp/**",
-                  "@imp/cli",
-                  "@imp/cli/**",
-                  "@imp/daemon",
-                  "@imp/daemon/**",
-                  "@imp/dashboard",
-                  "@imp/dashboard/**"
+                  "@impz/local-tar",
+                  "@impz/local-tar/**",
+                  "@impz/mcp",
+                  "@impz/mcp/**",
+                  "@impz/cli",
+                  "@impz/cli/**",
+                  "@impz/daemon",
+                  "@impz/daemon/**",
+                  "@impz/dashboard",
+                  "@impz/dashboard/**"
                 ],
-                "message": "The client may import only @imp/shared and @imp/api."
+                "message": "The client may import only @impz/shared and @impz/api."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -463,7 +463,7 @@
       }
     },
     {
-      // the MCP server: imports the leaves, @imp/api and the client
+      // the MCP server: imports the leaves, @impz/api and the client
       "files": ["packages/mcp/**"],
       "rules": {
         "no-restricted-imports": [
@@ -476,8 +476,8 @@
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -489,14 +489,14 @@
               },
               {
                 "group": [
-                  "@imp/cli",
-                  "@imp/cli/**",
-                  "@imp/daemon",
-                  "@imp/daemon/**",
-                  "@imp/dashboard",
-                  "@imp/dashboard/**"
+                  "@impz/cli",
+                  "@impz/cli/**",
+                  "@impz/daemon",
+                  "@impz/daemon/**",
+                  "@impz/dashboard",
+                  "@impz/dashboard/**"
                 ],
-                "message": "@imp/mcp may import only @imp/shared, @imp/local-tar, @imp/api and the client."
+                "message": "@impz/mcp may import only @impz/shared, @impz/local-tar, @impz/api and the client."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -521,8 +521,8 @@
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -533,8 +533,13 @@
                 "message": "Production code never imports test support."
               },
               {
-                "group": ["@imp/daemon", "@imp/daemon/**", "@imp/dashboard", "@imp/dashboard/**"],
-                "message": "@imp/cli is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+                "group": [
+                  "@impz/daemon",
+                  "@impz/daemon/**",
+                  "@impz/dashboard",
+                  "@impz/dashboard/**"
+                ],
+                "message": "@impz/cli is an app: it may import @impz/shared, @impz/local-tar, @impz/api, the client and @impz/mcp, never another app."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -559,8 +564,8 @@
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -571,8 +576,8 @@
                 "message": "Production code never imports test support."
               },
               {
-                "group": ["@imp/cli", "@imp/cli/**", "@imp/dashboard", "@imp/dashboard/**"],
-                "message": "@imp/daemon is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+                "group": ["@impz/cli", "@impz/cli/**", "@impz/dashboard", "@impz/dashboard/**"],
+                "message": "@impz/daemon is an app: it may import @impz/shared, @impz/local-tar, @impz/api, the client and @impz/mcp, never another app."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -597,8 +602,8 @@
               },
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -609,8 +614,8 @@
                 "message": "Production code never imports test support."
               },
               {
-                "group": ["@imp/cli", "@imp/cli/**", "@imp/daemon", "@imp/daemon/**"],
-                "message": "@imp/dashboard is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+                "group": ["@impz/cli", "@impz/cli/**", "@impz/daemon", "@impz/daemon/**"],
+                "message": "@impz/dashboard is an app: it may import @impz/shared, @impz/local-tar, @impz/api, the client and @impz/mcp, never another app."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -631,8 +636,8 @@
             "patterns": [
               {
                 "group": [
-                  "@imp/test-utils",
-                  "@imp/test-utils/**",
+                  "@impz/test-utils",
+                  "@impz/test-utils/**",
                   "**/test-utils",
                   "**/test-utils/**",
                   "**/mocks",
@@ -643,8 +648,8 @@
                 "message": "Production code never imports test support."
               },
               {
-                "group": ["@imp/cli", "@imp/cli/**", "@imp/dashboard", "@imp/dashboard/**"],
-                "message": "@imp/daemon is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app."
+                "group": ["@impz/cli", "@impz/cli/**", "@impz/dashboard", "@impz/dashboard/**"],
+                "message": "@impz/daemon is an app: it may import @impz/shared, @impz/local-tar, @impz/api, the client and @impz/mcp, never another app."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",
@@ -683,7 +688,7 @@
       }
     },
     {
-      // the shared test helpers: a leaf, like @imp/local-tar
+      // the shared test helpers: a leaf, like @impz/local-tar
       "files": ["packages/test-utils/**"],
       "rules": {
         "no-restricted-imports": [
@@ -696,22 +701,22 @@
               },
               {
                 "group": [
-                  "@imp/local-tar",
-                  "@imp/local-tar/**",
-                  "@imp/api",
-                  "@imp/api/**",
-                  "@zgeoff/imp-client",
-                  "@zgeoff/imp-client/**",
-                  "@imp/mcp",
-                  "@imp/mcp/**",
-                  "@imp/cli",
-                  "@imp/cli/**",
-                  "@imp/daemon",
-                  "@imp/daemon/**",
-                  "@imp/dashboard",
-                  "@imp/dashboard/**"
+                  "@impz/local-tar",
+                  "@impz/local-tar/**",
+                  "@impz/api",
+                  "@impz/api/**",
+                  "@impz/client",
+                  "@impz/client/**",
+                  "@impz/mcp",
+                  "@impz/mcp/**",
+                  "@impz/cli",
+                  "@impz/cli/**",
+                  "@impz/daemon",
+                  "@impz/daemon/**",
+                  "@impz/dashboard",
+                  "@impz/dashboard/**"
                 ],
-                "message": "@imp/test-utils is a leaf: it may import only @imp/shared."
+                "message": "@impz/test-utils is a leaf: it may import only @impz/shared."
               },
               {
                 "regex": "^(\\.\\./)+(api|cli|client|daemon|dashboard|local-tar|mcp|shared|test-utils)/(src|smoke)(/|$)",

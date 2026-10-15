@@ -11,7 +11,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/proto"
 )
 
 // listenThroughHelper binds through the helper process, as the test's own

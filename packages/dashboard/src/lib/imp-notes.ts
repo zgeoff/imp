@@ -1,4 +1,4 @@
-import type { Imp } from '@zgeoff/imp-client';
+import type { Imp } from '@impz/client';
 import { formatRelativeTime } from './format';
 
 export interface ImpNote {

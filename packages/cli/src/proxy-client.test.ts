@@ -12,32 +12,32 @@ import {
   TUNNEL_CLOSE_RESTARTING,
   TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_WINDOW_BYTES,
-} from '@imp/api';
+} from '@impz/api';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
   encodeFrame,
   encodeJsonFrame,
-} from '@imp/daemon/src/agent-client/frame-codec';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+} from '@impz/daemon/src/agent-client/frame-codec';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
-import { startStubDialAgent } from '@imp/daemon/src/test-utils/start-stub-dial-agent';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
+import { startStubDialAgent } from '@impz/daemon/src/test-utils/start-stub-dial-agent';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { createImpClient } from './create-imp-client';
 import { formatTunnelClose, readTunnelServerMessage, startProxy } from './proxy-client';
 import { sendLocalRequest } from './test-utils/send-local-request';
@@ -383,7 +383,7 @@ test('#startProxy fails at once naming a local port in use, before any call to i
   expect(started).rejects.toThrowWithMessage(
     Error,
     new RegExp(
-      `^local port ${String(port)} is in use; map another one: imp proxy box \\d+:5432 \\(0:5432 takes any free port\\)$`,
+      `^local port ${String(port)} is in use; map another one: impz proxy box \\d+:5432 \\(0:5432 takes any free port\\)$`,
       'u',
     ),
   );
@@ -412,7 +412,7 @@ test('#startProxy fails naming the local port when only its IPv6 loopback is in 
 
   expect(started).rejects.toThrowWithMessage(
     Error,
-    new RegExp(`^local port ${String(port)} is in use; map another one: imp proxy box `, 'u'),
+    new RegExp(`^local port ${String(port)} is in use; map another one: impz proxy box `, 'u'),
   );
 });
 
@@ -429,7 +429,7 @@ test.skipIf(
 
   expect(started).rejects.toThrowWithMessage(
     Error,
-    'local port 1 needs privileges; map a port above 1023: imp proxy box 8001:80',
+    'local port 1 needs privileges; map a port above 1023: impz proxy box 8001:80',
   );
 });
 
@@ -742,7 +742,7 @@ test('#runProxy prints the usage error for a proxy with no port and no reverse f
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: name a port to forward, or a --reverse forward\n',
+    stderr: 'impz: name a port to forward, or a --reverse forward\n',
     code: 2,
   });
 });

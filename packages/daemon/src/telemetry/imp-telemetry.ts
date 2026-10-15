@@ -1,5 +1,5 @@
-import { ImpStateSchema } from '@imp/api';
-import type { ImpEvent, ImpState } from '@imp/api';
+import { ImpStateSchema } from '@impz/api';
+import type { ImpEvent, ImpState } from '@impz/api';
 import { ROOT_CONTEXT, metrics, trace } from '@opentelemetry/api';
 import type { BatchObservableCallback } from '@opentelemetry/api';
 import type { EventBus } from '../events/event-bus';

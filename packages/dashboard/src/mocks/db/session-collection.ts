@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import { SESSION_MAX_AGE_S } from '@imp/daemon/src/auth/session-cookie';
+import { SESSION_MAX_AGE_S } from '@impz/daemon/src/auth/session-cookie';
 import { Collection } from '@msw/data';
 import * as z from 'zod';
 

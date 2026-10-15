@@ -2,7 +2,7 @@
 // its tarball (scripts/release/check-client-package.sh): no Bun, no
 // workspace. Argument: the version the package must report.
 import assert from 'node:assert/strict';
-import * as client from '@zgeoff/imp-client';
+import * as client from '@impz/client';
 
 const imp = client.createImpClient({ url: 'http://impd.test/', token: 't' });
 
@@ -13,4 +13,4 @@ assert.equal(typeof imp.openExec, 'function');
 assert.equal(typeof client.ExecError, 'function');
 assert.equal(typeof client.isDefinedError, 'function');
 
-console.log(`imported @zgeoff/imp-client ${client.CLIENT_VERSION}`);
+console.log(`imported @impz/client ${client.CLIENT_VERSION}`);

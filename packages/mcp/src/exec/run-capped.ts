@@ -1,5 +1,5 @@
-import type { ExecHandle, ExecRequirement, ImpClient } from '@zgeoff/imp-client';
-import { ExecError } from '@zgeoff/imp-client';
+import type { ExecHandle, ExecRequirement, ImpClient } from '@impz/client';
+import { ExecError } from '@impz/client';
 import type { After } from '../after';
 import { createOutputCollector } from './output-cap';
 import type { CappedOutput } from './output-cap';

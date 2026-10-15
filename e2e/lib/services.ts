@@ -14,7 +14,7 @@ const ServiceRowSchema = z.object({
 
 export type ServiceRow = z.infer<typeof ServiceRowSchema>;
 
-// `imp service ls <imp> --json`, with the fields the suites read
+// `impz service ls <imp> --json`, with the fields the suites read
 export function parseServices(stdout: string): ServiceRow[] {
   return z.array(ServiceRowSchema).parse(JSON.parse(stdout));
 }

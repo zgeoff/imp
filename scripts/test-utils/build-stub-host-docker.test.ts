@@ -220,8 +220,8 @@ test('it lists the awake imps as running, and sleeps each but the sleepless one'
     [
       'bash',
       '-c',
-      'docker exec imp-host imp ls --json; docker exec imp-host imp sleep web; echo "web $?"; ' +
-        'docker exec imp-host imp sleep db; echo "db $?"',
+      'docker exec imp-host impz ls --json; docker exec imp-host impz sleep web; echo "web $?"; ' +
+        'docker exec imp-host impz sleep db; echo "db $?"',
     ],
     { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
   );
@@ -245,14 +245,14 @@ test('it lists no imps when none are awake', () => {
     }),
   );
 
-  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'ls', '--json'], {
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'impz', 'ls', '--json'], {
     env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
   });
 
   expect(result.stdout.toString()).toBe('[]\n');
 });
 
-test('it answers inspect, pull, plain imp ls and compose up with success and no output', () => {
+test('it answers inspect, pull, plain impz ls and compose up with success and no output', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -271,7 +271,7 @@ test('it answers inspect, pull, plain imp ls and compose up with success and no 
       'bash',
       '-c',
       'docker inspect imp-host; echo "inspect $?"; docker pull -q imp-host:next; echo "pull $?"; ' +
-        'docker exec imp-host imp ls; echo "ls $?"; ' +
+        'docker exec imp-host impz ls; echo "ls $?"; ' +
         'docker compose -f c.yaml up -d imp-host; echo "up $?"',
     ],
     { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
@@ -304,7 +304,7 @@ test('it fails a pull of another image than the one it was given', () => {
   expect(result.exitCode).toBe(1);
 });
 
-test('it answers imp info with an empty object unless told otherwise', () => {
+test('it answers impz info with an empty object unless told otherwise', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -318,14 +318,14 @@ test('it answers imp info with an empty object unless told otherwise', () => {
     }),
   );
 
-  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'info', '--json'], {
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'impz', 'info', '--json'], {
     env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
   });
 
   expect(result.stdout.toString()).toBe('{}\n');
 });
 
-test('it answers imp info with what it was given', () => {
+test('it answers impz info with what it was given', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -340,14 +340,14 @@ test('it answers imp info with what it was given', () => {
     }),
   );
 
-  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'info', '--json'], {
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'impz', 'info', '--json'], {
     env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
   });
 
   expect(result.stdout.toString()).toBe('{"bootStatus":null}\n');
 });
 
-test('it fails imp info when told to', () => {
+test('it fails impz info when told to', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -362,7 +362,7 @@ test('it fails imp info when told to', () => {
     }),
   );
 
-  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'info', '--json'], {
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'impz', 'info', '--json'], {
     env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
   });
 

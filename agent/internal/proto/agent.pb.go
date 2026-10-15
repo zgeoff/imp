@@ -2389,7 +2389,7 @@ const file_imp_agent_v1_agent_proto_rawDesc = "" +
 	"\x06signal\x18\x01 \x01(\x05R\x06signal\"2\n" +
 	"\x04Exit\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x16\n" +
-	"\x06signal\x18\x02 \x01(\x05R\x06signalB2Z0github.com/zgeoff/imp/agent/internal/proto;protob\x06proto3"
+	"\x06signal\x18\x02 \x01(\x05R\x06signalB3Z1github.com/zgeoff/impz/agent/internal/proto;protob\x06proto3"
 
 var (
 	file_imp_agent_v1_agent_proto_rawDescOnce sync.Once

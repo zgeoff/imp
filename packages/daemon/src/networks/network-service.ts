@@ -1,4 +1,4 @@
-import type { EgressMode, Network, NetworkJoin } from '@imp/api';
+import type { EgressMode, Network, NetworkJoin } from '@impz/api';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import { listEgressSlots } from '../db/egress';
 import { findImpByName } from '../db/imps';

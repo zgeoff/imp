@@ -1,4 +1,4 @@
-import type { OutdatedPart, SystemInfo } from '@imp/api';
+import type { OutdatedPart, SystemInfo } from '@impz/api';
 import type { ImpRecord } from '../db/imps';
 import { findColdBootReason, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { findOutdatedParts, readVmIdentity } from '../sleep/vm-identity';

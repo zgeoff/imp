@@ -1,4 +1,4 @@
-import type { Image, ImageBuildPhase, ImageOpEvent } from '@imp/api';
+import type { Image, ImageBuildPhase, ImageOpEvent } from '@impz/api';
 import { runOnInterval } from './build-event-stream';
 import type { BuildReport, Repeat } from './build-event-stream';
 import { BUILD_LOG_QUEUE_MAX_BYTES, createLogBudget } from './create-log-budget';

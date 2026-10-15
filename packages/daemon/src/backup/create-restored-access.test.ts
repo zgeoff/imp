@@ -2,7 +2,7 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { loadTokenStore } from '../auth/token-store';
 import { writeConsistentCopy } from '../db/database-copy';
 import { runMigrationsTo } from '../db/run-migrations';

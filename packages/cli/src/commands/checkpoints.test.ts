@@ -9,7 +9,7 @@ test('it prints the usage of checkpoint rm with too few arguments instead of cre
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: usage: imp checkpoint rm <name> <checkpoint>\n',
+    stderr: 'impz: usage: impz checkpoint rm <name> <checkpoint>\n',
     code: 2,
   });
 });

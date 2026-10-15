@@ -8,8 +8,8 @@ import (
 	"io/fs"
 	"sync/atomic"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
-	"github.com/zgeoff/imp/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/proc"
 )
 
 const Path = "/etc/imp/image.json"

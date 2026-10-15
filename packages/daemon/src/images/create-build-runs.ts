@@ -1,4 +1,4 @@
-import type { ImageBuildPhase, ImageBuildRun, ImageBuildSource } from '@imp/api';
+import type { ImageBuildPhase, ImageBuildRun, ImageBuildSource } from '@impz/api';
 
 // One build as it runs: each setter updates what images.builds shows, and
 // `end` takes the build off the list however it ended

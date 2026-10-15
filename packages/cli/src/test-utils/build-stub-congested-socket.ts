@@ -1,4 +1,4 @@
-import type { ExecSocket } from '@zgeoff/imp-client';
+import type { ExecSocket } from '@impz/client';
 
 // A real WebSocket behind a congested network: everything goes through to
 // it, but its bufferedAmount is `queued.bytes`, which the test sets, as the

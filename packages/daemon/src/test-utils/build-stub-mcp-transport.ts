@@ -1,4 +1,4 @@
-import type { HttpTransport } from '@imp/mcp';
+import type { HttpTransport } from '@impz/mcp';
 
 // one request the transport took, and the end of its tool call
 interface StubMcpCall {

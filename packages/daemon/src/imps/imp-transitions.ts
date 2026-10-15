@@ -1,4 +1,4 @@
-import type { ImpState } from '@imp/api';
+import type { ImpState } from '@impz/api';
 import { buildInvalidStateError } from '../api-errors';
 
 // The imp lifecycle. Destroy is allowed from every state and removes the

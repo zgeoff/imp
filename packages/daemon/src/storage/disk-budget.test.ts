@@ -1,6 +1,6 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { findImpByName } from '../db/imps';
 import { buildTestApp, createImpTest } from '../imps/test-imps';
 import type { ImpTestOptions } from '../imps/test-imps';

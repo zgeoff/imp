@@ -1,4 +1,4 @@
-import { PublicAuthSchema } from '@imp/api';
+import { PublicAuthSchema } from '@impz/api';
 import type {
   ColdBootCause,
   EgressPolicy,
@@ -8,7 +8,7 @@ import type {
   ImpState,
   MoveState,
   PublicAuth,
-} from '@imp/api';
+} from '@impz/api';
 import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
 import { readErrorMessage } from '../read-error-message';

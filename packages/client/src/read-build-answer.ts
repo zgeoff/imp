@@ -3,9 +3,9 @@ import {
   ImageBuildErrorSchema,
   ImageBuildEventSchema,
   ImageBuildResultSchema,
-} from '@imp/api';
-import type { Image, ImageBuildProgress } from '@imp/api';
-import { splitLines } from '@imp/shared';
+} from '@impz/api';
+import type { Image, ImageBuildProgress } from '@impz/api';
+import { splitLines } from '@impz/shared';
 import { ORPCError } from '@orpc/client';
 
 // The image of impd's answer to `POST /images/build`: a stream of events, or

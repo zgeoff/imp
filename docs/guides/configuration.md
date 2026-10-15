@@ -30,12 +30,12 @@ error.
 | `IMP_SLEEP_MIN_GUEST_UPTIME_MS` | `1500`                                    | A sleep first waits until the guest has been up this long; `0` turns the wait off ([young guests](../architecture/lifecycle/sleep-and-wake.md#young-guests)).                                                                                                         |
 | `IMP_WATCHDOG_TIMEOUT_S`        | `60`                                      | Seconds an agent may stay silent before the [watchdog](../architecture/lifecycle/lifecycle.md#the-watchdog) acts.                                                                                                                                                     |
 | `IMP_WATCHDOG_ACTION`           | `report`                                  | What the watchdog does then: `report`, `restart` (boot cold), or `snapshot` (keep the memory, then boot cold).                                                                                                                                                        |
-| `IMP_DEFAULT_VCPUS`             | `2`                                       | vCPUs for `imp new` without `--cpus`.                                                                                                                                                                                                                                 |
-| `IMP_DEFAULT_MEMORY_MIB`        | `2048`                                    | Memory for `imp new` without `--memory`.                                                                                                                                                                                                                              |
-| `IMP_DEFAULT_DISK_GIB`          | `32`                                      | Disk for `imp new` without `--disk`; never less than the image's filesystem.                                                                                                                                                                                          |
+| `IMP_DEFAULT_VCPUS`             | `2`                                       | vCPUs for `impz new` without `--cpus`.                                                                                                                                                                                                                                |
+| `IMP_DEFAULT_MEMORY_MIB`        | `2048`                                    | Memory for `impz new` without `--memory`.                                                                                                                                                                                                                             |
+| `IMP_DEFAULT_DISK_GIB`          | `32`                                      | Disk for `impz new` without `--disk`; never less than the image's filesystem.                                                                                                                                                                                         |
 | `IMP_DISK_RESERVE_GIB`          | 5 % of the disk, at least 5               | Free space no write may take: creates, sleeps and image builds past it fail with `DISK_FULL` ([storage](../architecture/storage/disk-space.md#the-budget)).                                                                                                           |
-| `IMP_DEFAULT_IMAGE`             | `base`                                    | The image for `imp new` without `--image`. `ubuntu` is used until one by this name exists.                                                                                                                                                                            |
-| `IMP_BUILD_CONTEXT_MAX_MIB`     | `1024`                                    | The largest build context `imp image build` may upload ([images](./images.md#build-an-image)).                                                                                                                                                                        |
+| `IMP_DEFAULT_IMAGE`             | `base`                                    | The image for `impz new` without `--image`. `ubuntu` is used until one by this name exists.                                                                                                                                                                           |
+| `IMP_BUILD_CONTEXT_MAX_MIB`     | `1024`                                    | The largest build context `impz image build` may upload ([images](./images.md#build-an-image)).                                                                                                                                                                       |
 | `IMP_SESSION_LOG_MAX_MIB`       | `16`                                      | One session generation's log; it keeps at least half, the newest ([session logs](./session-logs.md#what-is-kept)).                                                                                                                                                    |
 | `IMP_SESSION_LOG_IMP_MAX_MIB`   | `64`                                      | All of one imp's session logs; ended ones go first ([session logs](./session-logs.md#what-is-kept)).                                                                                                                                                                  |
 | `IMP_SESSION_LOG_IMP_MAX_LIVE`  | `8`                                       | Live session logs per imp; a session past it runs unlogged ([session logs](./session-logs.md#what-is-kept)).                                                                                                                                                          |
@@ -115,7 +115,7 @@ With `IMP_DOMAIN` set, impd serves every imp at `https://<name>.<domain>` on the
 | `IMP_HTTP_PORT`          | `80`           | The port that redirects to HTTPS.                                                                                                                                   |
 
 [Public imps](./https.md#public-imps) need `IMP_DOMAIN` too. Without `IMP_PUBLIC_IP`, every imp is
-tailnet-only and `imp expose` fails.
+tailnet-only and `impz expose` fails.
 
 | Variable                | Default | Meaning                                                                                 |
 | ----------------------- | ------- | --------------------------------------------------------------------------------------- |
@@ -259,22 +259,24 @@ one on a throwaway pool.
 
 ## CLI
 
-The CLI keeps named impd hosts in `~/.config/imp/config.json` (under `XDG_CONFIG_HOME` when set).
+The CLI keeps named impd hosts in `~/.config/impz/config.json` (under `XDG_CONFIG_HOME` when set).
 The file holds each host's URL and token, so the CLI writes it with mode 0600 and warns when other
-users can read it. No command prints a token.
+users can read it. No command prints a token. On its first run, the CLI moves `config.json` and
+`token` from `~/.config/imp/`, where the CLI kept them before its rename to `impz`, unless
+`~/.config/impz/` exists.
 
 ```sh
-imp login https://imp.example.ts.net             # asks for the token; saves the host "imp"
-scripts/dev/dev.sh token | imp login http://localhost:7070 --name dev
-imp hosts                                         # the saved hosts; * marks the current one
-imp host use dev                                  # make another host current
-imp --host imp ls                                 # one call to a host other than the current
-imp ls --all                                      # the imps on every saved host
-imp new web --place                               # on the saved host with the most free RAM
-imp host rm dev
+impz login https://imp.example.ts.net             # asks for the token; saves the host "imp"
+scripts/dev/dev.sh token | impz login http://localhost:7070 --name dev
+impz hosts                                         # the saved hosts; * marks the current one
+impz host use dev                                  # make another host current
+impz --host impz ls                                  # one call to a host other than the current
+impz ls --all                                      # the imps on every saved host
+impz new web --place                               # on the saved host with the most free RAM
+impz host rm dev
 ```
 
-`imp login` reads the token from piped stdin, or asks for it at a prompt that does not echo. It
+`impz login` reads the token from piped stdin, or asks for it at a prompt that does not echo. It
 checks the token with impd and saves the host only when impd accepts it. `--no-verify` skips the
 check, and `--name` sets the host name; the default is the first label of the URL's hostname. The
 CLI warns when you log in over plain http to a host that is not loopback.
@@ -284,12 +286,12 @@ The CLI takes the impd URL and its token from one source, the first of these tha
 1. `--host <name>`: that saved host's URL and token.
 2. `IMP_HOST=<name>`: the same, for a whole shell.
 3. `IMP_URL`: that URL, with `IMP_TOKEN` as its token, or no token.
-4. The current saved host (`imp host use`), with `IMP_TOKEN` in place of its token when set.
-5. `http://localhost:7070` with `IMP_TOKEN`, or the token in `~/.config/imp/token`.
+4. The current saved host (`impz host use`), with `IMP_TOKEN` in place of its token when set.
+5. `http://localhost:7070` with `IMP_TOKEN`, or the token in `~/.config/impz/token`.
 
 So a saved token never goes to the URL in `IMP_URL`, and `IMP_TOKEN` never goes to a host that
-`--host` or `IMP_HOST` names. An empty variable counts as unset. `imp ls --all` and
-`imp new --place` call every saved host, each with its own token, and ignore this list
+`--host` or `IMP_HOST` names. An empty variable counts as unset. `impz ls --all` and
+`impz new --place` call every saved host, each with its own token, and ignore this list
 ([more than one host](./hosts.md)).
 
 | Variable          | Default     | Meaning                                                                    |
@@ -307,13 +309,13 @@ it.
 
 ### Shell completions
 
-`imp completion bash|zsh|fish` prints a completion script for commands and flags. The Homebrew
+`impz completion bash|zsh|fish` prints a completion script for commands and flags. The Homebrew
 formula installs all three, once the tap is set up. By hand:
 
 ```sh
-eval "$(imp completion bash)"                    # in ~/.bashrc
-imp completion zsh > "${fpath[1]}/_imp"          # or eval "$(imp completion zsh)" in ~/.zshrc
-imp completion fish > ~/.config/fish/completions/imp.fish
+eval "$(impz completion bash)"                    # in ~/.bashrc
+impz completion zsh > "${fpath[1]}/_impz"          # or eval "$(impz completion zsh)" in ~/.zshrc
+impz completion fish > ~/.config/fish/completions/impz.fish
 ```
 
 ## Not covered here

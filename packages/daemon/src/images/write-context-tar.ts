@@ -1,6 +1,6 @@
 import { open } from 'node:fs/promises';
-import { writeLocalEntries } from '@imp/local-tar';
-import type { LocalEntry } from '@imp/local-tar';
+import { writeLocalEntries } from '@impz/local-tar';
+import type { LocalEntry } from '@impz/local-tar';
 import { printLog } from '../process/print-log';
 
 const NO_PROGRESS = { add: () => {} };

@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/proto"
 )
 
 // A failed clock read leaves uptime_ms out instead of reporting 0, which

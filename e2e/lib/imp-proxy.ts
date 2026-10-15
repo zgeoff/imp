@@ -3,7 +3,7 @@ import type { Socket } from 'node:net';
 import { startImp } from './imp-cli';
 import { waitFor } from './wait-for';
 
-// Helpers for the proxy suites: `imp proxy` run as a user would, and TCP
+// Helpers for the proxy suites: `impz proxy` run as a user would, and TCP
 // clients through it.
 
 export const PAGE = 'e2e-tiny-ok\n';
@@ -37,7 +37,7 @@ async function collectOutput(stream: ReadableStream<Uint8Array>, sink: OutputSin
   }
 }
 
-// `imp proxy <name> <specs>`, once it printed a line for every forward
+// `impz proxy <name> <specs>`, once it printed a line for every forward
 export async function startProxy(name: string, ...specs: readonly string[]): Promise<RunningProxy> {
   const proc = await startImp(['proxy', name, ...specs]);
 
@@ -47,11 +47,11 @@ export async function startProxy(name: string, ...specs: readonly string[]): Pro
   void collectOutput(proc.stderr, stderr);
   void collectOutput(proc.stdout, stdout);
 
-  const ports = await waitFor('imp proxy to listen', () => {
+  const ports = await waitFor('impz proxy to listen', () => {
     const found = [...stdout.text.matchAll(/forwarding localhost:(?<port>\d+) ->/gv)];
 
     if (found.length < specs.length) {
-      throw new Error(`imp proxy printed ${stdout.text}${stderr.text}`);
+      throw new Error(`impz proxy printed ${stdout.text}${stderr.text}`);
     }
 
     return found.map((match) => Number(match.groups?.['port']));
@@ -68,7 +68,7 @@ export async function startProxy(name: string, ...specs: readonly string[]): Pro
   };
 }
 
-// where each reverse forward listens in the imp, in the order `imp proxy
+// where each reverse forward listens in the imp, in the order `impz proxy
 // --reverse` printed them: a path, or a port
 export function parseReverseForwards(stdout: string): string[] {
   return [...stdout.matchAll(/^forwarding [^:]+:(?<guest>\S+) ->/gmv)].map(
@@ -83,7 +83,7 @@ export interface RunningReverse {
   readonly stop: () => Promise<number>;
 }
 
-// `imp proxy <name> --reverse <spec>...`, once it printed a line for each
+// `impz proxy <name> --reverse <spec>...`, once it printed a line for each
 export async function startReverse(
   name: string,
   ...specs: readonly string[]
@@ -96,11 +96,11 @@ export async function startReverse(
   void collectOutput(proc.stderr, stderr);
   void collectOutput(proc.stdout, stdout);
 
-  const guests = await waitFor('imp proxy --reverse to listen', () => {
+  const guests = await waitFor('impz proxy --reverse to listen', () => {
     const found = parseReverseForwards(stdout.text);
 
     if (found.length < specs.length) {
-      throw new Error(`imp proxy printed ${stdout.text}${stderr.text}`);
+      throw new Error(`impz proxy printed ${stdout.text}${stderr.text}`);
     }
 
     return found;

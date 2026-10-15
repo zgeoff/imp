@@ -23,7 +23,7 @@ test('it passes a time within the limit in an acceptance run', () => {
     [
       process.execPath,
       '-e',
-      `import { checkLimit } from ${JSON.stringify(join(import.meta.dir, 'check-limit.ts'))}; checkLimit('imp new', 500, 500);`,
+      `import { checkLimit } from ${JSON.stringify(join(import.meta.dir, 'check-limit.ts'))}; checkLimit('impz new', 500, 500);`,
     ],
     { cwd: ctx.dir, env: { PATH: process.env['PATH'] ?? '', E2E_ACCEPTANCE: '1' } },
   );
@@ -42,13 +42,13 @@ test('it fails a time over the limit in an acceptance run', () => {
     [
       process.execPath,
       '-e',
-      `import { checkLimit } from ${JSON.stringify(join(import.meta.dir, 'check-limit.ts'))}; checkLimit('imp new', 501, 500);`,
+      `import { checkLimit } from ${JSON.stringify(join(import.meta.dir, 'check-limit.ts'))}; checkLimit('impz new', 501, 500);`,
     ],
     { cwd: ctx.dir, env: { PATH: process.env['PATH'] ?? '', E2E_ACCEPTANCE: '1' } },
   );
 
   expect(result.exitCode).toBe(1);
-  expect(result.stderr.toString()).toInclude('imp new took 501 ms, over the 500 ms limit');
+  expect(result.stderr.toString()).toInclude('impz new took 501 ms, over the 500 ms limit');
 });
 
 test('it warns of a time over the limit outside an acceptance run', () => {
@@ -58,13 +58,13 @@ test('it warns of a time over the limit outside an acceptance run', () => {
     [
       process.execPath,
       '-e',
-      `import { checkLimit } from ${JSON.stringify(join(import.meta.dir, 'check-limit.ts'))}; checkLimit('imp new', 501, 500);`,
+      `import { checkLimit } from ${JSON.stringify(join(import.meta.dir, 'check-limit.ts'))}; checkLimit('impz new', 501, 500);`,
     ],
     { cwd: ctx.dir, env: { PATH: process.env['PATH'] ?? '' } },
   );
 
   expect({ exitCode: result.exitCode, stdout: result.stdout.toString() }).toStrictEqual({
     exitCode: 0,
-    stdout: '    warning: imp new took 501 ms, over the 500 ms limit\n',
+    stdout: '    warning: impz new took 501 ms, over the 500 ms limit\n',
   });
 });

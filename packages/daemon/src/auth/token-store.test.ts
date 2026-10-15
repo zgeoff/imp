@@ -3,7 +3,7 @@ import { chmodSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { createSecret, findSecret } from '../db/secrets';
 import { removeTokenRecord, writeTokenRecord } from '../db/tokens';
 import { createAuthorizedKeys, formatKeyFingerprint } from '../ssh/authorized-keys';

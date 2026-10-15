@@ -2,22 +2,22 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { server } from '@imp/test-utils/mock-server';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { runCli } from '../test-utils/start-cli';
@@ -273,11 +273,11 @@ test('it draws the send’s progress on a terminal and ends the line', async () 
     (line: string) =>
       line.startsWith('\r') &&
       line.endsWith('\u001B[K') &&
-      /^imp move: \d+% \d+\.\d MiB of \d+\.\d MiB$/u.test(line.slice(1, -3)),
+      /^impz move: \d+% \d+\.\d MiB of \d+\.\d MiB$/u.test(line.slice(1, -3)),
   );
 });
 
-test('it moves an imp that holds leases for --stop, which ends them as imp stop does', async () => {
+test('it moves an imp that holds leases for --stop, which ends them as impz stop does', async () => {
   const ctx = await setupTest();
 
   await ctx.from.imps.create({ name: 'dev' });
@@ -480,7 +480,7 @@ test('it points at --resume when the target’s commit window ended before the c
     }),
   ).rejects.toThrowWithMessage(
     Error,
-    'dev: the move failed: commit: the target answered 410 the commit window ended; reissue the ticket; run imp move dev b --resume, or --abort',
+    'dev: the move failed: commit: the target answered 410 the commit window ended; reissue the ticket; run impz move dev b --resume, or --abort',
   );
 });
 
@@ -512,7 +512,7 @@ test('it points at --abort when the network to the target is down', async () => 
     }),
   ).rejects.toThrowWithMessage(
     Error,
-    'dev: the move failed: Failed to fetch; the imp stays marked here: run imp move dev b --abort once b answers',
+    'dev: the move failed: Failed to fetch; the imp stays marked here: run impz move dev b --abort once b answers',
   );
 });
 
@@ -695,7 +695,7 @@ test('it refuses --resume of an imp with no verified move', async () => {
     }),
   ).rejects.toThrowWithMessage(
     UsageError,
-    'dev has no verified move to resume (state: none); run imp move again',
+    'dev has no verified move to resume (state: none); run impz move again',
   );
 });
 
@@ -707,7 +707,7 @@ test('it refuses --resume together with --abort', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --resume and --abort do not go together\n',
+    stderr: 'impz: --resume and --abort do not go together\n',
     code: 2,
   });
 });

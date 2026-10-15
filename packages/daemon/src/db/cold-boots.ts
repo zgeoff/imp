@@ -1,4 +1,4 @@
-import type { ColdBoot, ColdBootCause } from '@imp/api';
+import type { ColdBoot, ColdBootCause } from '@impz/api';
 import type { Transaction } from 'kysely';
 import type { ImpDatabase } from './open-database';
 import type { DB } from './schema';

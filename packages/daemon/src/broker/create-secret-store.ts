@@ -1,4 +1,4 @@
-import type { BrokerRule, OAuthConfig, Secret, SecretAdded, SecretKind } from '@imp/api';
+import type { BrokerRule, OAuthConfig, Secret, SecretAdded, SecretKind } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import type { ImpDatabase } from '../db/open-database';

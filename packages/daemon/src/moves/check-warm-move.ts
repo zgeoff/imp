@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { WarmHost, WarmMove } from '@imp/api';
+import type { WarmHost, WarmMove } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
@@ -68,12 +68,12 @@ export async function checkWarmMove(
     .map((member) => member.network);
 
   if (networks.length > 0) {
-    mismatches.push(`it is on private networks (${networks.join(', ')}); imp net leave first`);
+    mismatches.push(`it is on private networks (${networks.join(', ')}); impz net leave first`);
   }
 
   if (mismatches.length > 0) {
     throw new ORPCError('PRECONDITION_FAILED', {
-      message: `${imp.name} cannot move with its memory: ${mismatches.join('; ')}. imp move --stop moves it cold`,
+      message: `${imp.name} cannot move with its memory: ${mismatches.join('; ')}. impz move --stop moves it cold`,
     });
   }
 

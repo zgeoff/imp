@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { buildStubNft } from '../test-utils/build-stub-nft';
 import { createStubNftBin } from '../test-utils/create-stub-nft-bin';
 import { createNftRunner, createNftWriter, formatNftError } from './egress-firewall';

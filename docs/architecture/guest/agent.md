@@ -46,7 +46,7 @@ namespaces, and the agent's network and hostname. Its PID 1 is the agent binary 
 mode: it pivots into the user disk, mounts fresh `/proc`, `/sys`, `/dev` and `/run` there, binds the
 system drive read-only at `/run/imp/sys`, and then forks every user process for the agent over a
 socket, since a Go process cannot join a mount namespace. Inside, the system drive gives every image
-the helpers impd runs, such as the SFTP server and the tar of `imp cp`.
+the helpers impd runs, such as the SFTP server and the tar of `impz cp`.
 
 The container exists so that user processes cannot take the agent down by accident. `rm -rf /`,
 `kill -9 -1`, a reboot inside or a full memory ends the container, not the agent. When the inner
@@ -55,9 +55,9 @@ with a growing delay. TCP ports and files on the user disk stay. A container tha
 after its start is a bad start, and after several in a short window the agent gives up until the
 next boot, reports the container down in its ping, and fails each spawn with `INNER_DOWN`. impd
 keeps the latest ping's report in memory for each awake imp, from the ping it sends beside each idle
-check, so `imp ls` marks an imp whose container is down and `imp info <name>` shows its restarts and
-last error. After an `rm -rf /` the container stays up with nothing to run, and a checkpoint restore
-brings the files back.
+check, so `impz ls` marks an imp whose container is down and `impz info <name>` shows its restarts
+and last error. After an `rm -rf /` the container stays up with nothing to run, and a checkpoint
+restore brings the files back.
 
 The agent reads and writes user files only by resolving each path inside the inner root, so a
 symlink planted in the user's files cannot lead out, and it opens only regular files without

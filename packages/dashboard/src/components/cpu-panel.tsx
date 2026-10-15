@@ -1,6 +1,6 @@
-import { formatBytes, formatDuration } from '@imp/shared';
+import type { Imp } from '@impz/client';
+import { formatBytes, formatDuration } from '@impz/shared';
 import { useMutation } from '@tanstack/react-query';
-import type { Imp } from '@zgeoff/imp-client';
 import { formatCpuUse } from '../lib/format';
 import { useImpd } from '../lib/impd';
 import { readInteger, readText } from '../lib/read-form';

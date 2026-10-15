@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import { EgressPolicySchema, NameSchema } from '@imp/api';
+import { EgressPolicySchema, NameSchema } from '@impz/api';
 import { Collection } from '@msw/data';
 import * as z from 'zod';
 

@@ -12,9 +12,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/disk"
-	"github.com/zgeoff/imp/agent/internal/files"
-	"github.com/zgeoff/imp/agent/internal/inner"
+	"github.com/zgeoff/impz/agent/internal/disk"
+	"github.com/zgeoff/impz/agent/internal/files"
+	"github.com/zgeoff/impz/agent/internal/inner"
 )
 
 const (

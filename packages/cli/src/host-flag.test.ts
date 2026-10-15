@@ -13,7 +13,7 @@ test('it takes --host= out when it comes after the command', () => {
   });
 });
 
-test('it leaves --host after -- to the command imp exec runs', () => {
+test('it leaves --host after -- to the command impz exec runs', () => {
   expect(splitHostFlag(['exec', 'box', '--', 'curl', '--host', 'x'])).toStrictEqual({
     host: null,
     args: ['exec', 'box', '--', 'curl', '--host', 'x'],
@@ -25,7 +25,7 @@ test.each([[['ls', '--host']], [['--host', '--json', 'ls']], [['--host=']], [['-
   (args) => {
     expect(() => splitHostFlag(args)).toThrowWithMessage(
       UsageError,
-      '--host needs a saved host name (see imp host ls)',
+      '--host needs a saved host name (see impz host ls)',
     );
   },
 );

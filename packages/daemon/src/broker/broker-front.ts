@@ -1,7 +1,7 @@
 import { createConnection, createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
 import { pipeline } from 'node:stream';
-import type { AuditRefusal, EgressMode } from '@imp/api';
+import type { AuditRefusal, EgressMode } from '@impz/api';
 import type { NewAuditEntry } from '../db/broker-audit';
 import type { BrokerPeer } from '../db/secrets';
 import { isTunnelAllowed } from '../egress/egress-rules';

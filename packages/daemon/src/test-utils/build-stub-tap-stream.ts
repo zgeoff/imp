@@ -1,4 +1,4 @@
-import type { SessionOutput } from '@imp/api';
+import type { SessionOutput } from '@impz/api';
 import type { ExecEvent, ExecStream } from '../agent-client/exec-stream';
 
 interface TapState {

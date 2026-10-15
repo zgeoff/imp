@@ -1,4 +1,4 @@
-module github.com/zgeoff/imp/agent
+module github.com/zgeoff/impz/agent
 
 go 1.26.0
 

@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { sql } from 'kysely';
 import { createSecretFiles } from '../broker/secret-files';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';

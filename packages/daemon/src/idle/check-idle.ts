@@ -8,7 +8,7 @@ export interface IdleSignals {
   // authenticated SSH connections, with or without a channel open
   readonly sshConnections: number;
 
-  // `imp proxy` connections
+  // `impz proxy` connections
   readonly tunnelConnections: number;
   readonly tcpEstablished: number;
 

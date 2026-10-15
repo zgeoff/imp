@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { isIPv4 } from 'node:net';
-import { WarmHostSchema } from '@imp/api';
+import { WarmHostSchema } from '@impz/api';
 import { buildMockWarmHost } from './build-mock-warm-host';
 
 test('it builds a default warm host', () => {

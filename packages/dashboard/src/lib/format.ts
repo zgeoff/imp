@@ -1,5 +1,5 @@
-import { formatBytes, formatMib } from '@imp/shared';
-import type { Imp } from '@zgeoff/imp-client';
+import type { Imp } from '@impz/client';
+import { formatBytes, formatMib } from '@impz/shared';
 
 const RELATIVE_STEPS = [
   { limit: 60, divisor: 1, unit: 's' },

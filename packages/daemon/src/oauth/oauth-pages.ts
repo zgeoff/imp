@@ -37,7 +37,7 @@ export function renderPendingPage(view: Readonly<PendingView>, issuerHost: strin
       'Approve this sign-in',
       `<p><strong>${encodeHtml(view.clientName)}</strong> asks to use the imps on <strong>${encodeHtml(issuerHost)}</strong>, with up to <strong>${encodeHtml(view.requestedScope)}</strong> scope. It returns to <strong>${encodeHtml(returnsTo)}</strong>.</p>
 <p>If you started this sign-in, approve it with a named imp token:</p>
-<pre>imp oauth approve ${encodeHtml(view.approvalCode)}</pre>
+<pre>impz oauth approve ${encodeHtml(view.approvalCode)}</pre>
 <p>Then press Continue. Approve only a sign-in you started: anyone can open this page for a client this host knows. The code ends in 10 minutes.</p>
 <form method="post" action="/oauth/authorize">${hidden}<button name="action" value="continue">Continue</button> <button name="action" value="deny">Deny</button></form>`,
     );

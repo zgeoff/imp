@@ -1,4 +1,4 @@
-import { NameSchema } from '@imp/api';
+import { NameSchema } from '@impz/api';
 import * as z from 'zod';
 
 const MAX_NAME_LENGTH = 31;

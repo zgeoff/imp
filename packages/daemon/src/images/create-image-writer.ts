@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NameSchema } from '@imp/api';
-import type { ImageBuildPhase } from '@imp/api';
+import { NameSchema } from '@impz/api';
+import type { ImageBuildPhase } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { buildConflictError } from '../api-errors';

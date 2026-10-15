@@ -3,9 +3,9 @@ import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ImpContract } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import type { ImpContract } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -277,7 +277,7 @@ test('it removes an imp no row names when asked for orphans, and keeps a live im
   expect(readdirSync(join(ctx.dataDir, 'imps'))).toStrictEqual([dev.id]);
 });
 
-test('it keeps every orphan of a lost database through start, the hourly pass and imp gc', async () => {
+test('it keeps every orphan of a lost database through start, the hourly pass and impz gc', async () => {
   const ctx = await setupTest();
 
   const log = mock<(message: string) => void>();
@@ -335,7 +335,7 @@ test('it keeps every orphan of a lost database through start, the hourly pass an
     'imp b',
   ]);
 
-  // each orphan once, then only the count while the set stays; imp gc
+  // each orphan once, then only the count while the set stays; impz gc
   // returns them instead
   const lines = log.mock.calls.map(([line]) => line);
 
@@ -346,7 +346,7 @@ test('it keeps every orphan of a lost database through start, the hourly pass an
   expect(lines).toHaveLength(5);
 });
 
-test('it keeps what a lost database leaves on ZFS through the hourly pass and imp gc', async () => {
+test('it keeps what a lost database leaves on ZFS through the hourly pass and impz gc', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'storage-gc-zfs-'));
 
   onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
@@ -543,7 +543,7 @@ test('it waits with orphans for a destroy that holds the gate', async () => {
   expect(readdirSync(join(ctx.dataDir, 'imps'))).toStrictEqual([]);
 });
 
-test('it refuses imp gc while operations keep storage busy', async () => {
+test('it refuses impz gc while operations keep storage busy', async () => {
   const database = await createTestDatabase();
 
   const storageGate = createStorageGate();

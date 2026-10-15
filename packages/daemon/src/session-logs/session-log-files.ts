@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import type { SessionLog, SessionLogRead } from '@imp/api';
-import { SESSION_LOG_READ_MAX_BYTES } from '@imp/api';
+import type { SessionLog, SessionLogRead } from '@impz/api';
+import { SESSION_LOG_READ_MAX_BYTES } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { writeFileDurably } from '../process/write-file-durably';
 import {

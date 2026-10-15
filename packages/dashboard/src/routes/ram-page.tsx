@@ -1,7 +1,7 @@
-import { formatMib } from '@imp/shared';
+import type { Imp } from '@impz/client';
+import { formatMib } from '@impz/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import type { Imp } from '@zgeoff/imp-client';
 import { ErrorText } from '../components/error-text';
 import { RamMeter } from '../components/ram-meter';
 import { StateBadge } from '../components/state-badge';

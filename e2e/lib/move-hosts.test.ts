@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { BlockList } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildStubAnswerQueue } from '@imp/test-utils/build-stub-answer-queue';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { buildStubAnswerQueue } from '@impz/test-utils/build-stub-answer-queue';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { REPO_ROOT, instance } from './instance';
 import type { HostBFixtureDeps } from './move-hosts';
 import {

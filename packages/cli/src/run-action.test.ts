@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ORPCError } from '@zgeoff/imp-client';
+import { ORPCError } from '@impz/client';
 import { formatError, formatUnauthorized } from './run-action';
 
 test('#formatError lists the validation issues of a BAD_REQUEST', () => {
@@ -35,7 +35,7 @@ test('#formatError prints the token hint for a 401 when no saved host was used',
   const error = new ORPCError('UNAUTHORIZED', { status: 401 });
 
   expect(formatError(error)).toBe(
-    'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>',
+    'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run impz login <url>',
   );
 });
 
@@ -45,7 +45,7 @@ test('#formatError names the saved host to log in to again for a 401', () => {
   expect(
     formatError(error, { host: 'work', url: 'https://imp.example.com', token: 'secret' }),
   ).toBe(
-    'unauthorized: work (https://imp.example.com) refused the token; run imp login https://imp.example.com --name work',
+    'unauthorized: work (https://imp.example.com) refused the token; run impz login https://imp.example.com --name work',
   );
 });
 
@@ -59,12 +59,12 @@ test('#formatError prints a thrown value that is no error as text', () => {
 
 test('#formatUnauthorized prints the token hint when there is no config', () => {
   expect(formatUnauthorized(null)).toBe(
-    'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>',
+    'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run impz login <url>',
   );
 });
 
 test('#formatUnauthorized prints the token hint for a config from IMP_URL', () => {
   expect(formatUnauthorized({ host: null, url: 'http://127.0.0.1:7070', token: 'secret' })).toBe(
-    'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>',
+    'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run impz login <url>',
   );
 });

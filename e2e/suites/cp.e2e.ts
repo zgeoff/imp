@@ -27,7 +27,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// `imp cp` (docs/guides/cp.md) on the e2e-git image, whose USER is `dev`, not
+// `impz cp` (docs/guides/cp.md) on the e2e-git image, whose USER is `dev`, not
 // root: what a copy makes belongs to the owner of the directory it lands in
 // unless --owner says otherwise.
 
@@ -208,7 +208,7 @@ test('it fails with the path when the path is not in the imp', async () => {
   expect(result).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toInclude('/no/such') });
 });
 
-test('it refuses with AGENT_OUTDATED an imp whose agent predates imp cp', async () => {
+test('it refuses with AGENT_OUTDATED an imp whose agent predates impz cp', async () => {
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}old`;

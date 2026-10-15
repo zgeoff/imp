@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
 import { buildMockEd25519Key } from './build-mock-ed25519-key';
 import { instance } from './instance';

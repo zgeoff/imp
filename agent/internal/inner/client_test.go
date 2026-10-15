@@ -9,7 +9,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/reaper"
 )
 
 func TestWaitReadyRefusesAnInitThatSpeaksBeforeItIsReady(t *testing.T) {

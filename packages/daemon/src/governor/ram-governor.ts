@@ -1,4 +1,4 @@
-import { EVENT_VERSION } from '@imp/api';
+import { EVENT_VERSION } from '@impz/api';
 import { buildImpOverBudgetError, buildRamBudgetError, readNeededMib } from '../api-errors';
 import type { ProtectedImp } from '../api-errors';
 import type { EventBus } from '../events/event-bus';

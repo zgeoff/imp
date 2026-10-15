@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { WarmMove } from '@imp/api';
+import type { WarmMove } from '@impz/api';
 
 export interface WarmMoveOverrides {
   readonly slot?: number;

@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { connect } from 'node:net';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import * as dnsPacket from 'dns-packet';
 import { parseSubnet } from '../net/addressing';
 import { buildMockDnsQuery } from '../test-utils/build-mock-dns-query';

@@ -36,7 +36,7 @@ interface ExecFrame {
 const DimensionSchema = z.int().min(1).max(65_535);
 
 // A tool runs from the system drive as root, with argv as its arguments:
-// `tar` is `imp-agent tar`, the guest end of `imp cp`.
+// `tar` is `imp-agent tar`, the guest end of `impz cp`.
 const EXEC_TOOLS = ['tar'] as const;
 
 export type ExecTool = (typeof EXEC_TOOLS)[number];
@@ -84,7 +84,7 @@ export const ExecStartMessageSchema = z
     tool: z.enum(EXEC_TOOLS).optional(),
 
     // runs as root in the agent's own world, outside the container user
-    // code runs in, with the system drive's busybox: `imp exec --agent`.
+    // code runs in, with the system drive's busybox: `impz exec --agent`.
     // It needs host-wide manage scope, and no exec ticket starts one.
     outer: z.boolean().optional(),
 

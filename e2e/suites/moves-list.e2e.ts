@@ -12,7 +12,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// `imp ls --all` across A and B on the harness's move network
+// `impz ls --all` across A and B on the harness's move network
 // (lib/move-hosts.ts), with both saved in a CLI config of the test's own.
 
 // one stack for every release, on both hosts
@@ -29,7 +29,7 @@ async function setupTest() {
   return { prefix: readSuitePrefix('moves'), stack, hosts, client, clientB };
 }
 
-test('it shows both hosts in imp ls --all, with the move mark while the imp moves', async () => {
+test('it shows both hosts in impz ls --all, with the move mark while the imp moves', async () => {
   const ctx = await setupTest();
 
   const seen = `${ctx.prefix}seen`;

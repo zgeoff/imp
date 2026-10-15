@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Imp } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
+import type { Imp } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
@@ -758,7 +758,7 @@ test('it leaves an imp that took a refused fork’s name before the fork’s cle
   await ctx.impd.imps.destroyImp('dev');
   await ctx.impd.imps.createImp({ name: 'dev', image: 'base' });
 
-  // The next write is the fork's row, made under the fork's lock: `imp rm` of
+  // The next write is the fork's row, made under the fork's lock: `impz rm` of
   // the fork, then a new `copy`, queue on that lock ahead of the refused
   // fork's cleanup.
   const queued: { row?: ImpRecord; removed?: Promise<void>; taker?: Promise<Imp> } = {};

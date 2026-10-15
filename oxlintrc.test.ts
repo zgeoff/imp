@@ -102,7 +102,7 @@ test.each([['shared'], ['api'], ['client']])('it refuses a node: import in packa
     .map((diagnostic) => diagnostic.help);
 
   expect([...new Set(messages)]).toStrictEqual([
-    'Keep this package runtime-neutral: no node: import in @imp/shared, @imp/api or the client.',
+    'Keep this package runtime-neutral: no node: import in @impz/shared, @impz/api or the client.',
   ]);
 });
 
@@ -127,14 +127,14 @@ test.each([
 });
 
 test.each([
-  ['packages/daemon/src/imps/fixture.ts', '@imp/test-utils/wait-for'],
+  ['packages/daemon/src/imps/fixture.ts', '@impz/test-utils/wait-for'],
   ['packages/daemon/src/imps/fixture.ts', '../test-utils/build-stub-vmm'],
   ['packages/cli/src/fixture.ts', './test-utils/start-cli'],
   ['packages/dashboard/src/fixture.ts', './mocks/db/imp-collection'],
   ['packages/client/src/fixture.ts', '../smoke/run-stub-impd'],
 
-  // the client may import @imp/api, but not the api's test helpers
-  ['packages/client/src/fixture.ts', '@imp/api/test-utils/build-mock-image'],
+  // the client may import @impz/api, but not the api's test helpers
+  ['packages/client/src/fixture.ts', '@impz/api/test-utils/build-mock-image'],
 ])('it refuses production code in %s that imports %s', (path, source) => {
   const ctx = setupTest();
   const file = join(ctx.dir, path);
@@ -165,7 +165,7 @@ test.each([
 
   writeFileSync(
     file,
-    "import { waitFor } from '@imp/test-utils/wait-for';\n\nexport const wait = waitFor;\n",
+    "import { waitFor } from '@impz/test-utils/wait-for';\n\nexport const wait = waitFor;\n",
   );
 
   const result = Bun.spawnSync([ctx.oxlint, '--format', 'json', file], { cwd: ctx.dir });
@@ -179,30 +179,30 @@ test.each([
 });
 
 test.each([
-  ['shared', '@imp/api', '@imp/shared imports no @imp/* package.'],
-  ['local-tar', '@imp/api', '@imp/local-tar is a leaf: it may import only @imp/shared.'],
-  ['test-utils', '@imp/api', '@imp/test-utils is a leaf: it may import only @imp/shared.'],
-  ['api', '@zgeoff/imp-client', '@imp/api may import only @imp/shared.'],
-  ['client', '@imp/mcp', 'The client may import only @imp/shared and @imp/api.'],
+  ['shared', '@impz/api', '@impz/shared imports no @impz/* package.'],
+  ['local-tar', '@impz/api', '@impz/local-tar is a leaf: it may import only @impz/shared.'],
+  ['test-utils', '@impz/api', '@impz/test-utils is a leaf: it may import only @impz/shared.'],
+  ['api', '@impz/client', '@impz/api may import only @impz/shared.'],
+  ['client', '@impz/mcp', 'The client may import only @impz/shared and @impz/api.'],
   [
     'mcp',
-    '@imp/daemon/src/config',
-    '@imp/mcp may import only @imp/shared, @imp/local-tar, @imp/api and the client.',
+    '@impz/daemon/src/config',
+    '@impz/mcp may import only @impz/shared, @impz/local-tar, @impz/api and the client.',
   ],
   [
     'cli',
-    '@imp/daemon/src/create-impd',
-    '@imp/cli is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app.',
+    '@impz/daemon/src/create-impd',
+    '@impz/cli is an app: it may import @impz/shared, @impz/local-tar, @impz/api, the client and @impz/mcp, never another app.',
   ],
   [
     'daemon',
-    '@imp/cli',
-    '@imp/daemon is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app.',
+    '@impz/cli',
+    '@impz/daemon is an app: it may import @impz/shared, @impz/local-tar, @impz/api, the client and @impz/mcp, never another app.',
   ],
   [
     'dashboard',
-    '@imp/daemon/src/auth/authenticate',
-    '@imp/dashboard is an app: it may import @imp/shared, @imp/local-tar, @imp/api, the client and @imp/mcp, never another app.',
+    '@impz/daemon/src/auth/authenticate',
+    '@impz/dashboard is an app: it may import @impz/shared, @impz/local-tar, @impz/api, the client and @impz/mcp, never another app.',
   ],
 ])('it refuses packages/%s importing %s', (pkg, source, message) => {
   const ctx = setupTest();
@@ -222,14 +222,14 @@ test.each([
 });
 
 test.each([
-  ['local-tar', '@imp/shared/format-bytes'],
-  ['api', '@imp/shared'],
-  ['client', '@imp/api'],
-  ['mcp', '@imp/local-tar'],
-  ['mcp', '@zgeoff/imp-client'],
-  ['cli', '@imp/mcp'],
-  ['daemon', '@zgeoff/imp-client'],
-  ['dashboard', '@imp/api'],
+  ['local-tar', '@impz/shared/format-bytes'],
+  ['api', '@impz/shared'],
+  ['client', '@impz/api'],
+  ['mcp', '@impz/local-tar'],
+  ['mcp', '@impz/client'],
+  ['cli', '@impz/mcp'],
+  ['daemon', '@impz/client'],
+  ['dashboard', '@impz/api'],
 ])('it allows packages/%s to import %s', (pkg, source) => {
   const ctx = setupTest();
   const file = join(ctx.dir, 'packages', pkg, 'src/fixture.ts');
@@ -278,11 +278,7 @@ test('it counts a type-only import against the package order', () => {
   const file = join(ctx.dir, 'packages/api/src/fixture.ts');
 
   mkdirSync(dirname(file), { recursive: true });
-
-  writeFileSync(
-    file,
-    "import type { Imp } from '@zgeoff/imp-client';\n\nexport type Used = Imp;\n",
-  );
+  writeFileSync(file, "import type { Imp } from '@impz/client';\n\nexport type Used = Imp;\n");
 
   const result = Bun.spawnSync([ctx.oxlint, '--format', 'json', file], { cwd: ctx.dir });
   const report = DiagnosticsSchema.parse(JSON.parse(result.stdout.toString()));
@@ -291,7 +287,7 @@ test('it counts a type-only import against the package order', () => {
     .filter((diagnostic) => diagnostic.code === 'eslint(no-restricted-imports)')
     .map((diagnostic) => diagnostic.help);
 
-  expect([...new Set(messages)]).toStrictEqual(['@imp/api may import only @imp/shared.']);
+  expect([...new Set(messages)]).toStrictEqual(['@impz/api may import only @impz/shared.']);
 });
 
 test('it counts a type-only re-export against the package order', () => {
@@ -299,7 +295,7 @@ test('it counts a type-only re-export against the package order', () => {
   const file = join(ctx.dir, 'packages/client/src/fixture.ts');
 
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, "export type { ImpDeps } from '@imp/daemon/src/create-impd';\n");
+  writeFileSync(file, "export type { ImpDeps } from '@impz/daemon/src/create-impd';\n");
 
   const result = Bun.spawnSync([ctx.oxlint, '--format', 'json', file], { cwd: ctx.dir });
   const report = DiagnosticsSchema.parse(JSON.parse(result.stdout.toString()));
@@ -309,6 +305,6 @@ test('it counts a type-only re-export against the package order', () => {
     .map((diagnostic) => diagnostic.help);
 
   expect([...new Set(messages)]).toStrictEqual([
-    'The client may import only @imp/shared and @imp/api.',
+    'The client may import only @impz/shared and @impz/api.',
   ]);
 });

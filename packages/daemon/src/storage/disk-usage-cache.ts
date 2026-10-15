@@ -1,4 +1,4 @@
-import type { ImpChangeReason } from '@imp/api';
+import type { ImpChangeReason } from '@impz/api';
 import { listCheckpoints } from '../db/checkpoints';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -49,8 +49,8 @@ interface DiskUsageCacheDeps {
   readonly startTimer?: StartTimer;
 }
 
-// Usage is slow to measure on XFS (FIEMAP over every file), so `imp ls` and
-// `imp info` read the last pass, with its time.
+// Usage is slow to measure on XFS (FIEMAP over every file), so `impz ls` and
+// `impz info` read the last pass, with its time.
 export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
   const now = deps.now ?? (() => new Date());
   const refreshDelayMs = deps.refreshDelayMs ?? REFRESH_DELAY_MS;

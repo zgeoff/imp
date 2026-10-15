@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { server } from '@imp/test-utils/mock-server';
+import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
 import { createChalltestsrvProvider } from './challtestsrv-provider';
 

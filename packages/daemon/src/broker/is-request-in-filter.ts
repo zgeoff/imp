@@ -1,4 +1,4 @@
-import type { GrantFilter } from '@imp/api';
+import type { GrantFilter } from '@impz/api';
 
 // An encoded slash or backslash, which an upstream may decode into a
 // segment break after the filter matched the path as one segment

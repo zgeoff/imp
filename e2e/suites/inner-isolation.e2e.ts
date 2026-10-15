@@ -215,7 +215,7 @@ test('it removes device nodes removed inside only inside, and execs still run', 
   expect(seen).toBe('gone');
 });
 
-test('it copies out with imp cp while the system drive is unmounted inside', async () => {
+test('it copies out with impz cp while the system drive is unmounted inside', async () => {
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}cp`;

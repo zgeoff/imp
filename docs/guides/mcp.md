@@ -1,6 +1,6 @@
 # MCP server
 
-`imp mcp` gives a coding agent imps as tools. The agent can create an imp, run a test suite in it,
+`impz mcp` gives a coding agent imps as tools. The agent can create an imp, run a test suite in it,
 checkpoint before a risky change, fork to try two fixes, and destroy what it does not need. The
 server speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio. It reaches
 impd as the rest of the CLI does: the current saved host, `--host`, or `IMP_URL` and `IMP_TOKEN`
@@ -14,7 +14,7 @@ impd also serves the same tools over HTTP at `/mcp`, for an agent on another mac
 The server needs a guard: the imps it may touch. Give the agent a prefix of its own:
 
 ```sh
-claude mcp add imp -- imp mcp --prefix agent-
+claude mcp add imp -- impz mcp --prefix agent-
 ```
 
 | Flag              | The tools may touch                                                    |
@@ -23,12 +23,12 @@ claude mcp add imp -- imp mcp --prefix agent-
 | `--allow a,b`     | the imps `a` and `b`; adds to `--prefix` when both are given           |
 | `--all`           | every imp on impd; it cannot be combined with the other two            |
 
-`imp mcp` with no guard exits 2. A prefix must start a valid imp name and be at most 23 characters,
+`impz mcp` with no guard exits 2. A prefix must start a valid imp name and be at most 23 characters,
 so a generated name fits in 31.
 
 The guard stops mistakes, such as an agent that destroys the wrong imp. It is not a security
-boundary: an agent that can read `~/.config/imp/config.json` or `IMP_TOKEN` can call impd without
-the server. The boundary is the token's scope, which impd enforces. Run `imp mcp` with a
+boundary: an agent that can read `~/.config/impz/config.json` or `IMP_TOKEN` can call impd without
+the server. The boundary is the token's scope, which impd enforces. Run `impz mcp` with a
 [scoped token](./tokens.md#mcp), such as `manage` on `agent-*`, to limit what the agent can do.
 
 ## Tools
@@ -55,7 +55,7 @@ failed call (impd's `NOT_FOUND`, a guard refusal, bad arguments) is a result wit
 its text led by the code. An unknown tool name is a protocol error (`-32602`).
 
 No tool reads or writes a file on the host. A sleeping imp wakes and a stopped one boots on the
-first exec or file call, as for `imp exec`.
+first exec or file call, as for `impz exec`.
 
 ## Exec
 
@@ -77,7 +77,7 @@ exit is a normal result, not a tool error.
   and start the imp to update its agent ([upgrade](./operations.md#upgrade)).
 - **Cancel.** A `notifications/cancelled` for an exec stops the command the same way, and the
   request gets no response. When the client goes away (stdin closes), every exec still running is
-  stopped before `imp mcp` exits.
+  stopped before `impz mcp` exits.
 - **Progress.** A call whose request has a `progressToken` gets `notifications/progress` every 15 s,
   so a client can keep a long call alive. A cancel stops them.
 
@@ -101,7 +101,7 @@ bundle for this boot; otherwise the call fails with `PRECONDITION_FAILED` and no
 ([requiring the broker](./connectors.md#requiring-the-broker)).
 
 `imp_exec` runs only in the imp's container. It has no way to run a command in the imp's agent, as
-`imp exec --agent` does ([operations](./operations.md#a-broken-container)), and refuses an `outer`
+`impz exec --agent` does ([operations](./operations.md#a-broken-container)), and refuses an `outer`
 field. The SDK's exec types leave it out too.
 
 Only exec and the file tools stop on a cancel. A create, fork or restore that impd has started runs
@@ -131,22 +131,22 @@ file tools work in a minimal image too.
 - Versions `2026-07-28`, which needs no handshake, and `2025-11-25`, `2025-06-18` and `2025-03-26`
   through `initialize`; a 2025-era client that asks for another gets `2025-11-25`. Tools are the
   only capability.
-- One JSON-RPC message per line on stdio. stdout carries only JSON-RPC messages; `imp mcp` writes
+- One JSON-RPC message per line on stdio. stdout carries only JSON-RPC messages; `impz mcp` writes
   everything else to stderr.
 - `initialize` returns `instructions` that name the guard, so the agent knows which imps it has.
 
-The server lives in `packages/mcp` (`@imp/mcp`), built on the MCP TypeScript SDK
-(`@modelcontextprotocol/server`) and calling impd through `@zgeoff/imp-client`; `imp mcp` serves it
-on stdio, and impd serves it at `/mcp`.
+The server lives in `packages/mcp` (`@impz/mcp`), built on the MCP TypeScript SDK
+(`@modelcontextprotocol/server`) and calling impd through `@impz/client`; `impz mcp` serves it on
+stdio, and impd serves it at `/mcp`.
 
 ## HTTP
 
 impd serves MCP's streamable HTTP transport at `/mcp`, on the API's address. A remote agent needs no
-`imp` CLI:
+`impz` CLI:
 
 ```sh
 claude mcp add --transport http imp https://imp.example.com/mcp \
-  --header "Authorization: Bearer $(imp token new agent --scope manage --imps 'agent-*')"
+  --header "Authorization: Bearer $(impz token new agent --scope manage --imps 'agent-*')"
 ```
 
 - **Who calls.** A [scoped token](./tokens.md) as `Authorization: Bearer`, or a
@@ -220,7 +220,7 @@ and no client ID metadata documents: the operator adds each client.
 4. Add the client with its redirect URI. The client ID prints on stdout; the client has no secret.
 
    ```sh
-   imp oauth client add conn --redirect-uri https://client.example/oauth/callback
+   impz oauth client add conn --redirect-uri https://client.example/oauth/callback
    ```
 
 5. In the client, give `https://imp.example.com/mcp` and the client ID.
@@ -239,7 +239,7 @@ route, client and grant, never per address. impd logs no code, token or query.
    `--yes` skips the question; without a terminal on stdin, it is required:
 
    ```sh
-   imp oauth approve ABCD-EFGH --scope exec --imps 'agent-*'
+   impz oauth approve ABCD-EFGH --scope exec --imps 'agent-*'
    ```
 
 3. Press Continue. The page shows the final scope, imps and redirect URI; press Allow.
@@ -272,8 +272,8 @@ approve: neither can be removed on its own, so neither could end its grants.
 Tokens are opaque (`impat_…`, `imprt_…`); impd keeps only their SHA-256. A refresh answers with the
 scope the grant holds, for the same resource.
 
-A grant ends with `imp oauth grant rm <id>`, `imp token rm` of the token that approved it,
-`imp oauth client rm`, the client's own revocation, or a replay. Its sessions end, its running
+A grant ends with `impz oauth grant rm <id>`, `impz token rm` of the token that approved it,
+`impz oauth client rm`, the client's own revocation, or a replay. Its sessions end, its running
 commands stop as a cancel stops them, its unused exec tickets open nothing, and its next request
 gets 401. A replay is a code exchanged again, or a spent refresh token, presented in full by its own
 client: a wrong secret, an unknown token or another client's request gets `invalid_grant` and

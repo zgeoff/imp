@@ -1,4 +1,4 @@
-import type { ImpState } from '@zgeoff/imp-client';
+import type { ImpState } from '@impz/client';
 import styles from './state-badge.module.css';
 
 interface StateBadgeProps {

@@ -12,7 +12,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
 )
 
 // Up brings lo up and, if cidr is set, gives iface the address and a

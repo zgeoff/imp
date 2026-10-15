@@ -1,4 +1,4 @@
-import type { ImpContract } from '@imp/api';
+import type { ImpContract } from '@impz/api';
 import type { ContractRouterClient } from '@orpc/contract';
 import packageJson from '../package.json' with { type: 'json' };
 

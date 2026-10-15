@@ -58,7 +58,7 @@ test('it keeps an imp awake with DISK_FULL when the disk cannot take its sleep',
   expect(result).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: expect.toStartWith('imp: DISK_FULL: '),
+    stderr: expect.toStartWith('impz: DISK_FULL: '),
   });
 
   expect(after.state).toBe('running');

@@ -11,7 +11,7 @@ SSH, such as VS Code Remote SSH. The
    that token's imps ([keys bound to tokens](#keys-bound-to-tokens)):
 
    ```sh
-   imp token new laptop --scope exec --imps 'dev-*' --ssh-key ~/.ssh/id_ed25519.pub
+   impz token new laptop --scope exec --imps 'dev-*' --ssh-key ~/.ssh/id_ed25519.pub
    ```
 
    A key in `authorized_keys` gets every imp. The file is in the `ssh` directory of the data
@@ -72,7 +72,7 @@ Host box.imp
 ## Users, keys and imps
 
 - The SSH user names the imp. Commands run as the image's user (its `USER`, else root), as with
-  `imp exec`.
+  `impz exec`.
 - A login needs `exec` on the imp it names. A key bound to a token has that token's scope and imps.
   Every key in `authorized_keys` has `exec` and tunnels on every imp, whatever [tokens](./tokens.md)
   exist: the file is the host owner's.
@@ -92,10 +92,10 @@ A key bound to a [token](./tokens.md) logs in as that token: its scope and its i
 and the audit log names it.
 
 ```sh
-imp token new laptop --scope exec --imps 'dev-*' --ssh-key ~/.ssh/id_ed25519.pub
-imp token key add laptop ~/.ssh/id_rsa.pub   # bind another key
-imp token key ls laptop                      # SHA256:... comment
-imp token key rm laptop SHA256:...           # unbind one
+impz token new laptop --scope exec --imps 'dev-*' --ssh-key ~/.ssh/id_ed25519.pub
+impz token key add laptop ~/.ssh/id_rsa.pub   # bind another key
+impz token key ls laptop                      # SHA256:... comment
+impz token key rm laptop SHA256:...           # unbind one
 ```
 
 - A login needs `exec` on the imp it names. Every channel of the login, a shell, a command, SFTP,
@@ -117,26 +117,26 @@ moved, `IMP_SSH_AUTHORIZED_KEYS=false` turns the file off: impd then reads it on
 bindings, and only bound keys log in.
 
 > **CAUTION:** A token with a key that `authorized_keys` also lists cannot be deleted, and that key
-> cannot be unbound, until the line is gone: `imp token rm` fails with `CONFLICT` and names the key.
-> To revoke such a token at once, delete the key's line from `authorized_keys` first, then run
-> `imp token rm`. Until then, the token's secret and its keys keep working.
+> cannot be unbound, until the line is gone: `impz token rm` fails with `CONFLICT` and names the
+> key. To revoke such a token at once, delete the key's line from `authorized_keys` first, then run
+> `impz token rm`. Until then, the token's secret and its keys keep working.
 
 ## What works
 
-| Request                              | What happens                                                                                        |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| shell (`ssh box@imp`)                | the user's login shell from the image's `/etc/passwd`, else bash, else sh, on a pty                 |
-| command (`ssh box@imp cmd`)          | `/bin/sh -c cmd`, with its exit status, or the signal that ended it                                 |
-| pty and window size                  | the client's size and `TERM`; resizes follow                                                        |
-| signals                              | sent to the command's process group                                                                 |
-| SFTP, `scp`                          | the SFTP server on the system drive, so every image has it                                          |
-| local forward (`-L`, `-D`)           | to `localhost`, `127.0.0.1` or `::1` in the imp, including programs that listen on loopback only    |
-| unix socket forward (`-L` to a path) | an absolute socket path the image's USER can open, but not impd's own under `/run/imp/`             |
-| env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them                 |
-| credential connectors                | an imp with a grant gets the broker's variables, as with `imp exec` ([connectors](./connectors.md)) |
-| remote forward (`-R`)                | a port on the imp's `127.0.0.1`, or a socket path, back to your machine ([below](#remote-forwards)) |
-| agent forwarding (`-A`)              | a socket in the imp for `SSH_AUTH_SOCK` ([below](#agent-forwarding))                                |
-| X11                                  | refused                                                                                             |
+| Request                              | What happens                                                                                         |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| shell (`ssh box@imp`)                | the user's login shell from the image's `/etc/passwd`, else bash, else sh, on a pty                  |
+| command (`ssh box@imp cmd`)          | `/bin/sh -c cmd`, with its exit status, or the signal that ended it                                  |
+| pty and window size                  | the client's size and `TERM`; resizes follow                                                         |
+| signals                              | sent to the command's process group                                                                  |
+| SFTP, `scp`                          | the SFTP server on the system drive, so every image has it                                           |
+| local forward (`-L`, `-D`)           | to `localhost`, `127.0.0.1` or `::1` in the imp, including programs that listen on loopback only     |
+| unix socket forward (`-L` to a path) | an absolute socket path the image's USER can open, but not impd's own under `/run/imp/`              |
+| env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them                  |
+| credential connectors                | an imp with a grant gets the broker's variables, as with `impz exec` ([connectors](./connectors.md)) |
+| remote forward (`-R`)                | a port on the imp's `127.0.0.1`, or a socket path, back to your machine ([below](#remote-forwards))  |
+| agent forwarding (`-A`)              | a socket in the imp for `SSH_AUTH_SOCK` ([below](#agent-forwarding))                                 |
+| X11                                  | refused                                                                                              |
 
 A forward to any other host is refused as administratively prohibited. Otherwise the gateway would
 be a way into other imps, the host container or the network beyond.
@@ -170,7 +170,7 @@ git push                      # signed by your agent
 - The socket and its directory belong to the image's user (mode 0600 and 0700), and the agent also
   checks each client's uid: only that user and root get through. The socket goes when the connection
   ends, and `/run` starts empty on every boot.
-- A forced sleep (`imp sleep`) ends the socket; the connection's next session gets a new one.
+- A forced sleep (`impz sleep`) ends the socket; the connection's next session gets a new one.
 - Without an agent on your machine, `ssh-add` in the imp fails at once. An imp opens at most 16
   agent channels at a time per connection; more of its clients are closed.
 - Without agent forwarding in the imp's agent, a command still runs, without `SSH_AUTH_SOCK`, and
@@ -186,7 +186,7 @@ git push                      # signed by your agent
 ## Remote forwards
 
 `ssh -R` lets a program in the imp reach a port or a unix socket on your machine, as
-[`imp proxy --reverse`](./reverse-forwards.md) does without SSH.
+[`impz proxy --reverse`](./reverse-forwards.md) does without SSH.
 
 ```sh
 ssh -N -R 9000:localhost:8080 box@imp              # 127.0.0.1:9000 in the imp
@@ -200,7 +200,7 @@ ssh -N -R /tmp/app.sock:/run/user/1000/app.sock box@imp
   and a socket path must be one the user may make. A socket path's directory must exist; impd's own
   `/run/imp/` is refused. A socket left at the path by an earlier forward is replaced.
 - A socket is mode 0600, for the image's user and root. A port is open to every process in the imp.
-- A forward ends with the connection, or with `ssh -O cancel`. A forced sleep (`imp sleep`) ends it
+- A forward ends with the connection, or with `ssh -O cancel`. A forced sleep (`impz sleep`) ends it
   too, and the client must connect again; an open connection keeps the imp awake otherwise.
 - Each forward relays at most 64 connections at a time; more are closed.
 
@@ -214,7 +214,7 @@ ssh -N -R /tmp/app.sock:/run/user/1000/app.sock box@imp
   vanished without closing does not keep its imp awake.
 - When the imp cannot wake, for example with `RAM_BUDGET_EXCEEDED`, the login still works, and each
   command fails with the reason on stderr and exit status 255.
-- `imp sleep` with a connection open ends the commands it runs (they get SIGHUP), and the next
+- `impz sleep` with a connection open ends the commands it runs (they get SIGHUP), and the next
   command wakes the imp again.
 - impd closes every SSH connection when it stops.
 

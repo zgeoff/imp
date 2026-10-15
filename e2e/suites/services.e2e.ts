@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy, sendProxyRequest } from '../lib/http';
@@ -280,7 +280,7 @@ test('it starts a service file written by hand on its first restart', async () =
 
   await waitForExec(name);
 
-  // the dir as the first `imp service add` leaves it
+  // the dir as the first `impz service add` leaves it
   await runShellInImp(
     name,
     `mkdir -p /etc/imp/services.d && echo '{"argv":["sleep","3600"]}' > /etc/imp/services.d/late.json`,

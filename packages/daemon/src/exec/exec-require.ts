@@ -1,4 +1,4 @@
-import type { ExecRequirement } from '@imp/api';
+import type { ExecRequirement } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { PROXY_VARIABLE } from '../broker/guest-trust';
 import type { BrokerExecEnv } from '../broker/guest-trust';

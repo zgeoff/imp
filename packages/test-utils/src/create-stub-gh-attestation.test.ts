@@ -28,7 +28,7 @@ test('it succeeds attestation verify when it verifies', () => {
   createStubGhAttestation({ bin: ctx.bin, loggedIn: false, verifies: true });
 
   expect(
-    Bun.spawnSync([join(ctx.bin, 'gh'), 'attestation', 'verify', 'imp', '-R', 'zgeoff/imp'])
+    Bun.spawnSync([join(ctx.bin, 'gh'), 'attestation', 'verify', 'imp', '-R', 'zgeoff/impz'])
       .exitCode,
   ).toBe(0);
 });
@@ -62,9 +62,9 @@ test('it records the arguments of each call in order', () => {
   const gh = createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
 
   Bun.spawnSync([join(ctx.bin, 'gh'), 'auth', 'status']);
-  Bun.spawnSync([join(ctx.bin, 'gh'), 'attestation', 'verify', 'imp', '-R', 'zgeoff/imp']);
+  Bun.spawnSync([join(ctx.bin, 'gh'), 'attestation', 'verify', 'imp', '-R', 'zgeoff/impz']);
 
-  expect(gh.readCalls()).toStrictEqual(['auth status', 'attestation verify imp -R zgeoff/imp']);
+  expect(gh.readCalls()).toStrictEqual(['auth status', 'attestation verify imp -R zgeoff/impz']);
 });
 
 test('it records no calls before the first', () => {

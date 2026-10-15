@@ -1,23 +1,23 @@
 #!/bin/sh
-# Install the imp CLI for this machine from a GitHub release into
+# Install the impz CLI for this machine from a GitHub release into
 # ~/.local/bin (or IMP_INSTALL_DIR). No Bun or Node is needed.
 #
-#   curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/zgeoff/impz/main/install.sh | sh
 #
 # Env: IMP_INSTALL_VERSION  a release such as 0.4.0 (default: the latest)
 #      IMP_INSTALL_DIR      where the binary goes (default: ~/.local/bin)
-#      IMP_RELEASES_URL     the releases page (default: zgeoff/imp's on GitHub)
+#      IMP_RELEASES_URL     the releases page (default: zgeoff/impz's on GitHub)
 #
 # The binary is checked against the release's SHA256SUMS, and with the gh CLI
 # on PATH and logged in, against the release's build provenance too. Nothing
 # is installed when a check fails.
 set -eu
 
-releases=${IMP_RELEASES_URL:-https://github.com/zgeoff/imp/releases}
+releases=${IMP_RELEASES_URL:-https://github.com/zgeoff/impz/releases}
 dir=${IMP_INSTALL_DIR:-$HOME/.local/bin}
 
 fail() {
-  echo "imp: $*" >&2
+  echo "impz: $*" >&2
   exit 1
 }
 
@@ -48,11 +48,11 @@ case "$tag" in
   *) fail "no release found at $releases (got '$tag')" ;;
 esac
 
-asset=imp-$os-$arch
+asset=impz-$os-$arch
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "imp: downloading $asset $tag"
+echo "impz: downloading $asset $tag"
 curl -fsSL "$releases/download/$tag/$asset" -o "$tmp/$asset" || fail "cannot download $asset $tag"
 curl -fsSL "$releases/download/$tag/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
   fail "cannot download SHA256SUMS for $tag"
@@ -68,25 +68,30 @@ fi
 
 # gh asks the GitHub API for the attestation, which needs a login
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh attestation verify "$tmp/$asset" -R zgeoff/imp >/dev/null ||
-    fail "could not verify provenance of $asset from zgeoff/imp; nothing installed"
-  echo "imp: provenance verified"
+  gh attestation verify "$tmp/$asset" -R zgeoff/impz >/dev/null ||
+    fail "could not verify provenance of $asset from zgeoff/impz; nothing installed"
+  echo "impz: provenance verified"
 elif command -v gh >/dev/null 2>&1; then
-  echo "imp: gh is not logged in; skipped the provenance check"
+  echo "impz: gh is not logged in; skipped the provenance check"
 fi
 
-# copied next to the target first, so the rename replaces an old imp in one
+# copied next to the target first, so the rename replaces an old impz in one
 # step even when the temp directory is on another filesystem
 mkdir -p "$dir"
-cp "$tmp/$asset" "$dir/.imp.tmp"
-chmod +x "$dir/.imp.tmp"
-mv "$dir/.imp.tmp" "$dir/imp"
+cp "$tmp/$asset" "$dir/.impz.tmp"
+chmod +x "$dir/.impz.tmp"
+mv "$dir/.impz.tmp" "$dir/impz"
 
 # on its own line, so set -e stops here when the binary does not run
-version=$("$dir/imp" --version)
-echo "imp: installed $version to $dir/imp"
+version=$("$dir/impz" --version)
+echo "impz: installed $version to $dir/impz"
 
 case ":$PATH:" in
   *":$dir:"*) ;;
-  *) echo "imp: add $dir to your PATH" ;;
+  *) echo "impz: add $dir to your PATH" ;;
 esac
+
+# the CLI was named imp before impz; the old binary is left for its owner
+if [ -e "$dir/imp" ]; then
+  echo "impz: $dir/imp is the CLI from before its rename to impz; remove it once nothing calls it"
+fi

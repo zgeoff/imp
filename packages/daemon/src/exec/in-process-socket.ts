@@ -1,4 +1,4 @@
-import type { ExecSocket } from '@zgeoff/imp-client';
+import type { ExecSocket } from '@impz/client';
 import type { ExecPeer } from './exec-session';
 
 // what the impd end does with what the client end sends; null refuses the

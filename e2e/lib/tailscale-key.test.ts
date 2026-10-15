@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
 import { hasTailscaleE2EKey, readTailscaleE2EAuthKey } from './tailscale-key';
 

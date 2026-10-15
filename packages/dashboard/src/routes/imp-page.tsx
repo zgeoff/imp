@@ -1,7 +1,7 @@
-import { formatBytes, formatMib } from '@imp/shared';
+import type { Imp } from '@impz/client';
+import { formatBytes, formatMib } from '@impz/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import type { Imp } from '@zgeoff/imp-client';
 import { useState } from 'react';
 import { Button } from '../components/button';
 import { CheckpointsPanel } from '../components/checkpoints-panel';

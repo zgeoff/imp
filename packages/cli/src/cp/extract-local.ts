@@ -11,7 +11,7 @@ import {
   utimes,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { TAR_TOTAL_RECORD } from '@imp/api';
+import { TAR_TOTAL_RECORD } from '@impz/api';
 import tar from 'tar-stream';
 import type { Header } from 'tar-stream';
 import * as z from 'zod';

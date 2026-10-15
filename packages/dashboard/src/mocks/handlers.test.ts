@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
 import { isUnauthorized } from '../lib/build-query-client';
 import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { sessionCollection } from './db/session-collection';

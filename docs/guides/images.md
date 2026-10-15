@@ -13,19 +13,19 @@ stays PID 1 there, and runs the image filesystem in an
 | `examples/hello/` → `imp/hello` | the published base + a tiny HTTP service on :8080 (bring-your-own)       |
 
 ```sh
-imp image build images/examples/hello --name hello   # FROM the published base, by digest
-imp image build images/base --name base             # optional: your own imp/base
+impz image build images/examples/hello --name hello   # FROM the published base, by digest
+impz image build images/base --name base             # optional: your own imp/base
 ```
 
 Each release also publishes `images/base` as `ghcr.io/zgeoff/imp-base:X.Y.Z`, linux/amd64 only, with
 a provenance attestation. A published tag never moves, but pin it by digest anyway
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`): the digest names the exact bytes, and
-`gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp` checks where they came
+`gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/impz` checks where they came
 from.
 
 ## Add an image
 
-`imp image add <ref> [--name <name>]` makes an image from a public registry reference. By default
+`impz image add <ref> [--name <name>]` makes an image from a public registry reference. By default
 (`IMP_BUILD_ISOLATION=imp`) impd does it in a builder imp, as it does a build, and the host's Docker
 engine never has the image:
 
@@ -53,20 +53,20 @@ engine and gives that pull 10 minutes; on a slow link, run `docker pull <IMP_BUI
 host first, with the exact reference, and impd uses that image without a pull.
 
 An image that only the host's Docker has, such as one from a plain `docker build`, does not add this
-way: build it with `imp image build` instead. `IMP_BUILD_ISOLATION=host` adds from the host's Docker
-engine, as before 0.36.0, for one release only, with the credentials in impd's Docker config. impd
-logs a warning at start and at every such add.
+way: build it with `impz image build` instead. `IMP_BUILD_ISOLATION=host` adds from the host's
+Docker engine, as before 0.36.0, for one release only, with the credentials in impd's Docker config.
+impd logs a warning at start and at every such add.
 
 ## Build an image
 
-`imp image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
+`impz image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
 uploads it to impd, which builds it with BuildKit in a throwaway builder imp
 ([isolated builds](#isolated-builds)) and adds the result as the image `<name>`. `--file <path>`
 names a Dockerfile inside the context. A later image can start FROM an image you built this way on
 Docker's containerd image store, where impd pins it by its content digest (Docker 29.8 builds from
 that pin, 29.7 does not; see the digest the build uses, below). The classic store refuses it
-([#156](https://github.com/zgeoff/imp/issues/156)). The published base, `ghcr.io/zgeoff/imp-base` by
-digest as `images/examples/hello` names it, works on both.
+([#156](https://github.com/zgeoff/impz/issues/156)). The published base, `ghcr.io/zgeoff/imp-base`
+by digest as `images/examples/hello` names it, works on both.
 
 - **What goes up.** The CLI sends what `docker buildx build <dir>` would. It reads
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
@@ -80,14 +80,14 @@ digest as `images/examples/hello` names it, works on both.
   and the step output as it comes, in the form of `docker build --progress=plain`:
 
   ```text
-  imp image build: building, 0m00s
+  impz image build: building, 0m00s
   #5 [2/3] RUN make all
-  imp image build: building, 0m02s, [2/3] RUN make all
+  impz image build: building, 0m02s, [2/3] RUN make all
   #5 cc -o widget main.c
   #5 DONE
   ```
 
-  `--quiet` (`-q`) prints neither; an error still prints. `imp image builds` lists the builds impd
+  `--quiet` (`-q`) prints neither; an error still prints. `impz image builds` lists the builds impd
   runs now, from any shell: the image name, where the context came from, when the build started, its
   phase, its step and its builder imp. It needs a token with `read` on the whole host.
 
@@ -154,7 +154,7 @@ digest as `images/examples/hello` names it, works on both.
 - **Images the build names.** Before the build, impd pulls each image that a `FROM`, a `COPY --from`
   or a `RUN --mount=from=` names and the engine that builds does not have yet. In a builder that is
   a cold pull with no credentials. A host build has no session, so BuildKit cannot ask for
-  credentials there; impd pulls as a host `imp image add` does, with the credentials in impd's
+  credentials there; impd pulls as a host `impz image add` does, with the credentials in impd's
   Docker config. It skips `scratch` and the Dockerfile's own stages. impd inspects each image once,
   for the engine's platform, and refuses an image the host has for another platform, and any image
   the build names whose config holds `ONBUILD` triggers: the frontend runs the triggers of a
@@ -201,7 +201,7 @@ digest as `images/examples/hello` names it, works on both.
     name, not the address;
   - a `RUN` step, which reaches the network through the host's bridge (the caution below);
   - a base image built on the host, which does not build until
-    [#156](https://github.com/zgeoff/imp/issues/156) but on the containerd store of Docker 29.8;
+    [#156](https://github.com/zgeoff/impz/issues/156) but on the containerd store of Docker 29.8;
   - `.dockerignore`, which the engine does not apply to an uploaded context.
 
 - **The context impd builds.** impd writes the uploaded tar again as plain ustar, with pax records
@@ -221,7 +221,7 @@ Isolated builds, the default, close this ([isolated builds](#isolated-builds)).
 absolute and must exist where impd runs; `scripts/dev/dev.sh` mounts the repo at its own path for
 this. impd packs the directory as the CLI would, `.dockerignore` included, into
 `<IMP_DATA_DIR>/uploads`, and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it.
-An image you built with plain `docker build` goes in with `imp image add <ref>` only under
+An image you built with plain `docker build` goes in with `impz image add <ref>` only under
 `IMP_BUILD_ISOLATION=host` ([add an image](#add-an-image)). `images/examples/hello` starts FROM the
 published base by digest; to stack it on another base, edit that FROM line. An imp's own disk can be
 an image too: a [template](./templates.md) copies a set-up imp into new ones.
@@ -231,9 +231,9 @@ an image too: a [template](./templates.md) copies a set-up imp into new ones.
 By default (`IMP_BUILD_ISOLATION=imp`) each build runs in its own builder imp, which impd destroys
 when the build ends. Two separate things hold for a build, and neither stands in for the other:
 
-1. **The input guard** ([#145](https://github.com/zgeoff/imp/issues/145)): impd reads the Dockerfile
-   on the host and refuses what the engine would fetch or run on its own, before any builder boots
-   (the list above). It rejects inputs; it isolates nothing.
+1. **The input guard** ([#145](https://github.com/zgeoff/impz/issues/145)): impd reads the
+   Dockerfile on the host and refuses what the engine would fetch or run on its own, before any
+   builder boots (the list above). It rejects inputs; it isolates nothing.
 2. **The isolation:** the build runs in a Firecracker VM under the
    [`public` egress policy](../architecture/network/egress.md#public). A `RUN` step, a pull and the
    frontend's fetch reach the internet only: not the host, impd, other imps, the tailnet, link-local
@@ -254,7 +254,7 @@ A build goes:
 4. The pinned context goes in on the builder's stdin to `docker build`. A failed build returns the
    last 8000 characters of its log, `RUN` output included.
 5. impd streams `docker export` of the result out of the builder into the same `tar` unpack every
-   `imp image add` uses, as root, and computes the image's digest itself: `imp-build-` and a sha256
+   `impz image add` uses, as root, and computes the image's digest itself: `imp-build-` and a sha256
    over a fixed domain string, the config with its length, and the export, so it never equals a
    Docker image ID or a template's. No host engine reads what the build made, and no Docker tag on
    the host changes. An export fails with `BAD_REQUEST` when its stream, or the disk its entries
@@ -270,11 +270,11 @@ A build goes:
 6. impd destroys the builder, on success, failure or a client that goes. impd destroys a builder it
    finds at start, which a stop cut short. A builder that survives its removal does not fail its
    build, whose image impd wrote: impd logs an `ERROR`, tries again every 30 s until it is gone, and
-   `imp ls --builders` shows it meanwhile.
+   `impz ls --builders` shows it meanwhile.
 
-A builder is impd's while it builds: every stream, exec, wake and change but `imp rm` is refused it
+A builder is impd's while it builds: every stream, exec, wake and change but `impz rm` is refused it
 with `PRECONDITION_FAILED`, the idle loop and the governor never sleep it, and backups leave it out.
-`imp ls` hides builders; `imp ls --builders` shows them, marked `image builder`, and `imps.get`
+`impz ls` hides builders; `impz ls --builders` shows them, marked `image builder`, and `imps.get`
 shows `kind: builder`.
 
 What a build costs on top of a host build: about 1.5 s for the builder and its dockerd, and the
@@ -311,8 +311,8 @@ reads every event but the image as progress, leaves it out. A failure throws its
 the iterator. oRPC also sends a keepalive comment every 5 s. impd writes the audit row as the work
 ends, with its outcome; a refused call is audited at once, as any refused call. `system.info` lists
 `imageOpStream` among the features of an impd that has them, and `imageBuilds` for one that sends
-steps and log events and answers `images.builds`. `imp image add`, `imp image build --on-host` and
-`imp template create` use them when impd does, and show the phase and its time on a terminal; with
+steps and log events and answers `images.builds`. `impz image add`, `impz image build --on-host` and
+`impz template create` use them when impd does, and show the phase and its time on a terminal; with
 an older impd they call `images.add` or `images.build`, which answer only at the end. The dashboard
 calls `images.add`.
 
@@ -333,8 +333,8 @@ When the client goes, impd stops what it can:
   binds a port below 1024 without root) and `user.*`; every other one is dropped. impd needs
   `CAP_SETFCAP` for the first ([host contract](../architecture/host.md#privileges)): without it, an
   image with a file capability fails to add or build. An image added by impd 0.25.1 or older lost
-  its file capabilities, and impd keeps that rootfs for the same image ID: `imp image rm <name>` and
-  add or build it again.
+  its file capabilities, and impd keeps that rootfs for the same image ID: `impz image rm <name>`
+  and add or build it again.
 - **`Env`, `WorkingDir`, `User`** from the OCI config. impd writes them to `/etc/imp/image.json`, in
   place of any file the image has there. `/etc` and `/etc/imp` must be directories: an image with a
   symlink or a file at either fails to add or build.
@@ -353,8 +353,8 @@ When the client goes, impd stops what it can:
 ## Services
 
 The agent starts every file in `/etc/imp/services.d/<name>.json` at boot and restarts each service
-when it exits. An image ships its services as these files; `imp service` adds, restarts and removes
-them on a running imp, and `imp logs` prints their logs ([services](./services.md)).
+when it exits. An image ships its services as these files; `impz service` adds, restarts and removes
+them on a running imp, and `impz logs` prints their logs ([services](./services.md)).
 
 ```json
 {
@@ -374,9 +374,9 @@ them on a running imp, and `imp logs` prints their logs ([services](./services.m
 | `user`    | the image user | `name`, `uid`, `name:group` or `uid:gid`               |
 | `restart` | `always`       | `always`, `on-failure` or `never`                      |
 
-- The file name, less `.json`, is the service's name, used by `imp service` and for the log file. A
+- The file name, less `.json`, is the service's name, used by `impz service` and for the log file. A
   `name` field in the file is ignored. Use `^[a-z0-9][a-z0-9-]{0,62}$`: the agent starts a file with
-  another name, but `imp service` cannot name it.
+  another name, but `impz service` cannot name it.
 - Output (stdout and stderr) goes to `/var/log/imp/<name>.log`. stdin is `/dev/null`. The agent
   checks the log every 60 s and at each start; past 10 MiB it moves to `<name>.log.1`, replacing the
   previous one. A log can grow by up to 60 s of output past the cap between checks.
@@ -385,8 +385,8 @@ them on a running imp, and `imp logs` prints their logs ([services](./services.m
 - There is no ordering between services and no readiness check. A service that needs another one
   retries on its own (or its wrapper waits).
 - A bad file is logged on the console and skipped; the rest still start.
-- A service file you add with `imp exec` lives on the disk, so it survives sleeps, checkpoints,
-  restores and forks. It starts at the next boot, or at `imp service restart`
+- A service file you add with `impz exec` lives on the disk, so it survives sleeps, checkpoints,
+  restores and forks. It starts at the next boot, or at `impz service restart`
   ([services](./services.md)).
 
 ## Docker in the guest (`imp/base`)

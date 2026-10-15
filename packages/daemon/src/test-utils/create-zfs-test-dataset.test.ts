@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildStubZfs } from './build-stub-zfs';
 import { createZfsTestDataset } from './create-zfs-test-dataset';
 

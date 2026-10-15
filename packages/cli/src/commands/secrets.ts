@@ -1,5 +1,10 @@
-import { BrokerRuleSchema, GrantFilterSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
-import type { BrokerRule, GrantFilter, OAuthConfig, Secret, SecretKind } from '@imp/api';
+import {
+  BrokerRuleSchema,
+  GrantFilterSchema,
+  OAuthConfigSchema,
+  SecretKindSchema,
+} from '@impz/api';
+import type { BrokerRule, GrantFilter, OAuthConfig, Secret, SecretKind } from '@impz/api';
 import { defineCommand } from '../define-command';
 import {
   formatApiCalls,
@@ -118,12 +123,12 @@ function formatOAuthOutcome(secret: Readonly<Secret>): string | null {
     const until =
       oauth.expiresAt === null ? '' : `, access token valid until ${oauth.expiresAt.toISOString()}`;
 
-    return `imp: ${secret.name} signed in${until}`;
+    return `impz: ${secret.name} signed in${until}`;
   }
 
   const reason = oauth.error === null ? '' : `: ${oauth.error}`;
 
-  return `imp: ${secret.name} is ${oauth.status}${reason}`;
+  return `impz: ${secret.name} is ${oauth.status}${reason}`;
 }
 
 // why a refresh left the secret not ready, or null when it is
@@ -250,7 +255,7 @@ const addCommand = defineCommand({
 
       if (secret.droppedGrants > 0) {
         console.error(
-          `imp: ${secret.name} rebound; revoked from ${String(secret.droppedGrants)} imp(s)`,
+          `impz: ${secret.name} rebound; revoked from ${String(secret.droppedGrants)} imp(s)`,
         );
       }
 

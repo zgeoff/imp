@@ -1,6 +1,6 @@
-import { ExecClientMessageSchema, decodeExecFrame, encodeExecFrame } from '@imp/api';
-import type { ExecClientMessage, ExecServerMessage } from '@imp/api';
-import type { ExecSocket } from '@zgeoff/imp-client';
+import { ExecClientMessageSchema, decodeExecFrame, encodeExecFrame } from '@impz/api';
+import type { ExecClientMessage, ExecServerMessage } from '@impz/api';
+import type { ExecSocket } from '@impz/client';
 
 // what the client sent: a control message as the protocol parses it, or a
 // stdin frame as text and its byte count

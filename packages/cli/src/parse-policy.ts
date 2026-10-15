@@ -1,5 +1,5 @@
-import { EgressModeSchema } from '@imp/api';
-import type { EgressPolicy } from '@imp/api';
+import { EgressModeSchema } from '@impz/api';
+import type { EgressPolicy } from '@impz/api';
 import { UsageError } from './usage-error';
 
 // `--policy MODE` and `--allow a,b`: an allow-list alone means box, and

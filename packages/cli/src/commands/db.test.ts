@@ -3,17 +3,17 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import packageJson from '@imp/daemon/package.json' with { type: 'json' };
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { MIGRATIONS } from '@imp/daemon/src/db/run-migrations';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@imp/test-utils/invariant';
+import packageJson from '@impz/daemon/package.json' with { type: 'json' };
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
+import { MIGRATIONS } from '@impz/daemon/src/db/run-migrations';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@impz/test-utils/invariant';
 import * as z from 'zod';
 import { runCli } from '../test-utils/start-cli';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
@@ -160,7 +160,7 @@ test('it makes no database copy on an impd from before databaseCopy (0.30.0)', a
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: this impd is older than 0.30.0 and would not know the call; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+      'impz: this impd is older than 0.30.0 and would not know the call; nothing was changed. Upgrade impd, or use an older imp CLI\n',
     code: 1,
   });
 

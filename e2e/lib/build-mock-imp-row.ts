@@ -1,7 +1,7 @@
 import { faker } from '@faker-js/faker';
 import type { ImpRow } from './imp-cli';
 
-// An imp as `imp ls --json` lists it, with only the fields every row
+// An imp as `impz ls --json` lists it, with only the fields every row
 // carries; the optional ones come from overrides.
 export function buildMockImpRow(overrides: Readonly<Partial<ImpRow>> = {}): ImpRow {
   return {

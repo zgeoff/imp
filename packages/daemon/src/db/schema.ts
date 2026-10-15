@@ -1,7 +1,7 @@
 // Written by kysely-codegen from the migrated database: run
 // `bun run render:db-schema` after a migration, never edit it by hand.
 
-import type { ApiActor, AuditRefusal, ColdBootCause, ImageSource, ImpKind, ImpState, MoveState, Scope } from "@imp/api";
+import type { ApiActor, AuditRefusal, ColdBootCause, ImageSource, ImpKind, ImpState, MoveState, Scope } from "@impz/api";
 import type { ColumnType } from "kysely";
 
 export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>

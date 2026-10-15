@@ -1,5 +1,5 @@
-import { EgressPolicySchema } from '@imp/api';
-import type { EgressPolicy } from '@imp/api';
+import { EgressPolicySchema } from '@impz/api';
+import type { EgressPolicy } from '@impz/api';
 import type { ImpDatabase } from './open-database';
 
 // An imp as the egress firewall and resolver see it

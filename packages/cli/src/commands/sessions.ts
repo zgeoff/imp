@@ -8,21 +8,21 @@ import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from '
 import { readTermEnv } from './imps';
 import { listSessionLogs, removeSessionLogs, writeSessionLog } from './session-logs';
 
-// `imp sessions kill|logs|log|log-rm ...` share the command with
-// `imp sessions <name>`: citty cannot mix subcommands with positionals, so
+// `impz sessions kill|logs|log|log-rm ...` share the command with
+// `impz sessions <name>`: citty cannot mix subcommands with positionals, so
 // a first positional that names a verb always means it.
 export const sessionsCommand = defineCommand({
   meta: {
     name: 'sessions',
     description:
-      "List an imp's sessions without waking it (imp sessions kill <name> <session> ends one; logs, log and log-rm read and delete session logs)",
+      "List an imp's sessions without waking it (impz sessions kill <name> <session> ends one; logs, log and log-rm read and delete session logs)",
   },
   args: {
     name: nameArg,
     json: jsonArg,
     from: {
       type: 'string',
-      description: 'imp sessions log: the offset to read from (default 0)',
+      description: 'impz sessions log: the offset to read from (default 0)',
     },
   },
   run: (context) =>
@@ -52,7 +52,7 @@ export const sessionsCommand = defineCommand({
         const [, name, session] = positionals;
 
         if (positionals.length !== 3 || name === undefined || session === undefined) {
-          throw new UsageError('usage: imp sessions kill <name> <session>');
+          throw new UsageError('usage: impz sessions kill <name> <session>');
         }
 
         await client.sessions.kill({ name, session });

@@ -49,7 +49,7 @@ title or the body runs the check again.
 
 ## Set up a repository for releases
 
-These steps are done for `zgeoff/imp`. They are here for a new repository, or to set one up again.
+These steps are done for `zgeoff/impz`. They are here for a new repository, or to set one up again.
 
 1. **The release App.** Events from `GITHUB_TOKEN` start no workflows, so a release PR opened with
    it would get no CI run, and the `release-please` job is skipped until an App is configured.
@@ -98,8 +98,8 @@ scripts/release/check-release-image.sh "imp-host:$(jq -r .version package.json)"
 To check the Homebrew formula by hand:
 
 ```sh
-scripts/release/build-formula.sh 1.2.3 dist/SHA256SUMS > /tmp/imp.rb && ruby -c /tmp/imp.rb
-brew install --formula /tmp/imp.rb && brew test imp     # on a machine with brew
+scripts/release/build-formula.sh 1.2.3 dist/SHA256SUMS > /tmp/impz.rb && ruby -c /tmp/impz.rb
+brew install --formula /tmp/impz.rb && brew test impz    # on a machine with brew
 ```
 
 ## Republish
@@ -126,7 +126,7 @@ a possible compromise and investigate:
 
 ```sh
 docker buildx imagetools inspect ghcr.io/zgeoff/imp-base:X.Y.Z
-gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp
+gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/impz
 ```
 
 The workflow never deletes, re-pushes or attests such a tag. Consumers that pinned an earlier digest

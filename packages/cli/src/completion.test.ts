@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runShellcheck } from '@imp/test-utils/run-shellcheck';
+import { runShellcheck } from '@impz/test-utils/run-shellcheck';
 import { defineCommand } from 'citty';
 import { mainCommand } from './command-tree';
 import { buildCompletionTree, renderCompletion } from './completion';
@@ -11,54 +11,54 @@ import { runCli } from './test-utils/start-cli';
 
 test('#renderCompletion renders the bash script of a tree', () => {
   const tree = {
-    path: 'imp',
+    path: 'impz',
     subcommands: ['ls', 'image'],
     flags: ['--host', '--help'],
     children: [
-      { path: 'imp ls', subcommands: [], flags: ['--json', '--help'], children: [] },
+      { path: 'impz ls', subcommands: [], flags: ['--json', '--help'], children: [] },
       {
-        path: 'imp image',
+        path: 'impz image',
         subcommands: ['add'],
         flags: ['--help'],
         children: [
-          { path: 'imp image add', subcommands: [], flags: ['--name', '--help'], children: [] },
+          { path: 'impz image add', subcommands: [], flags: ['--name', '--help'], children: [] },
         ],
       },
     ],
   };
 
   expect(renderCompletion('bash', tree)).toMatchInlineSnapshot(`
-    "# bash completion for imp: eval "$(imp completion bash)"
-    _imp_subcommands() {
+    "# bash completion for impz: eval "$(impz completion bash)"
+    _impz_subcommands() {
       case "$1" in
-        'imp') echo 'ls image' ;;
-        'imp ls') echo '' ;;
-        'imp image') echo 'add' ;;
-        'imp image add') echo '' ;;
+        'impz') echo 'ls image' ;;
+        'impz ls') echo '' ;;
+        'impz image') echo 'add' ;;
+        'impz image add') echo '' ;;
       esac
     }
 
-    _imp_flags() {
+    _impz_flags() {
       case "$1" in
-        'imp') echo '--host --help' ;;
-        'imp ls') echo '--json --help' ;;
-        'imp image') echo '--help' ;;
-        'imp image add') echo '--name --help' ;;
+        'impz') echo '--host --help' ;;
+        'impz ls') echo '--json --help' ;;
+        'impz image') echo '--help' ;;
+        'impz image add') echo '--name --help' ;;
       esac
     }
 
-    _imp() {
-      local cur=\${COMP_WORDS[COMP_CWORD]} cmd=imp i
+    _impz() {
+      local cur=\${COMP_WORDS[COMP_CWORD]} cmd=impz i
       for ((i = 1; i < COMP_CWORD; i++)); do
-        case " $(_imp_subcommands "$cmd") " in
+        case " $(_impz_subcommands "$cmd") " in
           *" \${COMP_WORDS[i]} "*) cmd="$cmd \${COMP_WORDS[i]}" ;;
         esac
       done
       local words
       if [[ $cur == -* ]]; then
-        words=$(_imp_flags "$cmd")
+        words=$(_impz_flags "$cmd")
       else
-        words=$(_imp_subcommands "$cmd")
+        words=$(_impz_subcommands "$cmd")
       fi
       # command and flag names hold no spaces or glob characters, so splitting
       # is safe; bash 3.2 on macOS has no mapfile
@@ -66,68 +66,68 @@ test('#renderCompletion renders the bash script of a tree', () => {
       COMPREPLY=($(compgen -W "$words" -- "$cur"))
     }
 
-    complete -F _imp imp
+    complete -F _impz impz
     "
   `);
 });
 
 test('#renderCompletion renders the zsh script of a tree', () => {
   const tree = {
-    path: 'imp',
+    path: 'impz',
     subcommands: ['ls', 'image'],
     flags: ['--host', '--help'],
     children: [
-      { path: 'imp ls', subcommands: [], flags: ['--json', '--help'], children: [] },
+      { path: 'impz ls', subcommands: [], flags: ['--json', '--help'], children: [] },
       {
-        path: 'imp image',
+        path: 'impz image',
         subcommands: ['add'],
         flags: ['--help'],
         children: [
-          { path: 'imp image add', subcommands: [], flags: ['--name', '--help'], children: [] },
+          { path: 'impz image add', subcommands: [], flags: ['--name', '--help'], children: [] },
         ],
       },
     ],
   };
 
   expect(renderCompletion('zsh', tree)).toMatchInlineSnapshot(`
-    "#compdef imp
-    # zsh completion for imp: put it on $fpath as _imp, or eval "$(imp completion zsh)"
-    _imp_subcommands() {
+    "#compdef impz
+    # zsh completion for impz: put it on $fpath as _impz, or eval "$(impz completion zsh)"
+    _impz_subcommands() {
       case "$1" in
-        'imp') echo 'ls image' ;;
-        'imp ls') echo '' ;;
-        'imp image') echo 'add' ;;
-        'imp image add') echo '' ;;
+        'impz') echo 'ls image' ;;
+        'impz ls') echo '' ;;
+        'impz image') echo 'add' ;;
+        'impz image add') echo '' ;;
       esac
     }
 
-    _imp_flags() {
+    _impz_flags() {
       case "$1" in
-        'imp') echo '--host --help' ;;
-        'imp ls') echo '--json --help' ;;
-        'imp image') echo '--help' ;;
-        'imp image add') echo '--name --help' ;;
+        'impz') echo '--host --help' ;;
+        'impz ls') echo '--json --help' ;;
+        'impz image') echo '--help' ;;
+        'impz image add') echo '--name --help' ;;
       esac
     }
 
-    _imp() {
-      local cmd=imp i
+    _impz() {
+      local cmd=impz i
       for ((i = 2; i < CURRENT; i++)); do
-        if [[ " $(_imp_subcommands "$cmd") " == *" \${words[i]} "* ]]; then
+        if [[ " $(_impz_subcommands "$cmd") " == *" \${words[i]} "* ]]; then
           cmd="$cmd \${words[i]}"
         fi
       done
       if [[ \${words[CURRENT]} == -* ]]; then
-        compadd -- \${=$(_imp_flags "$cmd")}
+        compadd -- \${=$(_impz_flags "$cmd")}
       else
-        compadd -- \${=$(_imp_subcommands "$cmd")}
+        compadd -- \${=$(_impz_subcommands "$cmd")}
       fi
     }
 
     if [[ \${zsh_eval_context[-1]} == loadautofunc ]]; then
-      _imp "$@"
+      _impz "$@"
     else
-      compdef _imp imp
+      compdef _impz impz
     fi
     "
   `);
@@ -135,62 +135,62 @@ test('#renderCompletion renders the zsh script of a tree', () => {
 
 test('#renderCompletion renders the fish script of a tree', () => {
   const tree = {
-    path: 'imp',
+    path: 'impz',
     subcommands: ['ls', 'image'],
     flags: ['--host', '--help'],
     children: [
-      { path: 'imp ls', subcommands: [], flags: ['--json', '--help'], children: [] },
+      { path: 'impz ls', subcommands: [], flags: ['--json', '--help'], children: [] },
       {
-        path: 'imp image',
+        path: 'impz image',
         subcommands: ['add'],
         flags: ['--help'],
         children: [
-          { path: 'imp image add', subcommands: [], flags: ['--name', '--help'], children: [] },
+          { path: 'impz image add', subcommands: [], flags: ['--name', '--help'], children: [] },
         ],
       },
     ],
   };
 
   expect(renderCompletion('fish', tree)).toMatchInlineSnapshot(`
-    "# fish completion for imp: imp completion fish | source
-    function __imp_subcommands
+    "# fish completion for impz: impz completion fish | source
+    function __impz_subcommands
       switch $argv[1]
-        case 'imp'
+        case 'impz'
           echo ls image
-        case 'imp ls'
+        case 'impz ls'
           echo 
-        case 'imp image'
+        case 'impz image'
           echo add
-        case 'imp image add'
+        case 'impz image add'
           echo 
       end
     end
 
-    function __imp_flags
+    function __impz_flags
       switch $argv[1]
-        case 'imp'
+        case 'impz'
           echo --host --help
-        case 'imp ls'
+        case 'impz ls'
           echo --json --help
-        case 'imp image'
+        case 'impz image'
           echo --help
-        case 'imp image add'
+        case 'impz image add'
           echo --name --help
       end
     end
 
-    function __imp_command
-      set -l cmd imp
+    function __impz_command
+      set -l cmd impz
       for word in (commandline -opc)[2..-1]
-        if contains -- $word (string split ' ' -- (__imp_subcommands "$cmd"))
+        if contains -- $word (string split ' ' -- (__impz_subcommands "$cmd"))
           set cmd "$cmd $word"
         end
       end
       echo $cmd
     end
 
-    complete -c imp -n 'not string match -q -- "-*" (commandline -ct)' -a '(string split " " -- (__imp_subcommands (__imp_command)))'
-    complete -c imp -n 'string match -q -- "-*" (commandline -ct)' -f -a '(string split " " -- (__imp_flags (__imp_command)))'
+    complete -c impz -n 'not string match -q -- "-*" (commandline -ct)' -a '(string split " " -- (__impz_subcommands (__impz_command)))'
+    complete -c impz -n 'string match -q -- "-*" (commandline -ct)' -f -a '(string split " " -- (__impz_flags (__impz_command)))'
     "
   `);
 });
@@ -219,7 +219,7 @@ test.skipIf(Bun.which('shellcheck') === null)(
 
 test('#buildCompletionTree lists the subcommands, flags, aliases and negations of a command', async () => {
   const command = defineCommand({
-    meta: { name: 'imp' },
+    meta: { name: 'impz' },
     args: {
       name: { type: 'positional' },
       verbose: { type: 'boolean', alias: 'v' },
@@ -234,7 +234,7 @@ test('#buildCompletionTree lists the subcommands, flags, aliases and negations o
   const tree = await buildCompletionTree(command);
 
   expect(tree).toStrictEqual({
-    path: 'imp',
+    path: 'impz',
     subcommands: ['ls'],
     flags: [
       '--host',
@@ -248,7 +248,7 @@ test('#buildCompletionTree lists the subcommands, flags, aliases and negations o
       '-o',
       '--out',
     ],
-    children: [{ path: 'imp ls', subcommands: [], flags: ['--json', '--help'], children: [] }],
+    children: [{ path: 'impz ls', subcommands: [], flags: ['--json', '--help'], children: [] }],
   });
 });
 
@@ -264,24 +264,24 @@ test('#completionCommand refuses a shell it has no script for', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: no completion for tcsh (try bash, zsh, fish)\n',
+    stderr: 'impz: no completion for tcsh (try bash, zsh, fish)\n',
     code: 2,
   });
 });
 
-test('#buildCompletionTree gives imp login its own flags', async () => {
+test('#buildCompletionTree gives impz login its own flags', async () => {
   const tree = await buildCompletionTree(mainCommand);
 
   expect(tree.children).toPartiallyContain({
-    path: 'imp login',
+    path: 'impz login',
     flags: expect.arrayContaining(['--no-verify']) as unknown,
   });
 });
 
-test('#buildCompletionTree holds imp completion itself, with no subcommands', async () => {
+test('#buildCompletionTree holds impz completion itself, with no subcommands', async () => {
   const tree = await buildCompletionTree(mainCommand);
 
-  expect(tree.children).toPartiallyContain({ path: 'imp completion', subcommands: [] });
+  expect(tree.children).toPartiallyContain({ path: 'impz completion', subcommands: [] });
 });
 
 test('#buildCompletionTree reaches the nested commands of the CLI', async () => {
@@ -289,7 +289,7 @@ test('#buildCompletionTree reaches the nested commands of the CLI', async () => 
 
   expect(
     tree.children.flatMap((node) => node.children.map((child) => child.path)),
-  ).toIncludeAllMembers(['imp image build', 'imp host use']);
+  ).toIncludeAllMembers(['impz image build', 'impz host use']);
 });
 
 test('#buildCompletionTree gives the CLI the flags main handles itself', async () => {
@@ -318,9 +318,9 @@ test.each(['bash', 'zsh', 'fish'] as const)(
 );
 
 test.each([
-  ['imp ch', ['checkpoint', 'checkpoints']],
-  ['imp --host work image ', ['add', 'build', 'builds', 'ls', 'rm']],
-  ['imp login https://x --no', ['--no-verify']],
+  ['impz ch', ['checkpoint', 'checkpoints']],
+  ['impz --host work image ', ['add', 'build', 'builds', 'ls', 'rm']],
+  ['impz login https://x --no', ['--no-verify']],
 ])('#renderCompletion completes %p in bash to %p', async (line, words) => {
   const tree = await buildCompletionTree(mainCommand);
 
@@ -329,7 +329,7 @@ test.each([
   const script = `${renderCompletion('bash', tree)}
 COMP_WORDS=(${typed.map((word) => `'${word}'`).join(' ')})
 COMP_CWORD=${String(typed.length - 1)}
-_imp
+_impz
 printf '%s\\n' "\${COMPREPLY[@]}"`;
 
   const child = Bun.spawn(['bash', '-c', script], { stdout: 'pipe', stderr: 'pipe' });
@@ -365,9 +365,9 @@ test.skipIf(Bun.which('zsh') === null)(
 );
 
 test.skipIf(Bun.which('fish') === null).each([
-  ['imp ch', ['checkpoint', 'checkpoints']],
-  ['imp --host work image ', ['add', 'build', 'builds', 'ls', 'rm']],
-  ['imp login https://x --no', ['--no-verify']],
+  ['impz ch', ['checkpoint', 'checkpoints']],
+  ['impz --host work image ', ['add', 'build', 'builds', 'ls', 'rm']],
+  ['impz login https://x --no', ['--no-verify']],
 ])('#renderCompletion completes %p in fish to %p', async (line, words) => {
   // fish offers file names beside the commands, so it runs in an empty dir
   const dir = await mkdtemp(join(tmpdir(), 'imp-fish-'));

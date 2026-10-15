@@ -9,7 +9,7 @@
 # /var/lib/imp must be XFS with reflink (docs/guides/install.md).
 [Unit]
 Description=imp host (impd, Firecracker, tailscaled)
-Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
+Documentation=https://github.com/zgeoff/impz/blob/main/docs/guides/install.md
 Requires=docker.service
 After=docker.service network-online.target imp-docker-proxy.service
 # impd reaches Docker through the proxy's socket. Wants, not BindsTo: a

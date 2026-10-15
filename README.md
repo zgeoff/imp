@@ -30,12 +30,12 @@ host and starts impd ([bootstrap a server](./docs/guides/install.md#bootstrap-a-
 [NixOS](./docs/guides/nixos.md) has a module. Then install the CLI on your own machine:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh   # install the CLI
-imp login https://imp.example.ts.net  # point it at your impd and its token
-imp new box                           # create and boot an imp
-imp console box                       # a shell that outlives the terminal
-imp checkpoint box clean              # name a known-good state
-imp restore box clean                 # and back
+curl -fsSL https://raw.githubusercontent.com/zgeoff/impz/main/install.sh | sh   # install the CLI
+impz login https://imp.example.ts.net  # point it at your impd and its token
+impz new box                           # create and boot an imp
+impz console box                       # a shell that outlives the terminal
+impz checkpoint box clean              # name a known-good state
+impz restore box clean                 # and back
 ```
 
 The [install guide](./docs/guides/install.md) also covers a dev instance from the repo and the

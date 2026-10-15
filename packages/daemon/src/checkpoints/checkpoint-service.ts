@@ -1,5 +1,5 @@
 import { rmSync } from 'node:fs';
-import type { Checkpoint, Imp } from '@imp/api';
+import type { Checkpoint, Imp } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildConflictError, buildInvalidStateError, buildNotFoundError } from '../api-errors';
 import type { Config } from '../config';

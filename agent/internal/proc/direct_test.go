@@ -16,7 +16,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
 
-	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/reaper"
 )
 
 // The reap loop is process-wide, so the package shares one Reaper.

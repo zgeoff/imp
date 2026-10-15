@@ -23,7 +23,7 @@ for each caller:
 A token, its dashboard sessions and its bound keys are one principal, so a lease taken through one
 is renewed or released through any of them. A deleted token's id never comes back: a new token with
 the same name holds none of the old one's leases. A tagged node whose `tailscale whois` gives no
-stable ID has no principal: a later node could take its name, so the lease calls and `imp hold`
+stable ID has no principal: a later node could take its name, so the lease calls and `impz hold`
 refuse it with `FORBIDDEN`.
 
 The caller names only a **label**, 1–64 characters of letters, digits, `.`, `_`, `:` and `-`. The
@@ -37,7 +37,7 @@ only: `{ leases: [], otherCount }`.
 
 ## Calls
 
-Each call needs `exec` on the imp, as `imp hold` does. `ttlSeconds` is 10–3600.
+Each call needs `exec` on the imp, as `impz hold` does. `ttlSeconds` is 10–3600.
 
 | Call             | Input                         | Result                     | What it does                                                                                  |
 | ---------------- | ----------------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
@@ -51,14 +51,14 @@ Each call needs `exec` on the imp, as `imp hold` does. `ttlSeconds` is 10–3600
 - A refused boot fails the acquire with `RAM_BUDGET_EXCEEDED`, and no lease is written.
 - A lease ends at its `until`. impd sends no event for that; a renew after it gets `LEASE_NOT_HELD`.
 - `acquire` and `release` emit `ImpChanged` with reason `held`. `renew` emits nothing.
-- `leases.acquire` and `leases.renew` refuse the label `hold`, which `imp hold` writes and which
+- `leases.acquire` and `leases.renew` refuse the label `hold`, which `impz hold` writes and which
   never blocks a sleep.
 
 ## Holds
 
-`imp hold <name> <duration>` (`imps.hold`) is the caller's lease with the label `hold`. It writes
+`impz hold <name> <duration>` (`imps.hold`) is the caller's lease with the label `hold`. It writes
 the lease before it wakes the imp, so a refused boot keeps the hold, and it has no upper bound.
-`imp hold <name> 0` releases the caller's hold and a hold from before leases, and keeps every other
+`impz hold <name> 0` releases the caller's hold and a hold from before leases, and keeps every other
 owner's.
 
 impd moved a hold that was live at the upgrade to the owner `legacy`, label `hold`.
@@ -78,7 +78,7 @@ do, and they outlast it.
 - With `force: true` they sleep or stop the imp, then end every such lease on it and emit
   `ImpChanged` with reason `released` and `detail.released`, the count. A sleep or stop that fails
   keeps the leases. A renew after a release gets `LEASE_NOT_HELD`.
-- `imp sleep`, `imp stop` and `imp move --stop` pass `force`, because a person typed them. The
+- `impz sleep`, `impz stop` and `impz move --stop` pass `force`, because a person typed them. The
   dashboard, the MCP tools and older CLIs cannot pass it; they meet `LEASED` only on an imp that a
   client leased through `leases.*`.
 - `imps.destroy` ends every lease with the imp.
@@ -105,7 +105,7 @@ The same filter applies over `/exec`. A `GovernorDecision` `refused` event adds 
 | Case                              | Result                                                                                                                          |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | An old CLI, dashboard or MCP tool | Old shapes. `released` reaches it as an unknown reason. A held imp sleeps as before.                                            |
-| An old `imp hold`                 | The caller's `hold` lease; `hold 0` also releases `legacy`. A tagged node with no stable ID gets `FORBIDDEN`, for `hold 0` too. |
+| An old `impz hold`                | The caller's `hold` lease; `hold 0` also releases `legacy`. A tagged node with no stable ID gets `FORBIDDEN`, for `hold 0` too. |
 | A new client and an old impd      | No `features`; `leases.*` fails with not-found; no `leases` on an imp.                                                          |
 
 ## Limits

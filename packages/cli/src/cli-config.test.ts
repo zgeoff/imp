@@ -32,8 +32,8 @@ test('it calls the local impd with no token when nothing is set', () => {
 test('it pairs the old token file with the local impd', () => {
   const ctx = setupTest();
 
-  mkdirSync(join(ctx.dir, 'imp'));
-  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'token'), 'file-token\n');
 
   expect(loadCliConfig({ XDG_CONFIG_HOME: ctx.dir }, null)).toStrictEqual({
     url: 'http://localhost:7070',
@@ -45,8 +45,8 @@ test('it pairs the old token file with the local impd', () => {
 test('it takes IMP_TOKEN alone over the token file', () => {
   const ctx = setupTest();
 
-  mkdirSync(join(ctx.dir, 'imp'));
-  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'token'), 'file-token\n');
 
   expect(loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_TOKEN: 'env-token' }, null)).toStrictEqual({
     url: 'http://localhost:7070',
@@ -63,7 +63,7 @@ test('it takes the current host over the token file', () => {
     { current: 'home', hosts: { home: { url: 'https://home.example', token: 'home-token' } } },
   );
 
-  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+  writeFileSync(join(ctx.dir, 'impz', 'token'), 'file-token\n');
 
   expect(loadCliConfig({ XDG_CONFIG_HOME: ctx.dir }, null)).toStrictEqual({
     url: 'https://home.example',
@@ -95,7 +95,7 @@ test("it never sends the current host's token to IMP_URL", () => {
     { current: 'home', hosts: { home: { url: 'https://home.example', token: 'home-token' } } },
   );
 
-  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+  writeFileSync(join(ctx.dir, 'impz', 'token'), 'file-token\n');
 
   expect(
     loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_URL: 'http://other:7070' }, null),
@@ -105,8 +105,8 @@ test("it never sends the current host's token to IMP_URL", () => {
 test('it never sends the token file to IMP_URL', () => {
   const ctx = setupTest();
 
-  mkdirSync(join(ctx.dir, 'imp'));
-  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'token'), 'file-token\n');
 
   expect(
     loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_URL: 'http://other:7070' }, null),
@@ -209,7 +209,7 @@ test('it rejects a current host that is no longer saved instead of calling the l
 
   expect(() => loadCliConfig({ XDG_CONFIG_HOME: ctx.dir }, null)).toThrowWithMessage(
     UsageError,
-    'no saved host gone (see imp host ls, or imp login <url> --name gone)',
+    'no saved host gone (see impz host ls, or impz login <url> --name gone)',
   );
 });
 
@@ -233,7 +233,7 @@ test('it notes on stderr that IMP_TOKEN is ignored beside a named host', () => {
   loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_TOKEN: 'env-token' }, 'work', warn);
 
   expect(warn).toHaveBeenCalledExactlyOnceWith(
-    'imp: note: IMP_TOKEN is ignored; work uses its saved token',
+    'impz: note: IMP_TOKEN is ignored; work uses its saved token',
   );
 });
 
@@ -242,7 +242,7 @@ test('it rejects an unknown --host', () => {
 
   expect(() => loadCliConfig({ XDG_CONFIG_HOME: ctx.dir }, 'nope')).toThrowWithMessage(
     UsageError,
-    'no saved host nope (see imp host ls, or imp login <url> --name nope)',
+    'no saved host nope (see impz host ls, or impz login <url> --name nope)',
   );
 });
 
@@ -253,7 +253,7 @@ test('it rejects an unknown IMP_HOST', () => {
     loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_HOST: 'nope' }, null),
   ).toThrowWithMessage(
     UsageError,
-    'no saved host nope (see imp host ls, or imp login <url> --name nope)',
+    'no saved host nope (see impz host ls, or impz login <url> --name nope)',
   );
 });
 
@@ -276,20 +276,20 @@ test('it rejects an IMP_URL that is not http', () => {
 test('it rejects a damaged config.json', () => {
   const ctx = setupTest();
 
-  mkdirSync(join(ctx.dir, 'imp'));
-  writeFileSync(join(ctx.dir, 'imp', 'config.json'), '{ not json', { mode: 0o600 });
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{ not json', { mode: 0o600 });
 
   expect(() => loadCliConfig({ XDG_CONFIG_HOME: ctx.dir }, null)).toThrowWithMessage(
     UsageError,
-    `${join(ctx.dir, 'imp', 'config.json')} is not valid JSON; fix or remove it`,
+    `${join(ctx.dir, 'impz', 'config.json')} is not valid JSON; fix or remove it`,
   );
 });
 
 test('it never reads a damaged config.json when IMP_URL is set', () => {
   const ctx = setupTest();
 
-  mkdirSync(join(ctx.dir, 'imp'));
-  writeFileSync(join(ctx.dir, 'imp', 'config.json'), '{ not json', { mode: 0o600 });
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{ not json', { mode: 0o600 });
 
   expect(
     loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_URL: 'http://other:7070' }, null),

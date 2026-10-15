@@ -1,4 +1,4 @@
-import { IMAGE_BUILD_LOG_MAX_CHARS } from '@imp/api';
+import { IMAGE_BUILD_LOG_MAX_CHARS } from '@impz/api';
 import { createBuildSteps } from './create-build-steps';
 import type { BuildOutput } from './create-build-steps';
 

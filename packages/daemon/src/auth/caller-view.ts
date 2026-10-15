@@ -1,5 +1,5 @@
-import type { Lease, LeaseSummary } from '@imp/api';
-import { hasScope } from '@imp/api';
+import type { Lease, LeaseSummary } from '@impz/api';
+import { hasScope } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildForbiddenError, readCallerData } from '../api-errors';
 import type { LeaseRecord } from '../db/leases';

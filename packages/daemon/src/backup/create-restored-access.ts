@@ -1,5 +1,5 @@
-import { SecretNameSchema } from '@imp/api';
-import type { BackupRestore } from '@imp/api';
+import { SecretNameSchema } from '@impz/api';
+import type { BackupRestore } from '@impz/api';
 import type { TokenStore } from '../auth/token-store';
 import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';

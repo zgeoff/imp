@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { ImpState } from '@imp/api';
+import type { ImpState } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { canTransition, findStatesLeadingTo, requireTransition } from './imp-transitions';
 

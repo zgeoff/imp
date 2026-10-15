@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { stopPid } from '../process/proc';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildMockTemplateBuildPlan } from '../test-utils/build-mock-template-build-plan';

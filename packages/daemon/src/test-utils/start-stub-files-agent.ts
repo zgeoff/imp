@@ -1,6 +1,6 @@
 import type { Socket } from 'node:net';
 import type { JsonValue } from '@bufbuild/protobuf';
-import { FILE_DATA_MAX_BYTES, FILE_SEGMENT_PATTERN } from '@imp/api';
+import { FILE_DATA_MAX_BYTES, FILE_SEGMENT_PATTERN } from '@impz/api';
 import { RequestSchema } from '../agent-client/agent-protocol';
 import type { Request } from '../agent-client/agent-protocol';
 import { decodeAgentMessage } from '../agent-client/decode-agent-message';

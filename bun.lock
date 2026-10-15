@@ -3,14 +3,14 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@zgeoff/imp",
+      "name": "impz",
       "devDependencies": {
         "@bufbuild/buf": "1.73.0",
         "@bufbuild/protobuf": "catalog:",
         "@bufbuild/protoc-gen-es": "2.16.0",
         "@commitlint/cli": "catalog:",
         "@faker-js/faker": "catalog:",
-        "@imp/test-utils": "workspace:*",
+        "@impz/test-utils": "workspace:*",
         "@stylistic/eslint-plugin": "catalog:",
         "@tsconfig/strictest": "catalog:",
         "@types/bun": "catalog:",
@@ -33,7 +33,7 @@
       },
     },
     "packages/api": {
-      "name": "@imp/api",
+      "name": "@impz/api",
       "version": "1.6.0",
       "dependencies": {
         "@orpc/client": "catalog:",
@@ -42,34 +42,34 @@
       },
       "devDependencies": {
         "@faker-js/faker": "catalog:",
-        "@imp/test-utils": "workspace:*",
+        "@impz/test-utils": "workspace:*",
       },
     },
     "packages/cli": {
-      "name": "@imp/cli",
+      "name": "@impz/cli",
       "version": "1.6.0",
       "bin": {
-        "imp": "src/main.ts",
+        "impz": "src/main.ts",
       },
       "dependencies": {
-        "@imp/api": "workspace:*",
-        "@imp/local-tar": "workspace:*",
-        "@imp/mcp": "workspace:*",
-        "@imp/shared": "workspace:*",
-        "@zgeoff/imp-client": "workspace:*",
+        "@impz/api": "workspace:*",
+        "@impz/local-tar": "workspace:*",
+        "@impz/mcp": "workspace:*",
+        "@impz/shared": "workspace:*",
+        "@impz/client": "workspace:*",
         "citty": "catalog:",
         "tar-stream": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
         "@faker-js/faker": "catalog:",
-        "@imp/daemon": "workspace:*",
-        "@imp/test-utils": "workspace:*",
+        "@impz/daemon": "workspace:*",
+        "@impz/test-utils": "workspace:*",
         "msw": "catalog:",
       },
     },
     "packages/client": {
-      "name": "@zgeoff/imp-client",
+      "name": "@impz/client",
       "version": "1.6.0",
       "dependencies": {
         "@orpc/client": "catalog:",
@@ -77,10 +77,10 @@
         "zod": "catalog:",
       },
       "devDependencies": {
-        "@imp/api": "workspace:*",
-        "@imp/daemon": "workspace:*",
-        "@imp/shared": "workspace:*",
-        "@imp/test-utils": "workspace:*",
+        "@impz/api": "workspace:*",
+        "@impz/daemon": "workspace:*",
+        "@impz/shared": "workspace:*",
+        "@impz/test-utils": "workspace:*",
         "msw": "catalog:",
         "tsdown": "catalog:",
       },
@@ -92,13 +92,13 @@
       ],
     },
     "packages/daemon": {
-      "name": "@imp/daemon",
+      "name": "@impz/daemon",
       "version": "1.6.0",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
-        "@imp/api": "workspace:*",
-        "@imp/local-tar": "workspace:*",
-        "@imp/mcp": "workspace:*",
+        "@impz/api": "workspace:*",
+        "@impz/local-tar": "workspace:*",
+        "@impz/mcp": "workspace:*",
         "@logtape/logtape": "2.4.0",
         "@opentelemetry/api": "catalog:",
         "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
@@ -108,7 +108,7 @@
         "@opentelemetry/sdk-trace-base": "catalog:",
         "@orpc/server": "catalog:",
         "@peculiar/x509": "catalog:",
-        "@zgeoff/imp-client": "workspace:*",
+        "@impz/client": "workspace:*",
         "acme-client": "catalog:",
         "dns-packet": "catalog:",
         "elysia": "catalog:",
@@ -120,7 +120,7 @@
       },
       "devDependencies": {
         "@faker-js/faker": "catalog:",
-        "@imp/test-utils": "workspace:*",
+        "@impz/test-utils": "workspace:*",
         "@modelcontextprotocol/client": "2.3.1",
         "@msw/data": "catalog:",
         "@orpc/client": "catalog:",
@@ -133,7 +133,7 @@
       },
     },
     "packages/dashboard": {
-      "name": "@imp/dashboard",
+      "name": "@impz/dashboard",
       "version": "0.0.0",
       "dependencies": {
         "@ark-ui/react": "catalog:",
@@ -143,16 +143,16 @@
         "@tanstack/react-router": "catalog:",
         "@xterm/addon-fit": "catalog:",
         "@xterm/xterm": "catalog:",
-        "@zgeoff/imp-client": "workspace:*",
+        "@impz/client": "workspace:*",
         "react": "catalog:",
         "react-dom": "catalog:",
       },
       "devDependencies": {
         "@faker-js/faker": "catalog:",
-        "@imp/api": "workspace:*",
-        "@imp/daemon": "workspace:*",
-        "@imp/shared": "workspace:*",
-        "@imp/test-utils": "workspace:*",
+        "@impz/api": "workspace:*",
+        "@impz/daemon": "workspace:*",
+        "@impz/shared": "workspace:*",
+        "@impz/test-utils": "workspace:*",
         "@msw/data": "catalog:",
         "@orpc/server": "catalog:",
         "@playwright/test": "catalog:",
@@ -168,39 +168,39 @@
       },
     },
     "packages/local-tar": {
-      "name": "@imp/local-tar",
+      "name": "@impz/local-tar",
       "version": "0.0.0",
       "dependencies": {
         "@balena/dockerignore": "catalog:",
         "tar-stream": "catalog:",
       },
       "devDependencies": {
-        "@imp/test-utils": "workspace:*",
+        "@impz/test-utils": "workspace:*",
       },
     },
     "packages/mcp": {
-      "name": "@imp/mcp",
+      "name": "@impz/mcp",
       "version": "0.0.0",
       "dependencies": {
-        "@imp/api": "workspace:*",
-        "@imp/shared": "workspace:*",
+        "@impz/api": "workspace:*",
+        "@impz/shared": "workspace:*",
         "@modelcontextprotocol/server": "2.3.1",
-        "@zgeoff/imp-client": "workspace:*",
+        "@impz/client": "workspace:*",
         "zod": "catalog:",
       },
       "devDependencies": {
         "@faker-js/faker": "catalog:",
-        "@imp/daemon": "workspace:*",
-        "@imp/test-utils": "workspace:*",
+        "@impz/daemon": "workspace:*",
+        "@impz/test-utils": "workspace:*",
         "@modelcontextprotocol/client": "2.3.1",
       },
     },
     "packages/shared": {
-      "name": "@imp/shared",
+      "name": "@impz/shared",
       "version": "0.0.0",
     },
     "packages/test-utils": {
-      "name": "@imp/test-utils",
+      "name": "@impz/test-utils",
       "version": "0.0.0",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
@@ -403,21 +403,21 @@
 
     "@humanwhocodes/retry": ["@humanwhocodes/retry@0.4.3", "", {}, "sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ=="],
 
-    "@imp/api": ["@imp/api@workspace:packages/api"],
+    "@impz/api": ["@impz/api@workspace:packages/api"],
 
-    "@imp/cli": ["@imp/cli@workspace:packages/cli"],
+    "@impz/cli": ["@impz/cli@workspace:packages/cli"],
 
-    "@imp/daemon": ["@imp/daemon@workspace:packages/daemon"],
+    "@impz/daemon": ["@impz/daemon@workspace:packages/daemon"],
 
-    "@imp/dashboard": ["@imp/dashboard@workspace:packages/dashboard"],
+    "@impz/dashboard": ["@impz/dashboard@workspace:packages/dashboard"],
 
-    "@imp/local-tar": ["@imp/local-tar@workspace:packages/local-tar"],
+    "@impz/local-tar": ["@impz/local-tar@workspace:packages/local-tar"],
 
-    "@imp/mcp": ["@imp/mcp@workspace:packages/mcp"],
+    "@impz/mcp": ["@impz/mcp@workspace:packages/mcp"],
 
-    "@imp/shared": ["@imp/shared@workspace:packages/shared"],
+    "@impz/shared": ["@impz/shared@workspace:packages/shared"],
 
-    "@imp/test-utils": ["@imp/test-utils@workspace:packages/test-utils"],
+    "@impz/test-utils": ["@impz/test-utils@workspace:packages/test-utils"],
 
     "@inquirer/ansi": ["@inquirer/ansi@2.0.8", "", {}, "sha512-WpQM+Ti6Z40EFwwt+uL2p4UabT+W179zHp6HhLVOzfbwnVn05IPO/eXIZXGNqcT1jbQ15SujNLzQ39k4QPPxBQ=="],
 
@@ -1077,7 +1077,7 @@
 
     "@zgeoff/format-codemod": ["@zgeoff/format-codemod@0.1.0", "", { "dependencies": { "oxc-parser": "0.137.0" }, "bin": { "format-codemod": "dist/cli.js" } }, "sha512-WVP6d3iuuaKuYrGIuHLkTxjI3W2IQzeAq6TtUiZiz+uw4f2AF2q4GgKQ6czpz/89qgZXauvhl1Pcef1/NZl4Rg=="],
 
-    "@zgeoff/imp-client": ["@zgeoff/imp-client@workspace:packages/client"],
+    "@impz/client": ["@impz/client@workspace:packages/client"],
 
     "@zgeoff/oxlint-config": ["@zgeoff/oxlint-config@0.2.0", "", { "dependencies": { "@stylistic/eslint-plugin": "5.10.0" }, "peerDependencies": { "oxlint": ">=1.71.0" } }, "sha512-wdHEVoGxq447T3Pru4dJ8Up6DB/bhj19ew4XZ8r0kOkw5XmqDdxAAz+mkAwsjRVTMWyD4WJojm2oRYfvV8DlaA=="],
 

@@ -14,7 +14,7 @@ test('it counts every reference inside a marker block as a default', () => {
   const text = [
     '# x-release-please-start-version',
     'IMAGE=ghcr.io/zgeoff/imp-host:1.2.3',
-    'curl https://raw.githubusercontent.com/zgeoff/imp/v1.2.3/deploy/bootstrap.sh',
+    'curl https://raw.githubusercontent.com/zgeoff/impz/v1.2.3/deploy/bootstrap.sh',
     '# x-release-please-end',
   ].join('\n');
 
@@ -61,7 +61,7 @@ test('it lets the definition of the old template line name latest', () => {
 });
 
 test('it reports a deploy file fetched from main', () => {
-  const text = 'curl https://raw.githubusercontent.com/zgeoff/imp/main/deploy/bootstrap.sh\n';
+  const text = 'curl https://raw.githubusercontent.com/zgeoff/impz/main/deploy/bootstrap.sh\n';
 
   expect(checkReleaseRefs('guide.md', text, '1.2.3')).toStrictEqual({
     problems: ['guide.md:1: fetches from main, not this release'],

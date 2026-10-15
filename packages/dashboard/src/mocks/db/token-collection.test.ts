@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { Token } from '@imp/api';
+import type { Token } from '@impz/api';
 import { readTokenId, tokenCollection } from './token-collection';
 
 test('#tokenCollection creates a default manage token for every imp with its secret', async () => {

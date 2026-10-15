@@ -1,11 +1,11 @@
 {
-  "name": "@zgeoff/imp-client",
+  "name": "@impz/client",
   "version": "1.6.0",
   "description": "Typed client for impd, the imp host daemon: imps, checkpoints, images and exec",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zgeoff/imp.git",
+    "url": "git+https://github.com/zgeoff/impz.git",
     "directory": "packages/client"
   },
   "type": "module",
@@ -21,10 +21,10 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@imp/api": "workspace:*",
-    "@imp/daemon": "workspace:*",
-    "@imp/shared": "workspace:*",
-    "@imp/test-utils": "workspace:*",
+    "@impz/api": "workspace:*",
+    "@impz/daemon": "workspace:*",
+    "@impz/shared": "workspace:*",
+    "@impz/test-utils": "workspace:*",
     "msw": "catalog:",
     "tsdown": "catalog:"
   },

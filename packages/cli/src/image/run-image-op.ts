@@ -1,4 +1,4 @@
-import type { Image, ImageOpEvent } from '@imp/api';
+import type { Image, ImageOpEvent } from '@impz/api';
 import type { ImpClient } from '../create-imp-client';
 import { createBuildStatus } from './build-status';
 
@@ -35,7 +35,7 @@ export async function runOnHostBuild(
 
   const events = await client.images.buildStream({ ...input, logs: !quiet });
 
-  return readImageOp(events, 'imp image build', quiet);
+  return readImageOp(events, 'impz image build', quiet);
 }
 
 // An impd from before the streams answers only when the work ends, so a

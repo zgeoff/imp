@@ -7,7 +7,7 @@ export interface TextCapture {
 }
 
 // Collects a child's output stream as text while the test goes on, such as
-// the lines `imp proxy` or `imp events` print.
+// the lines `impz proxy` or `impz events` print.
 export function startTextCapture(stream: ReadableStream<Uint8Array>): TextCapture {
   const decoder = new TextDecoder();
 

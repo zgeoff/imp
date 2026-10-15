@@ -3,7 +3,7 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { countTarBytes, listContextEntries } from '@imp/local-tar';
+import { countTarBytes, listContextEntries } from '@impz/local-tar';
 import { listTree } from '../test-utils/list-tree';
 import { checkDockerBuildx, runDockerBuild } from '../test-utils/run-docker-build';
 import { createContextStream } from './run-image-build';

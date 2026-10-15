@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { Image } from '@imp/api';
+import type { Image } from '@impz/api';
 import { imageCollection } from './image-collection';
 
 test('it creates a default image', async () => {

@@ -1,4 +1,4 @@
-import type { EgressPolicy } from '@imp/api';
+import type { EgressPolicy } from '@impz/api';
 import { parseIpv4 } from '../net/addressing';
 import { parseIpv6 } from '../net/addressing6';
 

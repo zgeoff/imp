@@ -2,7 +2,7 @@ import { UsageError } from './usage-error';
 
 export const DEFAULT_DETACH_KEY = 'ctrl-]';
 
-// the session `imp console` and `imp attach` use when none is named
+// the session `impz console` and `impz attach` use when none is named
 export const DEFAULT_SESSION = 'main';
 
 // ctrl-[ is Escape, and ctrl-h, ctrl-i, ctrl-j and ctrl-m are Backspace,

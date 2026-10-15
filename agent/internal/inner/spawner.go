@@ -7,8 +7,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // spawner is the inner init's half of the socket: it starts what the agent

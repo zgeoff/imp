@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { NameSchema } from '../schemas/name-schema';
 
-// `/tunnel` WebSocket for `imp proxy`, one per TCP connection, bearer auth only.
+// `/tunnel` WebSocket for `impz proxy`, one per TCP connection, bearer auth only.
 // The client sends `open` and waits for `opened`; binary messages then carry
 // the bytes, and `eof` is a TCP half-close from that side.
 

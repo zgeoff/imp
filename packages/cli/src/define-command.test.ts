@@ -62,7 +62,7 @@ test('it refuses flags the command does not declare, with exit code 2 and no cal
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: unknown flags --checkpoint, -v for fork (see --help)\n',
+    stderr: 'impz: unknown flags --checkpoint, -v for fork (see --help)\n',
     code: 2,
   });
 });
@@ -73,5 +73,5 @@ test('it names a single undeclared flag as a flag', async () => {
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
-  expect(result.stderr).toBe('imp: unknown flag --zzz for fork (see --help)\n');
+  expect(result.stderr).toBe('impz: unknown flag --zzz for fork (see --help)\n');
 });

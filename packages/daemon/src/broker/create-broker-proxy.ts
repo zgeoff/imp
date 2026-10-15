@@ -1,6 +1,6 @@
 import type { Socket } from 'node:net';
 import { join } from 'node:path';
-import type { EgressMode } from '@imp/api';
+import type { EgressMode } from '@impz/api';
 import type { Config } from '../config';
 import { writeAuditEntry } from '../db/broker-audit';
 import type { NewAuditEntry } from '../db/broker-audit';

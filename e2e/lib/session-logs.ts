@@ -15,7 +15,7 @@ const SessionLogRowSchema = z.object({
 
 export type SessionLogRow = z.infer<typeof SessionLogRowSchema>;
 
-// `imp sessions logs <imp> --json`, with the fields the suites read
+// `impz sessions logs <imp> --json`, with the fields the suites read
 export function parseSessionLogs(stdout: string): SessionLogRow[] {
   return z.array(SessionLogRowSchema).parse(JSON.parse(stdout));
 }

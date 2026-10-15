@@ -1,4 +1,4 @@
-import type { NoSessionData } from '@imp/api';
+import type { NoSessionData } from '@impz/api';
 import { ExecError } from './exec-error';
 
 // No process runs under the session name. data, from an agent with offsets,

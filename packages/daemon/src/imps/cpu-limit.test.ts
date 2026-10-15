@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { findImpByName, updateImpActivity } from '../db/imps';
 import { hasSnapshot } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';

@@ -1,4 +1,4 @@
-import { ORPCError } from '@zgeoff/imp-client';
+import { ORPCError } from '@impz/client';
 import { isHttpUrl } from '../cli-config';
 import { createImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
@@ -88,7 +88,7 @@ export const loginCommand = defineCommand({
         verify: context.args.verify,
         readToken: () => readToken(),
         warn: (message) => {
-          console.error(`imp: ${message}`);
+          console.error(`impz: ${message}`);
         },
       });
 
@@ -144,12 +144,12 @@ const rmCommand = defineCommand({
 });
 
 export const hostCommand = defineCommand({
-  meta: { name: 'host', description: 'Manage saved impd hosts (see also imp login)' },
+  meta: { name: 'host', description: 'Manage saved impd hosts (see also impz login)' },
   subCommands: { ls: lsCommand, use: useCommand, rm: rmCommand },
 });
 
 export const hostsCommand = defineCommand({
-  meta: { name: 'hosts', description: 'List saved hosts (imp host ls)' },
+  meta: { name: 'hosts', description: 'List saved hosts (impz host ls)' },
   args: { json: jsonArg },
   run: (context) => {
     listHosts(context.args.json === true);
@@ -205,7 +205,7 @@ async function verifyToken(url: string, token: string): Promise<void> {
 
 function requireHost(config: HostConfig, name: string): string {
   if (config.hosts[name] === undefined) {
-    throw new UsageError(`no saved host ${name} (see imp host ls)`);
+    throw new UsageError(`no saved host ${name} (see impz host ls)`);
   }
 
   return name;

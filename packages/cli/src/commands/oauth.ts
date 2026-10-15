@@ -1,5 +1,5 @@
-import { ApprovalCodeSchema, GrantPatternSchema, RedirectUriSchema, ScopeSchema } from '@imp/api';
-import type { Scope } from '@imp/api';
+import { ApprovalCodeSchema, GrantPatternSchema, RedirectUriSchema, ScopeSchema } from '@impz/api';
+import type { Scope } from '@impz/api';
 import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
 import {
@@ -166,7 +166,7 @@ const grantRmCommand = defineCommand({
     description: 'End a grant; its tokens, sessions and running commands end at once',
   },
   args: {
-    id: { type: 'positional', description: 'grant ID (imp oauth grant ls)', required: true },
+    id: { type: 'positional', description: 'grant ID (impz oauth grant ls)', required: true },
   },
   run: (context) =>
     runAction(context.host, async (client) => {
@@ -210,7 +210,7 @@ export async function runApprove(
 ): Promise<void> {
   if (!request.isConfirmed && !prompt.isTerminal) {
     throw new UsageError(
-      'imp oauth approve asks before it approves, and stdin is not a terminal; pass --yes to approve without asking',
+      'impz oauth approve asks before it approves, and stdin is not a terminal; pass --yes to approve without asking',
     );
   }
 
@@ -236,7 +236,7 @@ export async function runApprove(
   });
 
   prompt.show(
-    `imp: approved: ${approval.client} gets ${request.scope} on ${where}; press Continue on the sign-in page`,
+    `impz: approved: ${approval.client} gets ${request.scope} on ${where}; press Continue on the sign-in page`,
   );
 }
 

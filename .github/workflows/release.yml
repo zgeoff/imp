@@ -3,7 +3,7 @@ name: Release
 # Builds a release and publishes it (docs/runbooks/releasing.md): the host and base
 # images to GHCR, the CLI binaries, the guest kernel, the system drive and
 # SHA256SUMS to the GitHub release, the Homebrew formula to the tap, and
-# @zgeoff/imp-client to npm, the last two once they are turned on.
+# @impz/client to npm, the last two once they are turned on.
 #
 # - Started by ci.yml's release-please job with the tag it just created.
 # - Run by hand with a tag to republish an existing release. Every step is
@@ -141,12 +141,15 @@ jobs:
           name: release-assets
           path: dist
 
+      # a tag from before the CLI's rename builds imp-<target>
       - name: Check the binary and its checksum
         env:
-          BIN: imp-${{ matrix.target }}
+          TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.assets.outputs.version }}
         run: |
           cd dist
+          BIN=impz-$TARGET
+          [ -f "$BIN" ] || BIN=imp-$TARGET
           grep "  $BIN\$" SHA256SUMS | shasum -a 256 -c -
           chmod +x "$BIN"
           got=$("./$BIN" --version)
@@ -519,20 +522,20 @@ jobs:
           mkdir -p tap/Formula
           formula=scripts/release/build-formula.sh
           [ -f "$formula" ] || formula=scripts/build-formula.sh
-          "$formula" "$VERSION" dist/SHA256SUMS > tap/Formula/imp.rb
+          "$formula" "$VERSION" dist/SHA256SUMS > tap/Formula/impz.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/imp.rb
+          git add Formula/impz.rb
           if git diff --cached --quiet; then
             echo "the formula is at $VERSION already"
             exit 0
           fi
-          git commit -m "imp $VERSION"
+          git commit -m "impz $VERSION"
           git pull --rebase
           git push
 
-  # Packs and checks @zgeoff/imp-client for npm, once the release itself is
+  # Packs and checks @impz/client for npm, once the release itself is
   # out. Off until the owner sets the Actions variable NPM_PUBLISH_ENABLED to
   # true, after the first publish by hand (docs/runbooks/releasing.md). A version already on
   # npm is skipped, so a republish is safe. Building runs here, without the

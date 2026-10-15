@@ -10,8 +10,8 @@ import (
 	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/reaper"
 )
 
 // fakeInit is an inner init served in the test's own process: a spawner on

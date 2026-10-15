@@ -2,7 +2,7 @@
 # Run shellcheck and shfmt over install.sh and every tracked shell file under
 # scripts/, host/, kernel/, deploy/, e2e/ and packages/.
 # A file counts as shell when it ends in .sh, starts with a shell shebang
-# (scripts/imp, host/entrypoint), or carries a `# shellcheck shell=` directive
+# (scripts/impz, host/entrypoint), or carries a `# shellcheck shell=` directive
 # (sourced libraries such as scripts/lib.sh).
 set -euo pipefail
 cd "$(dirname "$0")/../.."

@@ -32,7 +32,7 @@ test('it keeps a local path local when a slash comes before its colon', () => {
 test('it keeps a side local when the part before its colon is no imp name', () => {
   expect(() => parseCpArgs('Not_A_Name:/a', 'b')).toThrowWithMessage(
     UsageError,
-    'one side of imp cp is in an imp: imp cp ./dir box:/srv/dir, or imp cp box:/var/log/x .',
+    'one side of imp cp is in an imp: impz cp ./dir box:/srv/dir, or impz cp box:/var/log/x .',
   );
 });
 
@@ -42,7 +42,7 @@ test.each([
 ])('it rejects %p and %p, not exactly one side in an imp, as a usage error', (source, target) => {
   expect(() => parseCpArgs(source, target)).toThrowWithMessage(
     UsageError,
-    'one side of imp cp is in an imp: imp cp ./dir box:/srv/dir, or imp cp box:/var/log/x .',
+    'one side of imp cp is in an imp: impz cp ./dir box:/srv/dir, or impz cp box:/var/log/x .',
   );
 });
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { readInBackground } from './read-in-background';
 
 test('it keeps each item as the source sends it, before the source ends', async () => {

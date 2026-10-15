@@ -1,7 +1,7 @@
-import type { ExecHandle, ImpClient } from '@zgeoff/imp-client';
+import type { ExecHandle, ImpClient } from '@impz/client';
 import type { TerminalConnection, TerminalEnd, TerminalSource } from './terminal-source';
 
-// A login shell in the imp, as `imp console` opens; it wakes a sleeping imp
+// A login shell in the imp, as `impz console` opens; it wakes a sleeping imp
 export function createConsoleSource(
   client: Pick<ImpClient, 'openConsole'>,
   name: string,

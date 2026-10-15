@@ -7,7 +7,7 @@ const EventLineSchema = z.object({
   imp: z.object({ name: z.string(), state: z.string() }).optional(),
 });
 
-// One line `imp events` prints, as `name ev reason`; a snapshot line ends with
+// One line `impz events` prints, as `name ev reason`; a snapshot line ends with
 // the imp's state. A governor decision is null, since it depends on what else
 // is awake.
 export function formatEventLine(line: string): string | null {
@@ -27,7 +27,7 @@ export function formatEventLine(line: string): string | null {
   return words.filter((word) => word !== undefined).join(' ');
 }
 
-// Passes each formatted line of an `imp events` stdout to `onLine` as it
+// Passes each formatted line of an `impz events` stdout to `onLine` as it
 // comes, until the stream ends.
 export async function collectEventLines(
   stdout: ReadableStream<Uint8Array>,

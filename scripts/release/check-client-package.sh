@@ -1,10 +1,10 @@
 #!/bin/bash
-# Install a packed @zgeoff/imp-client (scripts/release/pack-client.sh) into an empty
+# Install a packed @impz/client (scripts/release/pack-client.sh) into an empty
 # project, as a user would, and check that it imports under plain Node, with
 # no Bun and no workspace, and that its types check in a strict project. The
 # programs for both live in packages/client/smoke/.
 #
-#   scripts/release/check-client-package.sh build/npm/zgeoff-imp-client-X.Y.Z.tgz
+#   scripts/release/check-client-package.sh build/npm/impz-client-X.Y.Z.tgz
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)

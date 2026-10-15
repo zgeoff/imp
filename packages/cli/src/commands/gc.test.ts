@@ -9,7 +9,7 @@ test('it refuses --secret-files without --orphans before it deletes anything', a
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --secret-files goes with --orphans\n',
+    stderr: 'impz: --secret-files goes with --orphans\n',
     code: 2,
   });
 });

@@ -1,4 +1,4 @@
-import { CONSOLE_SHELL } from '@imp/api';
+import { CONSOLE_SHELL } from '@impz/api';
 import type { AcceptConnection, PseudoTtyInfo, ServerChannel, Session } from 'ssh2';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';

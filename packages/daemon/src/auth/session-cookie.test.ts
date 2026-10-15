@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import {
   buildClearedSessionCookies,
   buildSessionCookie,

@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { findFreePorts } from './find-free-ports';
 
 test('it hands out distinct ports', () => {
@@ -176,7 +176,7 @@ test('it never hands two pickers in separate processes the same port', async () 
     join(dir, 'picker.test.ts'),
     `import { test } from 'bun:test';
 import { existsSync, writeFileSync } from 'node:fs';
-import { waitFor } from ${JSON.stringify(Bun.resolveSync('@imp/test-utils/wait-for', import.meta.dir))};
+import { waitFor } from ${JSON.stringify(Bun.resolveSync('@impz/test-utils/wait-for', import.meta.dir))};
 import { findFreePorts } from ${JSON.stringify(join(import.meta.dir, 'find-free-ports.ts'))};
 
 test('it picks two ports and holds them until released', async () => {

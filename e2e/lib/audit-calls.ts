@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { runImp } from './imp-cli';
 
-// The api audit rows of one imp, newest first, as `imp audit --json` prints
+// The api audit rows of one imp, newest first, as `impz audit --json` prints
 // them.
 
 const AuditCallsSchema = z.array(

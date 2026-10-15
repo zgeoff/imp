@@ -9,7 +9,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// `imp events` (docs/guides/events.md) and the api audit log, over one imp's
+// `impz events` (docs/guides/events.md) and the api audit log, over one imp's
 // create, sleep, wake and rm.
 
 // one stack for every release, so the event stream ends before its imps go
@@ -50,7 +50,7 @@ test('it streams a create, sleep, wake and rm as events with no reconnect, and l
     seen.push(line);
   });
 
-  await waitFor('the snapshot from imp events', () => {
+  await waitFor('the snapshot from impz events', () => {
     expect(seen).toContain(`${anchor} ImpAdded snapshot running`);
   });
 
@@ -64,7 +64,7 @@ test('it streams a create, sleep, wake and rm as events with no reconnect, and l
   await runImp('wake', name);
   await runImp('rm', name);
 
-  await waitFor('the rm in imp events', () => {
+  await waitFor('the rm in impz events', () => {
     expect(seen).toContain(`${name} ImpRemoved`);
   });
 

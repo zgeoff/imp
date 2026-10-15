@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/client';
 import { findImpByName } from '../db/imps';
 import { buildTemplateKey } from '../templates/boot-templates';

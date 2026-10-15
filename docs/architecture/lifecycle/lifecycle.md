@@ -92,7 +92,7 @@ A lease keeps an imp awake on purpose. Each lease belongs to one caller, by its 
 label and an end, and an acquire wakes or boots the imp. The imp's hold is the latest end of its
 live leases, and the idle loop and the governor both skip a held imp. A lease taken through the
 lease API also blocks a user's sleep or stop, which fails with `LEASED` unless the caller passes
-`force`, and that ends the leases. The `hold` label that `imp hold` writes keeps the imp awake but
+`force`, and that ends the leases. The `hold` label that `impz hold` writes keeps the imp awake but
 never blocks a sleep or stop. Nothing renews a lease for its holder: a holder that dies leaves its
 lease to run out at its end, and deleting a token ends none of its leases.
 

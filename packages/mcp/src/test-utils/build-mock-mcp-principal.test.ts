@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
 import { createImpGuard } from '../imp-guard';
 import { buildMockMcpPrincipal } from './build-mock-mcp-principal';
 

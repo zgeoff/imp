@@ -1,4 +1,4 @@
-import type { OAuthConfig } from '@imp/api';
+import type { OAuthConfig } from '@impz/api';
 import * as z from 'zod';
 import type { ImpDatabase } from '../db/open-database';
 import { findSecret, listSecrets } from '../db/secrets';

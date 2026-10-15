@@ -9,7 +9,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent, removeTokenIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// `imp mcp` over stdio, as an agent's MCP client drives it, held to the
+// `impz mcp` over stdio, as an agent's MCP client drives it, held to the
 // suite's prefix; and impd's MCP over HTTP. The file tools' commands must
 // work with BusyBox (e2e-tiny) and coreutils (impd's default image).
 

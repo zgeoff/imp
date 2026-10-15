@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { isImpAllowed } from '@imp/api';
+import { isImpAllowed } from '@impz/api';
 import fc from 'fast-check';
 import { toLikePattern } from './imp-patterns';
 

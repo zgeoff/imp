@@ -1,5 +1,5 @@
-import { PublicAuthSchema } from '@imp/api';
-import type { PublicAuth } from '@imp/api';
+import { PublicAuthSchema } from '@impz/api';
+import type { PublicAuth } from '@impz/api';
 import { UsageError } from './usage-error';
 
 export interface PublicAuthRequest {

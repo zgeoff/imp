@@ -2,29 +2,29 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { findImpByName } from '@imp/daemon/src/db/imps';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { findImpByName } from '@impz/daemon/src/db/imps';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubExecGuest } from '@imp/daemon/src/test-utils/build-stub-exec-guest';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubExecAgent } from '@imp/daemon/src/test-utils/start-stub-exec-agent';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '@impz/daemon/src/test-utils/build-stub-exec-guest';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { startStubExecAgent } from '@impz/daemon/src/test-utils/start-stub-exec-agent';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 
-// impd's real app on a loopback port, where the `imp mcp` subprocess reaches
+// impd's real app on a loopback port, where the `impz mcp` subprocess reaches
 // it, the CLI's entry the tests run it from, a root client for the scenario,
 // and `stack`, whose releases run before impd stops
 async function setupTest() {
@@ -481,5 +481,5 @@ test('it exits 2 without a guard and says how to choose one', async () => {
   const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
 
   expect(code).toBe(2);
-  expect(stderr).toBe('imp: choose the imps this server may touch: --prefix, --allow or --all\n');
+  expect(stderr).toBe('impz: choose the imps this server may touch: --prefix, --allow or --all\n');
 });

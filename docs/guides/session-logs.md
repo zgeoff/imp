@@ -7,11 +7,11 @@ as a [resume](../architecture/guest/sessions.md#generations-boots-and-offsets). 
 a session started without `log`.
 
 ```sh
-imp console dev --session build --log      # start a logged session (attaching changes nothing)
-imp sessions logs dev                       # every log of the imp, newest first
-imp sessions log dev build                  # the newest log of `build`, raw, to stdout
-imp sessions log dev build <generation> --from 1048576
-imp sessions log-rm dev build               # delete the logs of `build`
+impz console dev --session build --log      # start a logged session (attaching changes nothing)
+impz sessions logs dev                       # every log of the imp, newest first
+impz sessions log dev build                  # the newest log of `build`, raw, to stdout
+impz sessions log dev build <generation> --from 1048576
+impz sessions log-rm dev build               # delete the logs of `build`
 ```
 
 None of these calls wakes or boots the imp: the logs live on the host.
@@ -47,8 +47,8 @@ saw: `logStart` is 0, there is no hole, and `logEnd` equals `end`. A generation 
 cold boot ended has no `end`, as the agent never reported one. Its log ends where impd's tap last
 read.
 
-In the SDK (`@zgeoff/imp-client`), `openExec` and `openConsole` take `log`, and `client.sessions`
-has `logs`, `readLog` and `deleteLog`.
+In the SDK (`@impz/client`), `openExec` and `openConsole` take `log`, and `client.sessions` has
+`logs`, `readLog` and `deleteLog`.
 
 ## What is kept
 
@@ -85,7 +85,7 @@ reach the disk ([daemon](../architecture/guest/sessions.md#session-logs)).
 | Fork, template         | Not copied. A fork or a template is a new disk; the log is not on the disk.               |
 | Backup and restore     | Not backed up.                                                                            |
 | Move to another host   | Not carried. The source deletes it with its copy of the imp.                              |
-| `imp rm`               | Deleted.                                                                                  |
+| `impz rm`              | Deleted.                                                                                  |
 
 ## Privacy
 
@@ -95,7 +95,7 @@ Output can hold secrets: a token a program prints, a password typed at a prompt 
   Listing the logs needs `read`; the list holds no output.
 - The log lives under the imp's directory on the host, `imps/<id>/session-logs/`, mode 0700, which
   the guest cannot reach. It goes nowhere else: no backup, fork, template or move carries it.
-- `imp sessions log-rm`, the age bound and `imp rm` delete it. A live generation that is deleted
+- `impz sessions log-rm`, the age bound and `impz rm` delete it. A live generation that is deleted
   leaves a tombstone, `session-logs/.deleted/<generation>`, so no impd logs it again, a restarted
   one included; the tombstone goes once the generation has ended.
 - impd does not trust the guest: every generation, boot id and session name an agent reports must

@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import type { ColdBootCause, ImpEventDetail } from '@imp/api';
+import type { ColdBootCause, ImpEventDetail } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { sendActivity } from '../agent-client/agent-requests';
 import { isAgentError } from '../agent-client/is-agent-error';

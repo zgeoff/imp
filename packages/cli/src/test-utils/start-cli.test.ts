@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { runCli, startCli } from './start-cli';
 
 test('#runCli returns the output and exit code of a usage error', async () => {
@@ -13,7 +13,7 @@ test('#runCli returns the output and exit code of a usage error', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --secret-files goes with --orphans\n',
+    stderr: 'impz: --secret-files goes with --orphans\n',
     code: 2,
   });
 });
@@ -34,7 +34,7 @@ test('#runCli pipes stdin into the CLI', async () => {
   expect(received).toStrictEqual({
     stdout: '',
     stderr: expect.stringMatching(
-      /^imp: cannot check the token with http:\/\/127\.0\.0\.1:1: /u,
+      /^impz: cannot check the token with http:\/\/127\.0\.0\.1:1: /u,
     ) as unknown,
     code: 1,
   });
@@ -51,7 +51,7 @@ test('#runCli closes an empty stdin', async () => {
     stdin: '',
   });
 
-  expect(result.stderr).toBe('imp: no token given; nothing saved\n');
+  expect(result.stderr).toBe('impz: no token given; nothing saved\n');
 });
 
 test('#runCli keeps the test run’s variables from the CLI', async () => {
@@ -69,7 +69,7 @@ test('#runCli keeps the test run’s variables from the CLI', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: Unable to connect. Is the computer able to access the url?\n',
+    stderr: 'impz: Unable to connect. Is the computer able to access the url?\n',
     code: 1,
   });
 });

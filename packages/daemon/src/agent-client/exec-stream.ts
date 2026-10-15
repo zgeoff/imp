@@ -5,7 +5,7 @@ import type {
   ResumeFrom,
   ResumeResult,
   SessionOutput,
-} from '@imp/api';
+} from '@impz/api';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { buildAgentOutdatedError, handleUnknownOp } from './agent-outdated';

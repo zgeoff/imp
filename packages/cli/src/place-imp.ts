@@ -1,10 +1,10 @@
-import { isImpAllowed } from '@imp/api';
-import type { EgressMode, Identity, SystemInfo } from '@imp/api';
-import { ORPCError } from '@zgeoff/imp-client';
+import { isImpAllowed } from '@impz/api';
+import type { EgressMode, Identity, SystemInfo } from '@impz/api';
+import { ORPCError } from '@impz/client';
 import type { ImpClient } from './create-imp-client';
 import type { HostAnswer } from './fan-out';
 
-// what `imp new --place` asks of a host
+// what `impz new --place` asks of a host
 export interface PlaceRequest {
   readonly name: string | null;
   readonly image: string | null;

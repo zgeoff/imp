@@ -1,6 +1,6 @@
-import type { Scope } from '@imp/api';
+import type { Scope } from '@impz/api';
+import { ExecError, ORPCError } from '@impz/client';
 import type { CallToolResult, Tool as ToolDefinition } from '@modelcontextprotocol/server';
-import { ExecError, ORPCError } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import type { After } from '../after';
 import { GuardError } from '../imp-guard';

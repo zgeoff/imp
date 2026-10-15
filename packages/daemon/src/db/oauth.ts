@@ -1,4 +1,4 @@
-import type { Scope } from '@imp/api';
+import type { Scope } from '@impz/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { ImpsSchema } from './imps-schema';

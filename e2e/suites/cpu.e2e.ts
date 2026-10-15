@@ -44,7 +44,7 @@ test.skipIf(cpuLimitsMissing)('it reports CPU limits as enforced', async () => {
 });
 
 test.skipIf(cpuLimitsMissing)(
-  'it holds a busy guest under a limit of half a core, again after a sleep and a wake, and under a limit imp set changes at once',
+  'it holds a busy guest under a limit of half a core, again after a sleep and a wake, and under a limit impz set changes at once',
   async () => {
     const ctx = await setupTest();
 
@@ -104,7 +104,7 @@ test.skipIf(cpuLimitsMissing)(
 );
 
 test.skipIf(cpuLimitsMissing)(
-  'it prints the imp in imp top with its sampled throttling and weight',
+  'it prints the imp in impz top with its sampled throttling and weight',
   async () => {
     const ctx = await setupTest();
 

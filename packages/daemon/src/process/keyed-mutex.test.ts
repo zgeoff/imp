@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { createKeyedMutex } from './keyed-mutex';
 
 test('#runExclusive runs the tasks of one key one at a time, in the order they were queued', async () => {

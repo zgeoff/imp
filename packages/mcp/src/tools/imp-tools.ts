@@ -1,4 +1,4 @@
-import { ImpCreateInputSchema, NameSchema } from '@imp/api';
+import { ImpCreateInputSchema, NameSchema } from '@impz/api';
 import * as z from 'zod';
 import { defineTool } from './define-tool';
 import type { Tool } from './define-tool';

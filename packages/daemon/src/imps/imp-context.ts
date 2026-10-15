@@ -1,5 +1,5 @@
 import { availableParallelism } from 'node:os';
-import type { EgressPolicy } from '@imp/api';
+import type { EgressPolicy } from '@impz/api';
 import type { openTapStream } from '../agent-client/exec-stream';
 import type { BrokerExecEnv } from '../broker/guest-trust';
 import type { Config } from '../config';

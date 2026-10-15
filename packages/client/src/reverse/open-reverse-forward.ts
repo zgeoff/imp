@@ -6,8 +6,8 @@ import {
   TUNNEL_PATH,
   TUNNEL_WINDOW_BYTES,
   TunnelServerMessageSchema,
-} from '@imp/api';
-import type { TunnelClientMessage, TunnelListen, TunnelServerMessage } from '@imp/api';
+} from '@impz/api';
+import type { TunnelClientMessage, TunnelListen, TunnelServerMessage } from '@impz/api';
 import { resolveImpdUrl } from '../resolve-impd-url';
 
 // Where a reverse forward listens in the imp: a unix socket at a path (null

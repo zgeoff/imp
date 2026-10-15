@@ -249,7 +249,7 @@ test.each([
   ['localhost:5000/x@sha256:ab', 'localhost:5000', 'x'],
   ['LocalHost/name', 'LocalHost', 'name'],
   ['imp-host:dev', 'docker.io', 'library/imp-host'],
-  ['zgeoff/imp:1', 'docker.io', 'zgeoff/imp'],
+  ['zgeoff/impz:1', 'docker.io', 'zgeoff/impz'],
 ])('#readImageReference reads %s as registry %s and path %s', (reference, registry, path) => {
   expect(readImageReference(reference)).toStrictEqual({ registry, path });
 });

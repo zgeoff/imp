@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { impContract } from '@imp/api';
+import { impContract } from '@impz/api';
 import { traverseContractProcedures } from '@orpc/server';
 import * as z from 'zod';
 import { findAccess } from './access-policy';
