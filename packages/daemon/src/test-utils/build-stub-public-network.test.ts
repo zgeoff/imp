@@ -3,7 +3,7 @@ import { buildStubPublicNetwork } from './build-stub-public-network';
 import { canUnshare } from './can-unshare';
 import { runInNetns } from './run-in-netns';
 
-test.skipIf(!canUnshare(['ip', 'link']))(
+test.skipIf(!canUnshare(['sh', '-c', 'ip link && command -v ping']))(
   'it routes both guests to every address wan and ts answer on, with no ruleset',
   () => {
     // IPv6 neighbour discovery takes a second a hop on a first packet
