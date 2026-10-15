@@ -1,11 +1,13 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
 // An image built on the published base names it by digest, so a build always starts from the
 // bytes that a release attested.
 test('it starts from the published base, pinned by digest', () => {
-  const froms = readFileSync(new URL('hello/Dockerfile', import.meta.url), 'utf8')
+  const froms = readFileSync(
+    new URL('../../images/examples/hello/Dockerfile', import.meta.url),
+    'utf8',
+  )
     .split('\n')
     .filter((line) => /^FROM\s/iv.test(line));
 
