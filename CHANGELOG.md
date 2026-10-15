@@ -2,10 +2,11 @@
 
 ## [1.6.0](https://github.com/zgeoff/imp/compare/v1.5.1...v1.6.0) (2026-10-15)
 
-
 ### Features
 
-* **geo-204:** stream image build progress and step output ([#389](https://github.com/zgeoff/imp/issues/389)) ([68259c3](https://github.com/zgeoff/imp/commit/68259c36a787322f692264b65c56e3b8aae07490))
+- **geo-204:** stream image build progress and step output
+  ([#389](https://github.com/zgeoff/imp/issues/389))
+  ([68259c3](https://github.com/zgeoff/imp/commit/68259c36a787322f692264b65c56e3b8aae07490))
 
 ## [1.5.1](https://github.com/zgeoff/imp/compare/v1.5.0...v1.5.1) (2026-10-15)
 
