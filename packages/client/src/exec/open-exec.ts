@@ -33,7 +33,7 @@ export interface ExecOptions {
 
   // with a session: the output after the byte at this offset of this
   // generation, rather than a replay; `started.output.resume` says how it
-  // was met (docs/architecture/daemon.md#output-offsets)
+  // was met (docs/architecture/guest/sessions.md#generations-boots-and-offsets)
   readonly resumeFrom?: ResumeFrom;
 
   // what impd must ensure before it starts the command, or the exec fails

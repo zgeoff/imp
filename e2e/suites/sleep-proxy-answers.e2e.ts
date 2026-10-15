@@ -10,7 +10,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { openProxySocket } from '../lib/websocket';
 
 // What the wake proxy answers when no imp, or nothing in an awake imp, can
-// take the request (docs/architecture/networking.md#the-wake-proxy).
+// take the request (docs/architecture/network/ingress.md#the-wake-proxy).
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();

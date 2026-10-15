@@ -49,7 +49,7 @@ export const MovedLeaseOwnerSchema = z.object({
 
 // A live lease, by the time it had left on the source's clock when the
 // header was built: the target ends it that long after it reads the header,
-// so the two clocks need not agree (docs/architecture/moves.md#leases)
+// so the two clocks need not agree (docs/architecture/storage/moves.md#the-stream)
 const MovedLeaseSchema = MovedLeaseOwnerSchema.extend({
   // null for no end
   remainingMs: z.int().nonnegative().max(MAX_LEASE_REMAINING_MS).nullable(),
@@ -69,7 +69,7 @@ const ImpSchema = z
     vcpus: z.int().positive(),
     memoryMib: z.int().positive(),
 
-    // an elastic imp's max (docs/architecture/memory.md); a source from
+    // an elastic imp's max (docs/architecture/lifecycle/elastic-memory.md); a source from
     // before elastic memory leaves it out
     maxMemoryMib: z.int().positive().optional(),
     httpPort: z.int().positive(),
@@ -168,11 +168,11 @@ export const MoveHeaderSchema = z
     checkpoints: z.array(CheckpointSchema).readonly(),
 
     // ZFS to ZFS: the streams that follow in place of the checkpoint and
-    // disk files, in order (docs/architecture/moves.md#zfs-to-zfs)
+    // disk files, in order (docs/architecture/storage/moves.md#zfs)
     streams: z.array(StreamStepSchema).readonly().nullable(),
 
     // a warm move: the memory snapshot's files follow the disk
-    // (docs/architecture/moves.md#warm-moves); null for a cold one
+    // (docs/architecture/storage/moves.md#warm-moves); null for a cold one
     warm: WarmSchema.nullable().default(null),
   })
   .readonly();

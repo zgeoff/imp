@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { OffsetSchema } from './offset-schema';
 
-// Output continuity for sessions (docs/architecture/daemon.md#output-offsets):
+// Output continuity for sessions (docs/architecture/guest/sessions.md#generations-boots-and-offsets):
 // offsets count a generation's pty output bytes from 0, so a client that
 // reconnects resumes from the byte it last saw and learns what it missed.
 
@@ -9,7 +9,7 @@ import { OffsetSchema } from './offset-schema';
 // boot ends it
 export const ExecutionGenerationSchema = z.string().regex(/^[0-9a-f]{32}$/);
 
-// why impd booted an imp cold; docs/architecture/daemon.md#output-offsets
+// why impd booted an imp cold; docs/architecture/guest/sessions.md#generations-boots-and-offsets
 // says what each cause means
 export const COLD_BOOT_CAUSES = [
   'start',

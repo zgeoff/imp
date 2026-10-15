@@ -123,7 +123,7 @@ export interface WakeProxy {
   readonly stop: () => Promise<void>;
 }
 
-// The wake-on-request proxy (docs/architecture/networking.md#the-wake-proxy): Host routing
+// The wake-on-request proxy (docs/architecture/network/ingress.md#the-wake-proxy): Host routing
 // on the proxy port and one port per imp. A request wakes or boots the imp, then goes to its
 // HTTP port; WebSockets are relayed message by message.
 export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {

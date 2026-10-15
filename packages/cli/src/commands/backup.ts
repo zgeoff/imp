@@ -5,7 +5,7 @@ import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 // a zone is required to be unambiguous; without one the time is UTC, never
-// this machine's zone (docs/architecture/backups.md#restore)
+// this machine's zone (docs/architecture/storage/backups.md#restore)
 const ZONED_TIME = /(?:Z|[+\-]\d{2}:?\d{2})$/iv;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/v;
 
@@ -65,7 +65,7 @@ const restoreCommand = defineCommand({
       }
 
       // two hosts with one repository and one host name drop each other's
-      // live locks (docs/architecture/backups.md#whole-host-restore)
+      // live locks (docs/architecture/storage/backups.md#a-run)
       if (args.all === true) {
         console.error(
           'impz: before a whole-host restore, stop the old impd or remove its IMP_BACKUP_* settings',

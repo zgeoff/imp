@@ -8,7 +8,7 @@ import { SessionNameSchema } from '../schemas/session-schema';
 // client sends `start` or `attach` first and waits for `started`.
 
 // sessions outlive the socket:
-// docs/architecture/daemon.md#sessions-detachable-consoles
+// docs/architecture/guest/sessions.md
 
 // auth is the bearer header, or `?ticket=` from `exec.ticket` for a browser;
 // a ticket starts only the imp it was issued for

@@ -12,7 +12,7 @@ export function parseDfSizeKib(stdout: string): number {
 }
 
 // Where impd keeps an imp's root disk inside the host container, by storage
-// backend (docs/architecture/storage.md).
+// backend (docs/architecture/storage/storage.md).
 export function buildImpDiskPath(backend: 'xfs' | 'zfs', id: string): string {
   return backend === 'xfs'
     ? `/var/lib/imp/imps/${id}/disk.ext4`

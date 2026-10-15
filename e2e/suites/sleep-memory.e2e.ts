@@ -23,7 +23,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// Sleep and wake of an e2e-bare imp (docs/architecture/sleep-and-wake.md):
+// Sleep and wake of an e2e-bare imp (docs/architecture/lifecycle/sleep-and-wake.md):
 // a memory proof (lib/memory-proof.ts) shows what only guest memory holds.
 
 // one stack for every release, so an exec stops before its imp goes

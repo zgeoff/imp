@@ -15,7 +15,7 @@ import { waitFor } from '../lib/wait-for';
 
 // A move between two tag:imp-e2e nodes on this machine, with neither
 // IMP_MOVE_TEST_CIDR nor IMP_PEER_URL: the real peer check, to the peer URL
-// each impd builds from its tailnet IP (docs/architecture/moves.md#scope).
+// each impd builds from its tailnet IP (docs/architecture/storage/moves.md#the-steps).
 
 // one stack for every release, so B's imps go before B
 async function setupTest() {

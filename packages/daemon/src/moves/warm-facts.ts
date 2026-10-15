@@ -6,7 +6,7 @@ import type { SnapshotMeta } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 
 // What this host shares with the source of a warm move
-// (docs/architecture/moves.md#warm-moves)
+// (docs/architecture/storage/moves.md#warm-moves)
 export function readWarmHost(
   config: Pick<Config, 'dataDir' | 'subnet' | 'brokerPort' | 'dns'>,
   identity: Readonly<HostIdentity>,

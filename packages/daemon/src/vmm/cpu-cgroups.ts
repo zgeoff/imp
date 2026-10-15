@@ -16,7 +16,7 @@ const PERIOD_US = 100_000;
 
 // Room above the guest's memory for Firecracker and the page cache of its
 // disk and snapshot I/O, which the kernel reclaims at memory.max before any
-// OOM kill (docs/architecture/daemon.md#cgroups)
+// OOM kill (docs/architecture/isolation.md#cgroups)
 const MEMORY_MIN_OVERHEAD_MIB = 256;
 const MEMORY_OVERHEAD_DIVISOR = 8;
 const BYTES_PER_MIB = 1024 * 1024;

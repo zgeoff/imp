@@ -1,6 +1,6 @@
 import { NameSchema } from '@impz/api';
 
-// The imp a Host header names (docs/architecture/networking.md#the-wake-proxy):
+// The imp a Host header names (docs/architecture/network/ingress.md#the-wake-proxy):
 // the first label of `<name>.imp.localhost[:port]` or of any `<name>.<domain>`.
 // A bare host, an IP address or a label that is no imp name gives null.
 export function parseHostName(host: string | null): string | null {

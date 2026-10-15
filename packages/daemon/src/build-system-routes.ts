@@ -48,7 +48,7 @@ export function buildSystemRoutes(os: RpcImplementer, deps: RouterDeps) {
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory
 // the awake imps were given
-// (docs/architecture/sleep-and-wake.md#the-ram-governor).
+// (docs/architecture/lifecycle/ram-governor.md#what-it-measures).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
   const [imps, usage, tailscale, storage, defaultImage] = await Promise.all([
     listImps(deps.db),

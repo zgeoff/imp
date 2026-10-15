@@ -450,7 +450,7 @@ test('it points at --resume when the target’s commit window ended before the c
   await ctx.from.imps.stop({ name: 'dev' });
 
   // the commit window is 24 hours from the receipt
-  // (docs/architecture/moves.md); the commit lands a second past it
+  // (docs/architecture/storage/moves.md#one-live-copy); the commit lands a second past it
   server.use(
     http.post('http://100.100.0.2:7070/move/commit', (info) => {
       ctx.targetClock.offsetMs = 24 * 60 * 60 * 1000 + 1000;
@@ -523,7 +523,7 @@ test('it commits a verified move with a fresh ticket from the target on --resume
   await ctx.from.imps.stop({ name: 'dev' });
 
   // the first commit lands a second past the 24-hour commit window
-  // (docs/architecture/moves.md), so the target holds a verified copy
+  // (docs/architecture/storage/moves.md#one-live-copy), so the target holds a verified copy
   server.use(
     http.post(
       'http://100.100.0.2:7070/move/commit',

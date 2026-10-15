@@ -12,7 +12,7 @@ export interface BackupConfig {
   readonly repository: string;
 
   // restic's password; anyone who has it and the repository can read every
-  // backup (docs/architecture/backups.md)
+  // backup (docs/architecture/storage/backups.md)
   readonly passwordFile: string;
   readonly intervalS: number;
   readonly keep: BackupKeep;

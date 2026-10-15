@@ -3,7 +3,7 @@ import type { Transaction } from 'kysely';
 import type { ImpDatabase } from './open-database';
 import type { DB } from './schema';
 
-// An imp's last cold boots (docs/architecture/daemon.md#output-offsets): each
+// An imp's last cold boots (docs/architecture/guest/sessions.md#generations-boots-and-offsets): each
 // one ended every session generation before it, so a client that reconnects
 // learns why its output is gone.
 

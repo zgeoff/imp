@@ -28,7 +28,7 @@ interface VmConfig {
 }
 
 // The kernel cmdline every VM starts with: the system drive (vdb) is the
-// initial root and the agent PID 1 (docs/architecture/agent.md#two-drives).
+// initial root and the agent PID 1 (docs/architecture/guest/agent.md#two-drives-and-a-kernel).
 // A cold boot adds its imp.* values; a boot template adds imp.template=1.
 export const BASE_BOOT_ARGS = [
   'console=ttyS0 reboot=k panic=1 pci=off',
@@ -52,7 +52,7 @@ export const VM_DEVICES = {
 
 // The devices of every cold boot, a boot template's too: a template restore
 // takes the snapshot's devices, so both must be the same
-// (docs/architecture/boot-templates.md#key).
+// (docs/architecture/lifecycle/boot-templates.md#the-key).
 export async function setupVm(
   api: Readonly<FirecrackerClient>,
   config: Readonly<VmConfig>,

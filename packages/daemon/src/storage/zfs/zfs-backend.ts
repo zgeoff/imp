@@ -115,7 +115,7 @@ export interface ZfsBackendDeps {
 }
 
 // Each imp disk is a dataset holding one file, a checkpoint is a snapshot of
-// it and a fork is a clone (docs/architecture/storage.md#zfs).
+// it and a fork is a clone (docs/architecture/storage/storage.md#zfs).
 export interface ZfsBackend extends StorageBackend {
   // resolves once the reclaim that changes start in the background is done
   readonly waitForReclaim: () => Promise<void>;
@@ -314,7 +314,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     }
 
     // every command impd runs exists in 2.2 and later
-    // (docs/architecture/storage.md#versions), so a minor skew only warns
+    // (docs/architecture/storage/storage.md#zfs), so a minor skew only warns
     if (userRelease.minor !== kernelRelease.minor) {
       log(`impd: zfs: warning: the userland is ${userland} but the kernel module is ${kernel}`);
     }
@@ -386,7 +386,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
   // What the database does not name: a crash leftover goes, an orphan stays
   // with its snapshots unless `isOrphans`. A lost database would make every
-  // disk an orphan (docs/architecture/storage.md#what-a-sweep-takes).
+  // disk an orphan (docs/architecture/storage/disk-space.md#the-sweep).
   const planLeftovers = (
     entries: readonly ZfsEntry[],
     live: LiveStorage,

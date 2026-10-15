@@ -22,7 +22,7 @@ export function parseSmapsRollup(text: string): ReadonlyMap<string, number> {
 }
 
 // What the governor counts: anonymous and shmem pages, not the clean mem file pages a woken
-// guest only read (docs/architecture/sleep-and-wake.md#5-ram-what-the-governor-measures).
+// guest only read (docs/architecture/lifecycle/ram-governor.md#what-it-measures).
 // Null when the pid is not this Firecracker.
 export function readOwnedRamMib(pid: number, apiSocket: string, procRoot = '/proc'): number | null {
   const fields = readVmSmaps(pid, apiSocket, procRoot);

@@ -85,7 +85,7 @@ interface XfsBackendDeps {
 }
 
 // Every disk, checkpoint and fork is a reflink clone of another file
-// (docs/architecture/storage.md).
+// (docs/architecture/storage/storage.md).
 export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
   const cloneFile = deps.cloneFile ?? createReflinkClone;
   const log = deps.log ?? printLog;
@@ -169,7 +169,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   // What the database does not name: a crash leftover goes, an orphan stays
   // unless `isOrphans`. A lost database would make every imp an orphan
-  // (docs/architecture/storage.md#what-a-sweep-takes).
+  // (docs/architecture/storage/disk-space.md#the-sweep).
   const planLeftovers = (live: LiveStorage, isOrphans: boolean): LeftoverPlan => {
     const liveDigests = new Set(
       [...live.imageDigests].map((digest) => basename(buildImagePaths(deps.dataDir, digest).dir)),

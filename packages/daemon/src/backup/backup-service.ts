@@ -206,7 +206,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
   // Under the imp's lock. A running guest is frozen around the copy; a
   // sleeping one is copied as it is, since waking it to sync would cost
-  // more than a crash-consistent disk (docs/architecture/backups.md).
+  // more than a crash-consistent disk (docs/architecture/storage/backups.md).
   const createCopy = async (imp: LockedImp, runId: string): Promise<DiskCopy> => {
     if (imp.state !== 'running') {
       await storage.createBackupCopy(imp.id, runId, { isReusable: true });

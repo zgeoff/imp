@@ -2,7 +2,7 @@ const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;
 
 // An image's ext4 holds its files and room to spare; each imp disk grows past
-// it (docs/architecture/storage.md#disk-sizes)
+// it (docs/architecture/storage/disk-space.md#disk-sizes)
 const ROOTFS_MIN_BYTES = 4 * GIB;
 const ROOTFS_SPARE_BYTES = 2 * GIB;
 
@@ -35,7 +35,7 @@ export function planRootfs(tree: Readonly<{ bytes: number; inodes: number }>): R
 
 // what the rootfs of a tree of treeBytes takes on the host besides the
 // tree's own blocks, for the disk hold of a build
-// (docs/architecture/storage.md#disk-budget)
+// (docs/architecture/storage/disk-space.md#the-budget)
 export function planRootfsOverhead(treeBytes: number): number {
   const rootfs = planRootfs({ bytes: treeBytes, inodes: 0 }).bytes;
 

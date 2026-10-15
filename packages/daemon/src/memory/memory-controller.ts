@@ -113,7 +113,7 @@ export interface MemoryController {
 
 // Grows elastic guests under pressure and shrinks them when they have memory
 // to spare. A guest grows only here, through the governor's admission;
-// refused, it stays at its size (docs/architecture/memory.md#growing).
+// refused, it stays at its size (docs/architecture/lifecycle/elastic-memory.md#the-controller).
 export function createMemoryController(deps: MemoryControllerDeps): MemoryController {
   const now = deps.now ?? Date.now;
 

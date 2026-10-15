@@ -30,7 +30,7 @@ import {
 } from './session-log-files';
 import type { SessionLogReadRequest } from './session-log-files';
 
-// Session logs (docs/architecture/daemon.md#session-logs). impd taps each
+// Session logs (docs/architecture/guest/sessions.md#session-logs). impd taps each
 // session the agent marks `log`, beside its viewer, and writes its output
 // under the imp's directory. Each look at the sessions taps what is untapped.
 

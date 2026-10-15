@@ -22,9 +22,9 @@ import { readSuitePrefix } from '../lib/suites';
 import { startTextCapture } from '../lib/text-capture';
 import { waitFor } from '../lib/wait-for';
 
-// A restart of the inner container from inside (docs/architecture/agent.md
-// #the-inner-container) starts it again, not the guest: the disk, the
-// network and what holds connections to the imp outlast it.
+// A restart of the inner container from inside starts it again, not the guest
+// (docs/architecture/guest/agent.md#the-inner-container): the disk, the network and what holds
+// connections to the imp outlast it.
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();

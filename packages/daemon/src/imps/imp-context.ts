@@ -155,7 +155,7 @@ export interface ImpServiceDeps {
   // the most a CPU limit may be; the host's cores by default
   readonly hostCpus?: number;
 
-  // the boot templates cold boots restore (docs/architecture/boot-templates.md);
+  // the boot templates cold boots restore (docs/architecture/lifecycle/boot-templates.md);
   // by default made from the deps when IMP_BOOT_TEMPLATES is on
   readonly templates?: BootTemplates | null;
 

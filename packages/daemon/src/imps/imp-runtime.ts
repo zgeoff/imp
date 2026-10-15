@@ -138,7 +138,7 @@ export interface ImpRuntime {
   readonly sleepAllImps: () => Promise<void>;
 
   // ends the session logs of VMs that are gone and removes those past their
-  // age (docs/architecture/daemon.md#session-logs)
+  // age (docs/architecture/guest/sessions.md#session-logs)
   readonly sweepSessionLogs: () => Promise<void>;
 
   // on SIGHUP: impd restarts in place and leaves VMs running, but a wake or

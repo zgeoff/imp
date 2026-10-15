@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 // The CPU a guest kernel picked its code paths on: a memory snapshot loads
 // only on the same model with the same CPUID flags
-// (docs/architecture/sleep-and-wake.md#the-cpu)
+// (docs/architecture/lifecycle/sleep-and-wake.md#snapshot-identity)
 export interface CpuIdentity {
   readonly cpuModel: string;
 

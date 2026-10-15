@@ -51,7 +51,7 @@ export interface CertStore {
   readonly writeAttempts: (state: AttemptState) => void;
 }
 
-// <dataDir>/tls (docs/architecture/storage.md), every file 0600, synced and
+// <dataDir>/tls (docs/architecture/storage/storage.md), every file 0600, synced and
 // replaced by a rename. The key and its certificate share one file, so a
 // crash never pairs a key with the wrong certificate.
 export function createCertStore(

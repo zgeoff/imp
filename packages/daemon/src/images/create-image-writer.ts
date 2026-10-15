@@ -137,7 +137,7 @@ export function createImageWriter(deps: ImageWriterDeps): ImageWriter {
   };
 
   // an unpacked tree → sparse ext4
-  // (docs/architecture/storage.md#images-any-oci-image); returns the rootfs
+  // (docs/architecture/storage/images.md#from-an-oci-image-to-a-disk); returns the rootfs
   // size on disk
   const writeRootfs = async (root: string, digest: string, ociConfig: unknown): Promise<number> => {
     writeImageConfig(root, JSON.stringify(buildImageRuntimeConfig(ociConfig)));

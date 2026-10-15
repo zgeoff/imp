@@ -3,7 +3,7 @@ import { parseWholeNumber } from './parse-whole-number';
 import { waitFor } from './wait-for';
 
 // Thin glue over a live guest's inner container
-// (docs/architecture/agent.md#the-inner-container), with nothing to test
+// (docs/architecture/guest/agent.md#the-inner-container), with nothing to test
 // without one.
 
 // the inner init's start time, in clock ticks since boot: it changes only

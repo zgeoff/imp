@@ -1,7 +1,7 @@
 import { requireImp, runShellInImp } from './imp-cli';
 import { instance, runChecked, runCommand, runDevScript, runInContainer } from './instance';
 
-// The ipv6 suite's network (docs/architecture/networking.md#ipv6): a router
+// The ipv6 suite's network (docs/architecture/network/networking.md#ipv6): a router
 // leads from the instance's Docker IPv6 network to a narrower one (MTU 1280)
 // with the server, so packet-too-big comes from beyond the host.
 

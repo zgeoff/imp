@@ -19,7 +19,7 @@ import { startStubPrivateService } from '../lib/start-stub-private-service';
 import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
-// The public policy (docs/architecture/networking.md#egress): the internet,
+// The public policy (docs/architecture/network/egress.md): the internet,
 // and no private address. The private listeners are this machine, at the
 // container's gateway, and a netns of 10/8 and link-local in the container.
 

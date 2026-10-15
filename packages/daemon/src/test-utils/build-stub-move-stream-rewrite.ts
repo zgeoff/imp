@@ -14,7 +14,7 @@ export function buildJsonMoveFrame(type: number, value: unknown): MoveFrame {
   return { type, payload: new TextEncoder().encode(JSON.stringify(value)) };
 }
 
-// a frame as docs/architecture/moves.md#the-stream lays it out: the type
+// a frame as docs/architecture/storage/moves.md#the-stream lays it out: the type
 // byte, the payload's length as 4 bytes big-endian, the payload
 function encodeMoveFrame(frame: Readonly<MoveFrame>): Uint8Array {
   const bytes = new Uint8Array(5 + frame.payload.length);

@@ -32,7 +32,7 @@ test('#assertUnpacked fails an unpack whose capability tar had no permission to 
     expect.objectContaining({
       code: 'PRECONDITION_FAILED',
       message:
-        "the image has a file capability that impd could not keep (tar: setxattrat: Cannot set 'security.capability' extended attribute for file 'usr/bin/ping': Operation not permitted); imp-host needs CAP_SETFCAP (docs/architecture/host-contract.md#privileges)",
+        "the image has a file capability that impd could not keep (tar: setxattrat: Cannot set 'security.capability' extended attribute for file 'usr/bin/ping': Operation not permitted); imp-host needs CAP_SETFCAP (docs/architecture/host.md#privileges)",
     }),
   );
 });
@@ -137,7 +137,7 @@ test('#readSetfcapWarning gives no start warning when CapEff holds CAP_SETFCAP',
 
 test('#readSetfcapWarning gives the start warning when CapEff lacks CAP_SETFCAP', () => {
   expect(readSetfcapWarning('Name:\timpd\nCapEff:\t00000000082810fb\n')).toBe(
-    'impd: warning: no CAP_SETFCAP, so an image add or build fails on an image with a file capability; imp-host needs CAP_SETFCAP (docs/architecture/host-contract.md#privileges)',
+    'impd: warning: no CAP_SETFCAP, so an image add or build fails on an image with a file capability; imp-host needs CAP_SETFCAP (docs/architecture/host.md#privileges)',
   );
 });
 

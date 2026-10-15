@@ -43,7 +43,7 @@ interface AdmissionRequest {
   readonly maySleepImps?: boolean;
 }
 
-// an elastic guest that asks to grow (docs/architecture/memory.md)
+// an elastic guest that asks to grow (docs/architecture/lifecycle/elastic-memory.md)
 export interface GrowRequest {
   readonly id: string;
   readonly name: string;

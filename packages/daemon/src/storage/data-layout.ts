@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FirecrackerPaths } from '../vmm/firecracker-process';
 
-// The /var/lib/imp layout (docs/architecture/storage.md#the-data-directory).
+// The /var/lib/imp layout (docs/architecture/storage/storage.md#the-data-directory).
 
 export interface ImpPaths extends FirecrackerPaths {
   readonly impId: string;
@@ -11,7 +11,7 @@ export interface ImpPaths extends FirecrackerPaths {
   readonly disk: string;
   readonly snapshotDir: string;
 
-  // the memory snapshot of a sleeping imp (docs/architecture/sleep-and-wake.md)
+  // the memory snapshot of a sleeping imp (docs/architecture/lifecycle/sleep-and-wake.md)
   readonly vmstate: string;
   readonly memFile: string;
   readonly snapshotMeta: string;
@@ -21,7 +21,7 @@ export interface ImpPaths extends FirecrackerPaths {
   readonly checkpointsDir: string;
 
   // impd's logs of the imp's sessions, one directory per generation
-  // (docs/architecture/daemon.md#session-logs)
+  // (docs/architecture/guest/sessions.md#session-logs)
   readonly sessionLogsDir: string;
 }
 
@@ -115,7 +115,7 @@ export function buildSystemDrivePath(dataDir: string, sha256: string): string {
   return join(buildSystemDrivesDir(dataDir), `${sha256}.squashfs`);
 }
 
-// What impd's backups keep on the host (docs/architecture/backups.md).
+// What impd's backups keep on the host (docs/architecture/storage/backups.md).
 export function buildBackupPaths(dataDir: string) {
   const dir = join(dataDir, 'backup');
 

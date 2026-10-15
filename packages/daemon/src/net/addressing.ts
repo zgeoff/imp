@@ -1,7 +1,7 @@
 import { deriveGuestIp6 } from './addressing6';
 import type { Prefix64 } from './addressing6';
 
-// Routed, not bridged (docs/architecture/networking.md#addressing): slot n owns
+// Routed, not bridged (docs/architecture/network/networking.md#addressing): slot n owns
 // the /30 at offset 4n of the subnet, with the host end at 4n+1 and the guest
 // at 4n+2.
 
@@ -26,10 +26,10 @@ export interface SlotAddress {
   readonly hostMac: string;
 
   // the imp's IPv6 /128, or null when imps get no IPv6
-  // (docs/architecture/networking.md#ipv6)
+  // (docs/architecture/network/networking.md#ipv6)
   readonly guestIp6: string | null;
 
-  // the imp's own port on the host (docs/architecture/networking.md#urls), for
+  // the imp's own port on the host (docs/architecture/network/ingress.md#the-wake-proxy), for
   // the tailnet
   readonly tailnetPort: number;
 }

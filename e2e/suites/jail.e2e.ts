@@ -24,7 +24,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// The jailer (docs/architecture/host-contract.md): each VM in its own uid,
+// The jailer (docs/architecture/isolation.md#the-jailer): each VM in its own uid,
 // cgroup and mount namespace. One imp boots jailed, sleeps and wakes full,
 // and outlives an impd restart.
 

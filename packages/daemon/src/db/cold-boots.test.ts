@@ -13,7 +13,7 @@ import { createImage } from './images';
 import { createImp, findImpByName } from './imps';
 
 // Each cold boot records its cause, and an attach to a session names them
-// (docs/architecture/daemon.md#output-offsets).
+// (docs/architecture/guest/sessions.md#generations-boots-and-offsets).
 
 // impd over the stub VMM with its migrated database, a client of its API,
 // and `stack`, whose releases (the agents a test starts) run before the

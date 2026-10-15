@@ -98,7 +98,7 @@ export const MIGRATIONS: Record<string, Migration> = {
       await db.schema
         .alterTable('imps')
 
-        // the egress mode, `open`, `box` or `none` (docs/architecture/networking.md),
+        // the egress mode, `open`, `box` or `none` (docs/architecture/network/egress.md),
         // and a box's allow-list as a JSON array
         .addColumn('egress_policy', 'text', (c) => c.notNull().defaultTo('open'))
         .execute();
@@ -170,7 +170,7 @@ export const MIGRATIONS: Record<string, Migration> = {
     },
   },
 
-  // a disk size per imp and per checkpoint (docs/architecture/storage.md)
+  // a disk size per imp and per checkpoint (docs/architecture/storage/storage.md)
   '005_add_disk_sizes': {
     async up(db: Kysely<NoTables>) {
       await db.schema
@@ -454,7 +454,7 @@ export const MIGRATIONS: Record<string, Migration> = {
   // generations, and the cause its next one has when impd knows it early
   '015_add_cold_boots': {
     async up(db: Kysely<NoTables>) {
-      // an imp's last cold boots (docs/architecture/daemon.md#output-offsets)
+      // an imp's last cold boots (docs/architecture/guest/sessions.md#generations-boots-and-offsets)
       await db.schema
         .createTable('imp_cold_boots')
 
@@ -477,7 +477,7 @@ export const MIGRATIONS: Record<string, Migration> = {
   // from the start of db/imps.ts JAIL_UIDS
   '016_add_imp_jail_uid': {
     async up(db: Kysely<JailUidSnapshot>) {
-      // the uid and gid its jailed Firecracker runs as (docs/architecture/daemon.md#the-jailer)
+      // the uid and gid its jailed Firecracker runs as (docs/architecture/isolation.md#the-jailer)
       await db.schema.alterTable('imps').addColumn('jail_uid', 'integer').execute();
       await db.schema.createIndex('imps_jail_uid').on('imps').column('jail_uid').unique().execute();
 
@@ -527,7 +527,7 @@ export const MIGRATIONS: Record<string, Migration> = {
   '019_add_imp_max_memory': {
     async up(db: Kysely<NoTables>) {
       // the most the guest may grow to with hot-plugged memory; null when it
-      // stays at memory_mib (docs/architecture/memory.md)
+      // stays at memory_mib (docs/architecture/lifecycle/elastic-memory.md)
       await db.schema.alterTable('imps').addColumn('max_memory_mib', 'integer').execute();
     },
   },

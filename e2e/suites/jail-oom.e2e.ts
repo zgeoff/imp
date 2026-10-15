@@ -18,7 +18,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
 // A jailed VM's cgroup kills it past memory.max, and impd stops the imp and
-// says why (docs/architecture/host-contract.md).
+// says why (docs/architecture/isolation.md#cgroups).
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();

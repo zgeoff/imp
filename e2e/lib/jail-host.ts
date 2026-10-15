@@ -4,7 +4,7 @@ import { requireImp } from './imp-cli';
 import { runInContainer } from './instance';
 
 // What the host container shows of an imp's Firecracker and its jail
-// (docs/architecture/host-contract.md): read over a live instance, then
+// (docs/architecture/isolation.md#the-jailer): read over a live instance, then
 // judged by the pure functions below.
 
 export interface JailState {

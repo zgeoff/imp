@@ -19,7 +19,7 @@ export function growDiskFile(disk: string, diskBytes: number): number {
 }
 
 // Grows a stopped disk's ext4 on the host, leaving its new inode tables as
-// holes (docs/architecture/storage.md#disk-sizes). An unclean filesystem is
+// holes (docs/architecture/storage/disk-space.md#disk-sizes). An unclean filesystem is
 // left for the guest, after its journal replays.
 export async function growFilesystem(disk: string): Promise<boolean> {
   const header = await runChecked(['dumpe2fs', '-h', disk]);

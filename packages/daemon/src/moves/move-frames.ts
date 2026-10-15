@@ -5,7 +5,7 @@ import * as z from 'zod';
 import { findDataBlocks } from '../backup/find-data-blocks';
 import type { StreamedCommand } from '../process/run-stream';
 
-// The move stream's frames, as docs/architecture/moves.md#the-stream lays
+// The move stream's frames, as docs/architecture/storage/moves.md#the-stream lays
 // them out: a type byte, a 4-byte big-endian length, the payload.
 export const MOVE_FRAMES = { header: 1, file: 2, data: 3, fileEnd: 4, end: 5 } as const;
 

@@ -9,7 +9,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
 // What a wiped user disk leaves: the agent outside the inner container
-// (docs/architecture/agent.md#the-inner-container) keeps answering, so a
+// (docs/architecture/guest/agent.md#the-inner-container) keeps answering, so a
 // checkpoint restores the imp and a stop still stops it.
 
 async function setupTest() {

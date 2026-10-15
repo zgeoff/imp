@@ -1,6 +1,6 @@
 // imp-docker-proxy: the Docker socket imp-host sees, served from a container
 // of its own. It closes the Docker socket path only; SYS_ADMIN still lets
-// root out of imp-host (docs/architecture/host-contract.md).
+// root out of imp-host (docs/architecture/host.md#the-docker-socket).
 
 import { chmodSync, rmSync } from 'node:fs';
 import { BUILD_IMAGE_PATTERN, DEFAULT_BUILD_IMAGE } from '../images/build-image';

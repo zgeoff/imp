@@ -15,7 +15,7 @@ import type { HostIdentity, VmIdentity } from './vm-identity';
 
 // What a memory snapshot is tied to: the identity of the VM that wrote it, since the snapshot
 // holds the guest kernel and the page cache of the system drive it reopens by path
-// (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 6).
+// (docs/architecture/lifecycle/sleep-and-wake.md#snapshot-identity).
 const SnapshotIdentitySchema = z.object({
   firecrackerVersion: z.string(),
   snapshotVersion: z.string(),
@@ -81,7 +81,7 @@ export const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
   ramMib: z.int().nonnegative(),
 
   // what an elastic guest held plugged past memoryMib, which the load
-  // restores (docs/architecture/memory.md); left out when it held none
+  // restores (docs/architecture/lifecycle/elastic-memory.md); left out when it held none
   pluggedMib: z.int().nonnegative().optional(),
 
   // the guest's sessions as it went to sleep, so listing them does not wake

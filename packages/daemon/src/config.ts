@@ -187,21 +187,21 @@ export interface Config {
 
   // the RAM the governor reserves before a cold boot, as a percentage of the
   // imp's memory, and the least it reserves before a wake
-  // (docs/architecture/sleep-and-wake.md#the-ram-governor)
+  // (docs/architecture/lifecycle/ram-governor.md#admission)
   readonly bootReservePercent: number;
   readonly wakeReserveMib: number;
 
   // a sleep waits until the guest has been up this long, so the next wake
-  // gets its clock back (docs/architecture/sleep-and-wake.md#young-guests);
+  // gets its clock back (docs/architecture/lifecycle/sleep-and-wake.md#young-guests);
   // 0 turns the wait off
   readonly sleepMinGuestUptimeMs: number;
 
   // a cold boot restores a boot template of its shape when there is one
-  // (docs/architecture/boot-templates.md)
+  // (docs/architecture/lifecycle/boot-templates.md)
   readonly bootTemplates: boolean;
 
   // how long an agent may stay silent before the watchdog acts, and what it
-  // does then (docs/architecture/sleep-and-wake.md#the-watchdog)
+  // does then (docs/architecture/lifecycle/lifecycle.md#the-watchdog)
   readonly watchdogTimeoutS: number;
   readonly watchdogAction: WatchdogAction;
   readonly defaultVcpus: number;
@@ -221,17 +221,17 @@ export interface Config {
   readonly sessionLog: SessionLogLimits;
 
   // DOCKER_HOST, where impd sends its image builds: imp-docker-proxy's
-  // socket on imp-host (docs/architecture/host-contract.md#the-docker-socket)
+  // socket on imp-host (docs/architecture/host.md#the-docker-socket)
   readonly dockerHost: string | null;
   readonly dns: readonly string[];
   readonly subnet: Subnet;
 
-  // IPv6 for imps (docs/architecture/networking.md#ipv6); impd resolves
+  // IPv6 for imps (docs/architecture/network/networking.md#ipv6); impd resolves
   // `auto` at start
   readonly ipv6: Ipv6Setting;
   readonly firecrackerBin: string;
 
-  // the jailer (docs/architecture/daemon.md#the-jailer); null with
+  // the jailer (docs/architecture/isolation.md#the-jailer); null with
   // IMP_JAILER=false
   readonly jailerBin: string | null;
 
@@ -239,7 +239,7 @@ export interface Config {
   // cleans it up after a jailed VM even with the jailer off
   readonly jailDir: string;
 
-  // KSM merges identical guest pages (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages);
+  // KSM merges identical guest pages (docs/architecture/lifecycle/ram-governor.md#ksm);
   // null when IMP_KSM is off. Firecracker starts through `execBin`, and the
   // governor keeps `headroomPercent` of KSM's saving free.
   readonly ksm: { readonly execBin: string; readonly headroomPercent: number } | null;
@@ -255,7 +255,7 @@ export interface Config {
   // one by this name exists
   readonly defaultImage: string;
 
-  // where disks live (docs/architecture/storage.md); with zfs, zfsRoot is the
+  // where disks live (docs/architecture/storage/storage.md); with zfs, zfsRoot is the
   // dataset mounted on dataDir, such as tank/imp
   readonly storageBackend: StorageBackendKind;
   readonly zfsRoot: string | null;

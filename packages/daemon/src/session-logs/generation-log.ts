@@ -15,7 +15,7 @@ import { writeFileDurablyAsync } from '../process/write-file-durably';
 import { readLogBounds } from './plan-log-read';
 import type { LogBounds, LogSegment } from './plan-log-read';
 
-// One generation's log (docs/architecture/daemon.md#session-logs): segment
+// One generation's log (docs/architecture/guest/sessions.md#session-logs): segment
 // files, `<start>.seg`, and `meta.json`, which counts the bytes of each that
 // reached the disk first. A torn tail past that count is never read.
 

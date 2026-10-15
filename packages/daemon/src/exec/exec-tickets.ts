@@ -5,7 +5,7 @@ import type { TokenStore } from '../auth/token-store';
 import { createTtlCache } from '../process/ttl-cache';
 
 // Single-use `/exec` tickets: a browser WebSocket cannot send the bearer
-// header, and the token must never land in a URL (docs/architecture/daemon.md).
+// header, and the token must never land in a URL (docs/architecture/control/api.md#exec-and-tunnels).
 
 const TICKET_TTL_MS = 30_000;
 
