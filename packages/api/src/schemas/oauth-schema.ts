@@ -71,7 +71,7 @@ export const OAuthGrantSchema = z.object({
 
 export type OAuthGrant = z.infer<typeof OAuthGrantSchema>;
 
-// a sign-in that waits for `imp oauth approve`, as its approver sees it
+// a sign-in that waits for `impz oauth approve`, as its approver sees it
 export const OAuthApprovalSchema = z.object({
   client: NameSchema,
   redirectUri: z.string(),

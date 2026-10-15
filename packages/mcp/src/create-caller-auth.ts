@@ -1,4 +1,4 @@
-import type { Scope } from '@imp/api';
+import type { Scope } from '@impz/api';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import type { ImpGuard } from './imp-guard';
 import type { ToolClient } from './tools/tool-client';

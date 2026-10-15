@@ -1,4 +1,4 @@
-import type { ImpChangeReason, ImpEventDetail } from '@imp/api';
+import type { ImpChangeReason, ImpEventDetail } from '@impz/api';
 import type { EventBus } from '../events/event-bus';
 import type { CheckpointRecord } from './checkpoints';
 import type { ImpRecord } from './imps';

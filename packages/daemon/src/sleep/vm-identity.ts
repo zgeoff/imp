@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { release } from 'node:os';
-import type { OutdatedPart } from '@imp/api';
+import type { OutdatedPart } from '@impz/api';
 import * as z from 'zod';
 import { writeFileDurably } from '../process/write-file-durably';
 import type { ImpPaths } from '../storage/data-layout';

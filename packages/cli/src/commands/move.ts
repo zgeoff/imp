@@ -1,4 +1,4 @@
-import type { MovePlan, MoveStatus, WarmHost } from '@imp/api';
+import type { MovePlan, MoveStatus, WarmHost } from '@impz/api';
 import { loadCliConfig } from '../cli-config';
 import { createCopyProgress } from '../cp/copy-progress';
 import type { ProgressOutput } from '../cp/copy-progress';
@@ -9,7 +9,7 @@ import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { nameArg } from './common-args';
 
-// how often `imp move` asks the source how far the send is
+// how often `impz move` asks the source how far the send is
 const POLL_MS = 1000;
 
 type MoveClient = Pick<ImpClient, 'moves' | 'system'>;
@@ -62,7 +62,7 @@ export async function runMove(run: MoveRun): Promise<void> {
     stop: run.stop,
 
     // a person typed --stop: the imp's leases end rather than refuse it, as
-    // with imp stop
+    // with impz stop
     ...(run.stop && { force: true }),
     targetStorage: info.storage.backend,
     ...(facts !== null && { target: facts }),
@@ -112,7 +112,7 @@ async function runResume(run: MoveRun): Promise<void> {
 
   if (before.state !== 'moved') {
     throw new UsageError(
-      `${run.name} has no verified move to resume (state: ${before.state ?? 'none'}); run imp move again`,
+      `${run.name} has no verified move to resume (state: ${before.state ?? 'none'}); run impz move again`,
     );
   }
 
@@ -125,7 +125,7 @@ async function runResume(run: MoveRun): Promise<void> {
 }
 
 async function waitForSend(run: MoveRun, totalBytes: number): Promise<MoveStatus> {
-  const progress = createCopyProgress(run.output, run.now, 'imp move');
+  const progress = createCopyProgress(run.output, run.now, 'impz move');
   let shown = 0;
 
   progress.setTotal(totalBytes);
@@ -164,12 +164,12 @@ function requireDone(run: MoveRun, status: Readonly<MoveStatus>): void {
 function readFailureHint(run: MoveRun, status: Readonly<MoveStatus>): string {
   // the target holds a verified copy: only a commit or an abort ends it
   if (status.state === 'moved') {
-    return `; run imp move ${run.name} ${run.toHost} --resume, or --abort`;
+    return `; run impz move ${run.name} ${run.toHost} --resume, or --abort`;
   }
 
   // the target did not confirm the abort, so the mark stays on
   if (status.state === 'sending') {
-    return `; the imp stays marked here: run imp move ${run.name} ${run.toHost} --abort once ${run.toHost} answers`;
+    return `; the imp stays marked here: run impz move ${run.name} ${run.toHost} --abort once ${run.toHost} answers`;
   }
 
   return '; nothing changed on either host';

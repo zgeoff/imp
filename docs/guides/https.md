@@ -34,9 +34,9 @@ You need a domain in a Cloudflare zone and an API token for it.
    impd: https: got a certificate for imp.example.com, expiring 2027-01-01T00:00:00.000Z, in 21345ms
    ```
 
-4. From a tailnet member, `imp url <name>` prints the https URL. With HTTPS on, it comes first,
+4. From a tailnet member, `impz url <name>` prints the https URL. With HTTPS on, it comes first,
    before the local and tailnet URLs; a script that wants one of those picks it by its form.
-   `imp login https://imp.example.com` reaches the API, and `https://imp.example.com` opens the
+   `impz login https://imp.example.com` reaches the API, and `https://imp.example.com` opens the
    [dashboard](./dashboard.md). Over HTTPS its session cookie is `__Host-imp_session`, which no imp
    under the domain can set ([daemon](../architecture/control/auth.md#the-dashboard-session)).
 
@@ -68,7 +68,7 @@ NixOS, set `services.imp.dnsApiTokenFile` instead ([NixOS](./nixos.md#the-dns-ap
 - A file that is missing, empty or refused does not stop impd. impd starts, logs the path and what
   is wrong (never the file's contents), and each DNS call reads the file again. Certificate attempts
   back off as for any DNS failure (below), the certificate on disk keeps serving, and the records
-  stay as they are. `imp info` (and `system.info` in the API) reads the file again each time you
+  stay as they are. `impz info` (and `system.info` in the API) reads the file again each time you
   ask, and shows an error on its `https` line (`DNS token file readable` once it reads; with
   `IMP_DNS_API_TOKEN` there is no file to check, and the line shows the domain alone):
 
@@ -160,30 +160,30 @@ never starts. If you delete that record so that impd can write its own, the webs
 
 ## Public imps
 
-`imp expose <name>` serves one imp to the internet at `https://<name>.imp.example.com`. Every other
+`impz expose <name>` serves one imp to the internet at `https://<name>.imp.example.com`. Every other
 imp stays tailnet-only, and impd's API never answers on the internet.
 
 ```sh
-imp expose web                  # a bearer token, the default
-imp expose web --auth basic     # basic auth, user imp; --user picks another
-imp expose web --auth none      # no auth: anyone with the URL
-imp new web --public
-imp unexpose web                # tailnet-only again, at once
+impz expose web                  # a bearer token, the default
+impz expose web --auth basic     # basic auth, user imp; --user picks another
+impz expose web --auth none      # no auth: anyone with the URL
+impz new web --public
+impz unexpose web                # tailnet-only again, at once
 ```
 
 impd makes the token or the password and prints it once. It keeps only a sha256 hash, so a lost
-credential cannot be shown again. Running `imp expose` again on a public imp makes a new credential,
-and the old one stops working at once; that is also how you change the auth. Rotating a credential
-is an expose, so it needs a token with `manage` on the whole host too. A request without the right
-credential gets a `401` before the imp wakes, so a stranger never boots it. The credential goes no
-further than impd: the imp never sees the `Authorization` header, which also means an app behind
-auth cannot use that header for itself. Use `--auth none` for an app that does its own auth.
+credential cannot be shown again. Running `impz expose` again on a public imp makes a new
+credential, and the old one stops working at once; that is also how you change the auth. Rotating a
+credential is an expose, so it needs a token with `manage` on the whole host too. A request without
+the right credential gets a `401` before the imp wakes, so a stranger never boots it. The credential
+goes no further than impd: the imp never sees the `Authorization` header, which also means an app
+behind auth cannot use that header for itself. Use `--auth none` for an app that does its own auth.
 
-`imp expose`, `imp unexpose` and `imp new --public` need a token with `manage` scope on the whole
+`impz expose`, `impz unexpose` and `impz new --public` need a token with `manage` scope on the whole
 host: a token limited to some imps cannot change which of them are on the internet.
 
-`imp ls` notes `public (token)`, `public (basic)` or `public`, `imp url` prints the public URL, and
-`imp info` shows the public IP, how many imps are public, and how the last pass over their DNS
+`impz ls` notes `public (token)`, `public (basic)` or `public`, `impz url` prints the public URL,
+and `impz info` shows the public IP, how many imps are public, and how the last pass over their DNS
 records went. When an expose cannot write the imp's record, it prints a warning; the imp is public
 anyway, and impd tries the record again every 10 minutes. A fork, a checkpoint restore and a backup
 restore are tailnet-only until you expose them.

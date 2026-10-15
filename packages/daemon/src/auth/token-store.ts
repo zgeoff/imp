@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { MAX_SSH_KEYS } from '@imp/api';
-import type { Scope, SshKey, Token } from '@imp/api';
+import { MAX_SSH_KEYS } from '@impz/api';
+import type { Scope, SshKey, Token } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import type { ImpDatabase, ImpQueries } from '../db/open-database';

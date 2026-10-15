@@ -7,7 +7,7 @@ export type Shell = (typeof SHELLS)[number];
 // One command in the tree a completion script walks: the words that may
 // follow it.
 export interface CompletionNode {
-  // the command's words from the root, `imp checkpoint`
+  // the command's words from the root, `impz checkpoint`
   readonly path: string;
   readonly subcommands: readonly string[];
   readonly flags: readonly string[];
@@ -21,7 +21,7 @@ const ROOT_FLAGS = ['--host', '--version', '--help'];
 export async function buildCompletionTree<T extends ArgsDef>(
   command: CommandDef<T>,
 ): Promise<CompletionNode> {
-  const root = await buildNode(command, 'imp');
+  const root = await buildNode(command, 'impz');
 
   return { ...root, flags: [...new Set([...ROOT_FLAGS, ...root.flags])] };
 }
@@ -123,23 +123,23 @@ function renderCases(fn: string, nodes: readonly CompletionNode[], pick: PickWor
 }
 
 function renderBash(nodes: readonly CompletionNode[]): string {
-  return `# bash completion for imp: eval "$(imp completion bash)"
-${renderCases('_imp_subcommands', nodes, pickSubcommands)}
+  return `# bash completion for impz: eval "$(impz completion bash)"
+${renderCases('_impz_subcommands', nodes, pickSubcommands)}
 
-${renderCases('_imp_flags', nodes, pickFlags)}
+${renderCases('_impz_flags', nodes, pickFlags)}
 
-_imp() {
-  local cur=\${COMP_WORDS[COMP_CWORD]} cmd=imp i
+_impz() {
+  local cur=\${COMP_WORDS[COMP_CWORD]} cmd=impz i
   for ((i = 1; i < COMP_CWORD; i++)); do
-    case " $(_imp_subcommands "$cmd") " in
+    case " $(_impz_subcommands "$cmd") " in
       *" \${COMP_WORDS[i]} "*) cmd="$cmd \${COMP_WORDS[i]}" ;;
     esac
   done
   local words
   if [[ $cur == -* ]]; then
-    words=$(_imp_flags "$cmd")
+    words=$(_impz_flags "$cmd")
   else
-    words=$(_imp_subcommands "$cmd")
+    words=$(_impz_subcommands "$cmd")
   fi
   # command and flag names hold no spaces or glob characters, so splitting
   # is safe; bash 3.2 on macOS has no mapfile
@@ -147,66 +147,66 @@ _imp() {
   COMPREPLY=($(compgen -W "$words" -- "$cur"))
 }
 
-complete -F _imp imp
+complete -F _impz impz
 `;
 }
 
 // `path` is a special zsh variable (tied to PATH), so the walk uses `cmd`.
 function renderZsh(nodes: readonly CompletionNode[]): string {
-  return `#compdef imp
-# zsh completion for imp: put it on $fpath as _imp, or eval "$(imp completion zsh)"
-${renderCases('_imp_subcommands', nodes, pickSubcommands)}
+  return `#compdef impz
+# zsh completion for impz: put it on $fpath as _impz, or eval "$(impz completion zsh)"
+${renderCases('_impz_subcommands', nodes, pickSubcommands)}
 
-${renderCases('_imp_flags', nodes, pickFlags)}
+${renderCases('_impz_flags', nodes, pickFlags)}
 
-_imp() {
-  local cmd=imp i
+_impz() {
+  local cmd=impz i
   for ((i = 2; i < CURRENT; i++)); do
-    if [[ " $(_imp_subcommands "$cmd") " == *" \${words[i]} "* ]]; then
+    if [[ " $(_impz_subcommands "$cmd") " == *" \${words[i]} "* ]]; then
       cmd="$cmd \${words[i]}"
     fi
   done
   if [[ \${words[CURRENT]} == -* ]]; then
-    compadd -- \${=$(_imp_flags "$cmd")}
+    compadd -- \${=$(_impz_flags "$cmd")}
   else
-    compadd -- \${=$(_imp_subcommands "$cmd")}
+    compadd -- \${=$(_impz_subcommands "$cmd")}
   fi
 }
 
 if [[ \${zsh_eval_context[-1]} == loadautofunc ]]; then
-  _imp "$@"
+  _impz "$@"
 else
-  compdef _imp imp
+  compdef _impz impz
 fi
 `;
 }
 
 function renderFish(nodes: readonly CompletionNode[]): string {
-  return `# fish completion for imp: imp completion fish | source
-function __imp_subcommands
+  return `# fish completion for impz: impz completion fish | source
+function __impz_subcommands
   switch $argv[1]
 ${renderFishCases(nodes, pickSubcommands)}
   end
 end
 
-function __imp_flags
+function __impz_flags
   switch $argv[1]
 ${renderFishCases(nodes, pickFlags)}
   end
 end
 
-function __imp_command
-  set -l cmd imp
+function __impz_command
+  set -l cmd impz
   for word in (commandline -opc)[2..-1]
-    if contains -- $word (string split ' ' -- (__imp_subcommands "$cmd"))
+    if contains -- $word (string split ' ' -- (__impz_subcommands "$cmd"))
       set cmd "$cmd $word"
     end
   end
   echo $cmd
 end
 
-complete -c imp -n 'not string match -q -- "-*" (commandline -ct)' -a '(string split " " -- (__imp_subcommands (__imp_command)))'
-complete -c imp -n 'string match -q -- "-*" (commandline -ct)' -f -a '(string split " " -- (__imp_flags (__imp_command)))'
+complete -c impz -n 'not string match -q -- "-*" (commandline -ct)' -a '(string split " " -- (__impz_subcommands (__impz_command)))'
+complete -c impz -n 'string match -q -- "-*" (commandline -ct)' -f -a '(string split " " -- (__impz_flags (__impz_command)))'
 `;
 }
 

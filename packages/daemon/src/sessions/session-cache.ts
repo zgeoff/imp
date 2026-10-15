@@ -5,7 +5,7 @@ import type { SessionInfo } from '../agent-client/agent-protocol';
 export type SeenSession = SessionInfo & { readonly observedUnixMs?: number };
 
 // The sessions of each awake imp as impd last saw them: the idle loop asks
-// every agent every pass, so `imp ls` counts sessions without a call into
+// every agent every pass, so `impz ls` counts sessions without a call into
 // each guest. A sleeping imp's sessions are in its snapshot meta instead.
 export interface SessionCache {
   readonly record: (impId: string, sessions: readonly SeenSession[]) => void;

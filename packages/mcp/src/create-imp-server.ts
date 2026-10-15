@@ -1,4 +1,4 @@
-import { hasScope } from '@imp/api';
+import { hasScope } from '@impz/api';
 import { ProtocolError, ProtocolErrorCode, Server } from '@modelcontextprotocol/server';
 import type { CallToolRequest, ServerContext } from '@modelcontextprotocol/server';
 import { runAfter } from './after';
@@ -132,7 +132,7 @@ export function createImpServer(
     } catch (error) {
       // a cancelled call's answer is dropped
       if (!abort.signal.aborted || !tool.cancellable) {
-        printError('imp mcp: request failed:', error);
+        printError('impz mcp: request failed:', error);
       }
 
       throw new ProtocolError(ProtocolErrorCode.InternalError, 'internal error');

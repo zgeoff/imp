@@ -1,4 +1,4 @@
-import type { ImageBuildPhase, ImageBuildProgress } from '@imp/api';
+import type { ImageBuildPhase, ImageBuildProgress } from '@impz/api';
 import type { ProgressOutput } from '../cp/copy-progress';
 
 // What a streamed image call shows from impd's events. A terminal gets one

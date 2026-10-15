@@ -1,9 +1,9 @@
 # Ingress
 
 Traffic reaches an imp's own servers by four routes, and every one of them goes through impd, which
-wakes the imp first: the wake proxy for HTTP, the SSH gateway, tunnels from `imp proxy`, and reverse
-forwards that run the other way. impd listens inside the host container's own namespace, the host
-publishes its ports on loopback only, and the tailnet reaches them through the container's own
+wakes the imp first: the wake proxy for HTTP, the SSH gateway, tunnels from `impz proxy`, and
+reverse forwards that run the other way. impd listens inside the host container's own namespace, the
+host publishes its ports on loopback only, and the tailnet reaches them through the container's own
 tailscaled. [The API](../control/api.md#exec-and-tunnels) covers the WebSockets that carry tunnels,
 and [auth](../control/auth.md) who may open them.
 
@@ -65,7 +65,7 @@ token, or the authorized-keys file. The key check, the scope check and the imp l
 refusal, and nothing before a verified signature for a known imp touches the imp. A login opens an
 SSH connection in the activity counts and starts the wake, and channels wait for it.
 
-A shell, a command or SFTP is an agent exec, as `imp exec` is, and SFTP runs the system drive's
+A shell, a command or SFTP is an agent exec, as `impz exec` is, and SFTP runs the system drive's
 server, so every image gets SFTP. A local forward dials from inside the guest through the agent, so
 it reaches servers that listen on the guest's loopback only, and a remote forward listens in the
 guest through the agent. Agent forwarding puts a socket in the guest whose clients become channels
@@ -75,7 +75,7 @@ post-quantum key exchange, and recent OpenSSH clients warn about it.
 
 ## Tunnels and reverse forwards
 
-`imp proxy` makes ports in an imp reachable on the caller's machine. The CLI listens locally and
+`impz proxy` makes ports in an imp reachable on the caller's machine. The CLI listens locally and
 opens one tunnel WebSocket per TCP connection, and impd wakes the imp and dials the port inside the
 guest through the agent, so a server on the guest's loopback is reachable. An open tunnel counts as
 a connection, so it keeps the imp awake, and a forced sleep resets it. A reverse forward runs the

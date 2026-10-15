@@ -25,7 +25,7 @@ export type {
   SshKey,
   SystemInfo,
   Token,
-} from '@imp/api';
+} from '@impz/api';
 
 export { ORPCError, isDefinedError, safe } from '@orpc/client';
 export { CLIENT_VERSION } from './check-server';
@@ -63,7 +63,7 @@ export { InvalidResumeError } from './exec/invalid-resume-error';
 export { InvalidStateError } from './exec/invalid-state-error';
 export type { InvalidStateData } from './exec/invalid-state-error';
 export { NoSessionError } from './exec/no-session-error';
-export { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@imp/api';
+export { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@impz/api';
 
 export type {
   AttachOptions,

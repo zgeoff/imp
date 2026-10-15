@@ -492,7 +492,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     ...plan.memDirs.map((impId) => ({ kind: 'memory' as const, id: impId })),
   ];
 
-  // the size, age and snapshots of each orphan, for the log and `imp gc`
+  // the size, age and snapshots of each orphan, for the log and `impz gc`
   const readOrphans = async (
     entries: readonly ZfsEntry[],
     plan: LeftoverPlan,

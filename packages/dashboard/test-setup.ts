@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, mock } from 'bun:test';
-import { registerRunHooks } from '@imp/test-utils/register-run-hooks';
+import { registerRunHooks } from '@impz/test-utils/register-run-hooks';
 import { resetMockDb } from './src/mocks/db/reset-mock-db';
 import { IMPD_ORIGIN } from './src/mocks/handlers';
 import { impdEventListeners } from './src/mocks/impd-events';

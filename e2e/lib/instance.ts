@@ -3,7 +3,7 @@ import * as z from 'zod';
 import { config } from './config';
 import { buildFirecrackerPgrepArgv, readFirecrackerPids } from './firecracker-pids';
 
-// the harness drives scripts/dev/dev.sh and scripts/imp from this checkout
+// the harness drives scripts/dev/dev.sh and scripts/impz from this checkout
 export const REPO_ROOT = join(import.meta.dir, '..', '..');
 export const FIXTURES_DIR = join(REPO_ROOT, 'e2e', 'fixtures');
 export const LIB_SCRIPT = join(REPO_ROOT, 'scripts', 'lib.sh');

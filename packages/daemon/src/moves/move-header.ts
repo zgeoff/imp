@@ -4,7 +4,7 @@ import {
   ImageSourceSchema,
   LeaseLabelSchema,
   WarmMoveSchema,
-} from '@imp/api';
+} from '@impz/api';
 import * as z from 'zod';
 import { SnapshotMetaSchema } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';

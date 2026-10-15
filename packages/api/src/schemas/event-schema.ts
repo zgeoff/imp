@@ -112,7 +112,7 @@ export const ImpEventSchema = z.discriminatedUnion('ev', [
   }),
 
   // the agent took a command to run in its own world, outside the imp's
-  // container (`imp exec --agent`): who ran it, and the program, never
+  // container (`impz exec --agent`): who ran it, and the program, never
   // its arguments
   z.object({
     ...envelope,

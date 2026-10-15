@@ -1,5 +1,5 @@
 {
-  "name": "@imp/daemon",
+  "name": "@impz/daemon",
   "version": "1.6.0",
   "private": true,
   "description": "impd: the imp host daemon",
@@ -9,9 +9,10 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "catalog:",
-    "@imp/api": "workspace:*",
-    "@imp/local-tar": "workspace:*",
-    "@imp/mcp": "workspace:*",
+    "@impz/api": "workspace:*",
+    "@impz/client": "workspace:*",
+    "@impz/local-tar": "workspace:*",
+    "@impz/mcp": "workspace:*",
     "@logtape/logtape": "2.4.0",
     "@opentelemetry/api": "catalog:",
     "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
@@ -21,7 +22,6 @@
     "@opentelemetry/sdk-trace-base": "catalog:",
     "@orpc/server": "catalog:",
     "@peculiar/x509": "catalog:",
-    "@zgeoff/imp-client": "workspace:*",
     "acme-client": "catalog:",
     "dns-packet": "catalog:",
     "elysia": "catalog:",
@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@faker-js/faker": "catalog:",
-    "@imp/test-utils": "workspace:*",
+    "@impz/test-utils": "workspace:*",
     "@modelcontextprotocol/client": "2.3.1",
     "@msw/data": "catalog:",
     "@orpc/client": "catalog:",

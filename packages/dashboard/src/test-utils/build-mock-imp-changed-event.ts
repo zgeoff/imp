@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker';
-import type { Imp, ImpEvent } from '@imp/api';
-import { EVENT_VERSION } from '@imp/api';
+import type { Imp, ImpEvent } from '@impz/api';
+import { EVENT_VERSION } from '@impz/api';
 import { buildMockImp } from './build-mock-imp';
 
 type ImpChangedEvent = Extract<ImpEvent, { readonly ev: 'ImpChanged' }>;

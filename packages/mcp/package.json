@@ -1,5 +1,5 @@
 {
-  "name": "@imp/mcp",
+  "name": "@impz/mcp",
   "version": "0.0.0",
   "private": true,
   "description": "MCP server for impd: imps, exec, files and checkpoints as tools for coding agents",
@@ -8,16 +8,16 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@imp/api": "workspace:*",
-    "@imp/shared": "workspace:*",
+    "@impz/api": "workspace:*",
+    "@impz/client": "workspace:*",
+    "@impz/shared": "workspace:*",
     "@modelcontextprotocol/server": "2.3.1",
-    "@zgeoff/imp-client": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@faker-js/faker": "catalog:",
-    "@imp/daemon": "workspace:*",
-    "@imp/test-utils": "workspace:*",
+    "@impz/daemon": "workspace:*",
+    "@impz/test-utils": "workspace:*",
     "@modelcontextprotocol/client": "2.3.1"
   }
 }

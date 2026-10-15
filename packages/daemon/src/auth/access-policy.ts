@@ -1,5 +1,5 @@
-import { hasScope, isImpAllowed } from '@imp/api';
-import type { ForbiddenReason, ImpContract, Scope } from '@imp/api';
+import { hasScope, isImpAllowed } from '@impz/api';
+import type { ForbiddenReason, ImpContract, Scope } from '@impz/api';
 import type { ForkAuthority, GrantAuthority } from '../db/secrets';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';

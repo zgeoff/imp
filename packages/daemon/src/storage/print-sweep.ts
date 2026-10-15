@@ -3,7 +3,7 @@ import type { OrphanStorage, SweepResult } from './storage-backend';
 const MIB = 1024 ** 2;
 
 // how much of the orphans a sweep logs: each and their count, the count
-// alone, or nothing (`imp gc` returns them instead)
+// alone, or nothing (`impz gc` returns them instead)
 export type OrphanLogging = 'each' | 'count' | 'none';
 
 // What a sweep did, for the log: each thing it removed, then the orphans it
@@ -30,7 +30,7 @@ export function printSweep(
 
   log(
     `${prefix}: kept ${String(result.kept.length)} orphans the database does not name; ` +
-      '`imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire',
+      '`impz gc --orphans --dry-run` lists what `impz gc --orphans` would retire',
   );
 }
 

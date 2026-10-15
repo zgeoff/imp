@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { EXEC_PATH, MCP_PATH, TUNNEL_PATH } from '@imp/api';
+import { EXEC_PATH, MCP_PATH, TUNNEL_PATH } from '@impz/api';
 import { createTtlCache } from '../process/ttl-cache';
 
 // The wake proxy hands impd's API the client's address in-process, not in a

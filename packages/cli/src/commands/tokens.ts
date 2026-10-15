@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { ImageRefPrefixSchema, ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@imp/api';
-import type { Scope } from '@imp/api';
+import { ImageRefPrefixSchema, ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@impz/api';
+import type { Scope } from '@impz/api';
 import { defineCommand } from '../define-command';
 import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
 import { requireFeature } from '../require-feature';
@@ -203,7 +203,7 @@ const newCommand = defineCommand({
         return;
       }
 
-      console.error(`imp: token ${made.token.name} made; impd shows its secret only this once`);
+      console.error(`impz: token ${made.token.name} made; impd shows its secret only this once`);
       console.log(made.secret);
     }),
 });

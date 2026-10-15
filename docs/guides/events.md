@@ -9,9 +9,9 @@ changed something, and OpenTelemetry metrics and spans for a collector you run.
 it as one JSON object a line:
 
 ```sh
-imp events            # every imp
-imp events box        # one imp
-imp events | jq -c 'select(.ev == "ImpChanged") | {name: .imp.name, reason, ms: .detail.durationMs}'
+impz events            # every imp
+impz events box        # one imp
+impz events | jq -c 'select(.ev == "ImpChanged") | {name: .imp.name, reason, ms: .detail.durationMs}'
 ```
 
 The SDK returns an async iterator:
@@ -31,34 +31,34 @@ The dashboard follows the same stream ([dashboard](./dashboard.md)).
 Every event has `v` (the format version, now `1`), `at` (when impd sent it) and `ev` (its kind). A
 reader skips a kind or a field it does not know.
 
-| `ev`                | Fields                                                   | When                                                                                  |
-| ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `ImpAdded`          | `reason` (`snapshot` or `created`), `imp`                | Each imp as the stream opens, then each new imp.                                      |
-| `ImpChanged`        | `reason`, `imp`, `detail` for a timed change             | A change to an imp's record: its state, pid, leases or error.                         |
-| `ImpRemoved`        | `imp`, as its record was last                            | `imp rm`: the VM, the disk and the checkpoints are gone.                              |
-| `CheckpointAdded`   | `name` (the imp's), `checkpoint`                         | A checkpoint.                                                                         |
-| `CheckpointRemoved` | `name`, `checkpoint`                                     | A checkpoint deleted.                                                                 |
-| `GovernorDecision`  | `decision`, `name`, `trigger`, `usedMib`, `budgetMib`, … | The RAM governor admitted or refused a boot or a wake, or slept an imp to make room.  |
-| `AgentExec`         | `name`, `actor`, `actorName`, `tty`, `command`           | The imp's agent took an `imp exec --agent`; `command` is the program, never its args. |
+| `ev`                | Fields                                                   | When                                                                                   |
+| ------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `ImpAdded`          | `reason` (`snapshot` or `created`), `imp`                | Each imp as the stream opens, then each new imp.                                       |
+| `ImpChanged`        | `reason`, `imp`, `detail` for a timed change             | A change to an imp's record: its state, pid, leases or error.                          |
+| `ImpRemoved`        | `imp`, as its record was last                            | `impz rm`: the VM, the disk and the checkpoints are gone.                              |
+| `CheckpointAdded`   | `name` (the imp's), `checkpoint`                         | A checkpoint.                                                                          |
+| `CheckpointRemoved` | `name`, `checkpoint`                                     | A checkpoint deleted.                                                                  |
+| `GovernorDecision`  | `decision`, `name`, `trigger`, `usedMib`, `budgetMib`, … | The RAM governor admitted or refused a boot or a wake, or slept an imp to make room.   |
+| `AgentExec`         | `name`, `actor`, `actorName`, `tty`, `command`           | The imp's agent took an `impz exec --agent`; `command` is the program, never its args. |
 
-`imp` has the shape `imp ls --json` prints, so a reader keeps its own copy with no second call. An
+`imp` has the shape `impz ls --json` prints, so a reader keeps its own copy with no second call. An
 `ImpChanged` reason says why the record changed:
 
-| Reason     | Meaning                                                                                                                     |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `booted`   | A cold boot finished.                                                                                                       |
-| `woke`     | A wake from a memory snapshot finished.                                                                                     |
-| `slept`    | The imp went to sleep: on request, idle, or for the governor (`detail.trigger`).                                            |
-| `stopped`  | The imp stopped, or a new imp is ready without a boot (a fork or a restore from backup).                                    |
-| `failed`   | A boot, wake or sleep failed; `imp.error` says why.                                                                         |
-| `repaired` | impd found the VM or the snapshot gone and corrected the record.                                                            |
-| `adopted`  | impd started and found the imp's VM still running.                                                                          |
-| `held`     | A hold was set or cleared, or a lease acquired or released (a renew emits nothing).                                         |
-| `restored` | A checkpoint restore finished.                                                                                              |
-| `resized`  | `imp disk resize` changed the imp's disk size.                                                                              |
-| `updated`  | `imp set` changed the imp's CPU limit, weight, vCPUs or HTTP port, or a [move](./hosts.md#moves) set or cleared `imp.move`. |
-| `exposed`  | The imp became public or tailnet-only, or got a new credential.                                                             |
-| `released` | A forced sleep or stop ended the imp's leases; `detail.released` is how many.                                               |
+| Reason     | Meaning                                                                                                                      |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `booted`   | A cold boot finished.                                                                                                        |
+| `woke`     | A wake from a memory snapshot finished.                                                                                      |
+| `slept`    | The imp went to sleep: on request, idle, or for the governor (`detail.trigger`).                                             |
+| `stopped`  | The imp stopped, or a new imp is ready without a boot (a fork or a restore from backup).                                     |
+| `failed`   | A boot, wake or sleep failed; `imp.error` says why.                                                                          |
+| `repaired` | impd found the VM or the snapshot gone and corrected the record.                                                             |
+| `adopted`  | impd started and found the imp's VM still running.                                                                           |
+| `held`     | A hold was set or cleared, or a lease acquired or released (a renew emits nothing).                                          |
+| `restored` | A checkpoint restore finished.                                                                                               |
+| `resized`  | `impz disk resize` changed the imp's disk size.                                                                              |
+| `updated`  | `impz set` changed the imp's CPU limit, weight, vCPUs or HTTP port, or a [move](./hosts.md#moves) set or cleared `imp.move`. |
+| `exposed`  | The imp became public or tailnet-only, or got a new credential.                                                              |
+| `released` | A forced sleep or stop ended the imp's leases; `detail.released` is how many.                                                |
 
 `detail` comes with `booted`, `woke`, `slept` and `restored`: `durationMs`, `steps` (milliseconds
 per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`. `slept` also has
@@ -80,7 +80,7 @@ reader's imps, not its fields, so it carries no lease owners ([leases](./leases.
   repeat is harmless.
 - A reader that falls 1000 events behind is ended, not waited for. A reconnect sends the whole
   snapshot again, so a reader rebuilds its copy from it instead of trusting what it held.
-- `imp events` reconnects by itself after impd ends the stream, impd restarts or the network drops:
+- `impz events` reconnects by itself after impd ends the stream, impd restarts or the network drops:
   after 1 s, then twice as long each time, at most 15 s. It gives up after five ends in a row; a
   stream that lasted 10 s starts the count again. Each reconnect prints the snapshot again and a
   line on stderr.
@@ -105,8 +105,8 @@ reader's imps, not its fields, so it carries no lease owners ([leases](./leases.
 ## The API audit log
 
 impd writes one row for each call that changes something: every procedure except the reads, plus
-each exec, console, attach and SSH session as it opens (`exec-agent` for `imp exec --agent`), each
-`imp proxy` tunnel as `tunnel:<port>`, and each reverse forward as `reverse:<path or port>`
+each exec, console, attach and SSH session as it opens (`exec-agent` for `impz exec --agent`), each
+`impz proxy` tunnel as `tunnel:<port>`, and each reverse forward as `reverse:<path or port>`
 (`reverse:auto` for a socket the agent names). A row has the time, the procedure, the caller, the
 imp it named, the outcome (`ok` or the error code) and how long the call took. It never holds the
 call's input, so a secret's value never reaches it. An `images.add` from a registry also keeps, as
@@ -114,21 +114,21 @@ its detail, the reference the pull resolved by digest (`busybox@sha256:…`), so
 tag such as `:latest` names the bytes it took.
 
 ```sh
-imp audit --kind api          # every imp, newest first
-imp audit box --kind api      # the calls that named box
+impz audit --kind api          # every imp, newest first
+impz audit box --kind api      # the calls that named box
 ```
 
 | Caller      | Means                                                      |
 | ----------- | ---------------------------------------------------------- |
-| `token`     | A call with the API token: the CLI, the SDK, `imp mcp`.    |
+| `token`     | A call with the API token: the CLI, the SDK, `impz mcp`.   |
 | `dashboard` | A call with a dashboard session, or an exec on its ticket. |
 | `ssh`       | A session through the [SSH gateway](./ssh.md).             |
 
 impd writes the row after it answers, so the log never slows a call, and a failed write is logged.
 It keeps the newest 10,000 rows across all imps. A row names the imp by name with no link to it, so
-it outlives `imp rm`.
+it outlives `impz rm`.
 
-The broker's log, `imp audit` with no `--kind` (or `--kind broker`), is a different table: the
+The broker's log, `impz audit` with no `--kind` (or `--kind broker`), is a different table: the
 requests an imp sent with a credential ([connectors](./connectors.md)).
 
 ## Telemetry

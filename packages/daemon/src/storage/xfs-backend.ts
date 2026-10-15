@@ -216,7 +216,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     };
   };
 
-  // the size, age and checkpoints of an orphan, for the log and `imp gc`
+  // the size, age and checkpoints of an orphan, for the log and `impz gc`
   const readOrphan = (orphan: OrphanEntry): OrphanStorage => {
     const snapshots =
       orphan.kind === 'imp' ? listEntries(resolveImpPaths(orphan.id).checkpointsDir) : [];

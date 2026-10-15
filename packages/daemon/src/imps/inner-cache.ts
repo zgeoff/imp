@@ -1,7 +1,7 @@
 import type { InnerStatus } from '../agent-client/agent-protocol';
 
 // The inner container of each awake imp as its agent's ping last reported
-// it: the idle loop asks every pass, so `imp ls` reads it without a call into
+// it: the idle loop asks every pass, so `impz ls` reads it without a call into
 // each guest. Live state: impd keeps it in memory only.
 export interface InnerCache {
   readonly record: (impId: string, inner: InnerStatus) => void;

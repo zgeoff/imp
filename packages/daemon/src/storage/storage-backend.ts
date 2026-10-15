@@ -93,7 +93,7 @@ export interface OrphanStorage {
 interface SweepOptions {
   readonly isDryRun: boolean;
 
-  // retire the orphans too: `imp gc --orphans`
+  // retire the orphans too: `impz gc --orphans`
   readonly isOrphans: boolean;
 }
 

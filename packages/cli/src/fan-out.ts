@@ -28,7 +28,7 @@ export function listSavedTargets(env: CliEnv): SavedTarget[] {
   const hosts = Object.entries(readHostConfig(env).hosts);
 
   if (hosts.length === 0) {
-    throw new UsageError('no saved hosts (see imp login)');
+    throw new UsageError('no saved hosts (see impz login)');
   }
 
   return hosts

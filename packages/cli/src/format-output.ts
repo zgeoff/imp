@@ -24,8 +24,8 @@ import type {
   StorageGc,
   SystemInfo,
   Token,
-} from '@imp/api';
-import { formatDuration } from '@imp/shared';
+} from '@impz/api';
+import { formatDuration } from '@impz/shared';
 
 type Row = readonly string[];
 
@@ -68,7 +68,7 @@ export function formatImps(imps: readonly Imp[]): string {
   );
 }
 
-// `imp ls --all`: the saved host first, then the columns of `imp ls`
+// `impz ls --all`: the saved host first, then the columns of `impz ls`
 export function formatHostImps(imps: readonly (Imp & { readonly host: string })[]): string {
   return formatTable(
     ['HOST', ...IMP_HEADER],
@@ -130,7 +130,7 @@ function formatDiskMib(mib: number): string {
   return mib % 1024 === 0 ? `${String(mib / 1024)} GiB` : `${String(mib)} MiB`;
 }
 
-// what the imp's storage takes over its disk size, as `imp top` shows it:
+// what the imp's storage takes over its disk size, as `impz top` shows it:
 // `<=1203 MiB / 32 GiB`
 export function formatDiskUse(imp: Imp): string {
   const [used] = formatDiskUsage(imp.diskUsage);
@@ -168,7 +168,7 @@ function formatNote(imp: Imp): string {
     notes.push(`agent silent since ${imp.agentSilentSince.toISOString()}`);
   }
 
-  // the agent answers, but nothing of the imp's own runs (imp info has why)
+  // the agent answers, but nothing of the imp's own runs (impz info has why)
   if (imp.inner?.up === false) {
     notes.push('container down');
   }
@@ -230,7 +230,7 @@ export function formatImp(imp: Imp): string {
   return formatImps([imp]);
 }
 
-// `imp info <name>`: one imp, a field a line, with its inner container's
+// `impz info <name>`: one imp, a field a line, with its inner container's
 // state, restarts and last error
 export function formatImpInfo(imp: Imp): string {
   const inner = imp.inner;
@@ -304,7 +304,7 @@ export function formatBackupStatus(status: Readonly<BackupStatus>): string {
   ].join('\n');
 }
 
-// `imp info`'s https line: the domain, and whether the DNS API token file
+// `impz info`'s https line: the domain, and whether the DNS API token file
 // reads now. A token from the env has no check, and says nothing: only the
 // provider can tell whether a token is good. No line from an impd before it.
 export function formatHttps(info: SystemInfo['https']): string[][] {
@@ -329,7 +329,7 @@ export function formatHttps(info: SystemInfo['https']): string[][] {
   return [['https', `${info.domain}, ${state}`]];
 }
 
-// what `imp info` says an upgrade left: the imps whose next wake boots
+// what `impz info` says an upgrade left: the imps whose next wake boots
 // cold, and how many run each older part; an older impd does not count them
 export function formatBootStatus(
   status: Readonly<SystemInfo['bootStatus']> | undefined,
@@ -689,7 +689,7 @@ export function formatGc(gc: Readonly<StorageGc>): string {
 
   if (kept.length > 0) {
     lines.push(
-      `\nkept ${String(kept.length)} orphans the database does not name; \`imp gc --orphans\` retires them:`,
+      `\nkept ${String(kept.length)} orphans the database does not name; \`impz gc --orphans\` retires them:`,
       formatTable(
         ['KIND', 'ID', 'LOCATION', 'SIZE', 'CREATED', 'SNAPSHOTS'],
         kept.map((orphan) => [

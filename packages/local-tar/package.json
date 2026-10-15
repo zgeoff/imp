@@ -1,8 +1,8 @@
 {
-  "name": "@imp/local-tar",
+  "name": "@impz/local-tar",
   "version": "0.0.0",
   "private": true,
-  "description": "Local files as a tar: imp cp uploads and image build contexts, with .dockerignore",
+  "description": "Local files as a tar: impz cp uploads and image build contexts, with .dockerignore",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -12,6 +12,6 @@
     "tar-stream": "catalog:"
   },
   "devDependencies": {
-    "@imp/test-utils": "workspace:*"
+    "@impz/test-utils": "workspace:*"
   }
 }

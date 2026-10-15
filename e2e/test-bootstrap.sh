@@ -356,11 +356,11 @@ check_imp_egress6() {
   in_container ip link add imptarget type dummy
   in_container ip link set imptarget up
   in_container ip -6 addr add "$target/128" dev imptarget nodad
-  in_container docker exec imp-host imp rm "$name" >/dev/null 2>&1 || true
-  in_container docker exec imp-host imp new "$name" --image ubuntu --memory 512m >/dev/null
-  in_container docker exec imp-host imp exec "$name" -- timeout 10 bash -c "exec 3<>/dev/tcp/$target/22" ||
+  in_container docker exec imp-host impz rm "$name" >/dev/null 2>&1 || true
+  in_container docker exec imp-host impz new "$name" --image ubuntu --memory 512m >/dev/null
+  in_container docker exec imp-host impz exec "$name" -- timeout 10 bash -c "exec 3<>/dev/tcp/$target/22" ||
     fail "[$distro] the imp cannot reach $target:22 over IPv6"
-  in_container docker exec imp-host imp rm "$name" >/dev/null
+  in_container docker exec imp-host impz rm "$name" >/dev/null
   in_container ip link del imptarget
 }
 

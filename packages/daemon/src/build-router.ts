@@ -1,5 +1,5 @@
-import { EVENT_VERSION, hasScope, impContract, isImpAllowed } from '@imp/api';
-import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope } from '@imp/api';
+import { EVENT_VERSION, hasScope, impContract, isImpAllowed } from '@impz/api';
+import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope } from '@impz/api';
 import { implement } from '@orpc/server';
 import { buildBuilderError, buildForbiddenError } from './api-errors';
 import { readImpName } from './audit/api-audit';

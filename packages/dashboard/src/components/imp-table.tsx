@@ -1,6 +1,6 @@
-import { formatMib } from '@imp/shared';
+import type { Imp } from '@impz/client';
+import { formatMib } from '@impz/shared';
 import { Link } from '@tanstack/react-router';
-import type { Imp } from '@zgeoff/imp-client';
 import { formatCpuUse, formatDiskUse, formatRelativeTime } from '../lib/format';
 import { ImpActions } from './imp-actions';
 import { ImpNotes } from './imp-notes';

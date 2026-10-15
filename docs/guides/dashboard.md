@@ -12,10 +12,10 @@ impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui
   ([the watchdog](../architecture/lifecycle/lifecycle.md#the-watchdog)). Each row has the buttons
   that fit its state (sleep, wake, start, stop, restart), the console and destroy. **New imp** opens
   a form for the name, image, memory, vCPUs and HTTP port; a blank field takes impd's default, as
-  `imp new` does.
+  `impz new` does.
 - **One imp**: its details with disk use, both URLs, CPU use with a form for the limit and the
   weight, the checkpoints (take, restore, fork, delete) and a fork of its disk as it is now.
-- **Console**: a login shell in the browser (xterm.js), as `imp console` opens. It wakes a sleeping
+- **Console**: a login shell in the browser (xterm.js), as `impz console` opens. It wakes a sleeping
   imp. Closing the tab ends the shell.
 - **Images**: add one from an image ref, or delete one.
 - **RAM**: the budget, what awake imps own, what the governor holds back for boots and wakes, and
@@ -30,7 +30,7 @@ the dashboard opens it again after 2 s and refreshes every view.
 ## Log in
 
 The login page asks for a token once: the root token in `/var/lib/imp/token` on the host,
-`scripts/dev/dev.sh token` for a dev instance, or a token from `imp token new`. impd answers with a
+`scripts/dev/dev.sh token` for a dev instance, or a token from `impz token new`. impd answers with a
 session cookie and the browser never keeps the token. The session acts with that token's scope and
 lasts 30 days. Log out clears it in that browser; removing the token ends its sessions, and a new
 root token ends every session. A tailnet member that an
@@ -76,5 +76,5 @@ first.
 
 ## Not yet
 
-- Detachable sessions in the console. `imp console` and `imp attach` have them; the console view
+- Detachable sessions in the console. `impz console` and `impz attach` have them; the console view
   takes a terminal source, so attaching to a session is a second source next to the login shell.

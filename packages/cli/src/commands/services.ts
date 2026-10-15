@@ -1,6 +1,6 @@
-import { ServiceRestartSchema } from '@imp/api';
-import type { ServiceDef, ServiceLog } from '@imp/api';
-import { ORPCError } from '@zgeoff/imp-client';
+import { ServiceRestartSchema } from '@impz/api';
+import type { ServiceDef, ServiceLog } from '@impz/api';
+import { ORPCError } from '@impz/client';
 import { defineCommand } from '../define-command';
 import { formatOutput, formatServices } from '../format-output';
 import { formatError, runAction } from '../run-action';
@@ -9,7 +9,7 @@ import { jsonArg, nameArg } from './common-args';
 
 const serviceArg = { type: 'positional', description: 'service name', required: true } as const;
 
-// what `imp service add` takes besides the names
+// what `impz service add` takes besides the names
 export interface ServiceAddArgs {
   readonly cmd?: string | undefined;
 
@@ -90,7 +90,7 @@ function readFlagValues(rawArgs: readonly string[], flag: string): string[] {
   return values;
 }
 
-// main hands citty only the arguments before `--`, as for `imp exec`
+// main hands citty only the arguments before `--`, as for `impz exec`
 function splitAfterSeparator(argv: readonly string[]): string[] {
   const separator = argv.indexOf('--');
 
@@ -101,7 +101,7 @@ const addCommand = defineCommand({
   meta: {
     name: 'add',
     description:
-      'Add a service to an imp and start it (imp service add <name> <service> --cmd "…" or -- argv)',
+      'Add a service to an imp and start it (impz service add <name> <service> --cmd "…" or -- argv)',
   },
   args: {
     name: nameArg,
@@ -114,7 +114,7 @@ const addCommand = defineCommand({
     replace: { type: 'boolean', description: 'replace a service by that name' },
     'http-port': {
       type: 'string',
-      description: "then point the imp's URL at this port (imp set; needs manage)",
+      description: "then point the imp's URL at this port (impz set; needs manage)",
     },
   },
   run: (context) =>
@@ -167,7 +167,7 @@ function readHttpPort(text: string | undefined): number | undefined {
 // The service runs either way; say so, and how to set the port after.
 function formatPortRefusal(name: string, service: string, port: number, error: unknown): string {
   const forbidden = error instanceof ORPCError && error.code === 'FORBIDDEN';
-  const retry = `imp set ${name} --http-port ${String(port)}`;
+  const retry = `impz set ${name} --http-port ${String(port)}`;
   const reason = forbidden ? 'setting the HTTP port needs a token with manage' : formatError(error);
 
   return `service ${service} was added and runs, but the HTTP port was not set: ${reason}. Run \`${retry}\` to set it.`;
@@ -274,7 +274,7 @@ export function createLogPrinter(prefix: boolean, write: (text: string) => void)
 export const logsCommand = defineCommand({
   meta: {
     name: 'logs',
-    description: "Print an imp's service logs (imp logs <name> [service] [-f] [-n lines])",
+    description: "Print an imp's service logs (impz logs <name> [service] [-f] [-n lines])",
   },
   args: {
     name: nameArg,
@@ -306,7 +306,7 @@ export const logsCommand = defineCommand({
         if (event.type === 'log') {
           printer.print(event);
         } else {
-          console.error(`imp: ${formatLogEvent(context.args.name, event)}`);
+          console.error(`impz: ${formatLogEvent(context.args.name, event)}`);
         }
       }
 

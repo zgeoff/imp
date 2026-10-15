@@ -10,7 +10,7 @@ meets the [host contract](../architecture/host.md), as
 ```nix
 {
   # a release tag: the module runs that release's image (see "The image")
-  inputs.imp.url = "github:zgeoff/imp/vX.Y.Z";
+  inputs.imp.url = "github:zgeoff/impz/vX.Y.Z";
   # The module takes pkgs from your system; impz's own pin is for its checks only.
   inputs.imp.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -69,7 +69,7 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   and starts after it; a proxy that stops fails image work only. It closes the Docker socket path
   only: `SYS_ADMIN` still lets root out of the container. The module and the image must come from
   the same release ([the image](#the-image)). The module runs the image without `--privileged`, so
-  an image from before that change ([#75](https://github.com/zgeoff/imp/issues/75)) fails at start,
+  an image from before that change ([#75](https://github.com/zgeoff/impz/issues/75)) fails at start,
   in `setup-storage`.
 - **Public imps:** `publicPorts`, such as `[ "443:7443" "80:7480" ]`, publishes the public
   listeners, as `IMP_PUBLIC_PORTS` does for the systemd unit
@@ -99,7 +99,7 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
 `image` defaults to `ghcr.io/zgeoff/imp-host:X.Y.Z`, where `X.Y.Z` is the version in impz's
 `package.json`, so the module runs the image of its own release:
 
-- Pin `inputs.imp` to a release tag, such as `github:zgeoff/imp/vX.Y.Z`, and the image is pinned
+- Pin `inputs.imp` to a release tag, such as `github:zgeoff/impz/vX.Y.Z`, and the image is pinned
   with it. To upgrade, move the tag and rebuild.
 - From `main`, `package.json` holds the last release until the next one, so the default image can be
   older than the module's code. Set `image` or `imageArchive` to an image built from the same
@@ -227,7 +227,7 @@ the old token after a copy; a mounted directory sees each new file, renamed in. 
 
 Each run copies only a token that changed, and never replaces a staged token with a file that is
 missing or empty: a secrets manager that drops the file for a moment does not take HTTPS down. With
-no token at all, `imp-host` still starts; impd logs the path, `imp info` shows the error, and
+no token at all, `imp-host` still starts; impd logs the path, `impz info` shows the error, and
 certificates and DNS records wait for the token.
 
 With sops-nix, have a new secret run the copy at once instead of at the next timer:
@@ -268,9 +268,9 @@ to use it ([how it works](./tailscale.md#how-it-works)):
 
 ```sh
 systemctl status imp-docker-proxy imp-host imp-zfs-dataset
-docker exec imp-host imp info
-docker exec imp-host imp new check --image ubuntu && docker exec imp-host imp exec check -- uname -a
-docker exec imp-host imp rm check
+docker exec imp-host impz info
+docker exec imp-host impz new check --image ubuntu && docker exec imp-host impz exec check -- uname -a
+docker exec imp-host impz rm check
 ```
 
 ## Test it

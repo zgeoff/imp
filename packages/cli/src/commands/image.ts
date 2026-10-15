@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import type { Image } from '@imp/api';
+import type { Image } from '@impz/api';
 import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
 import { formatImageBuilds, formatImages, formatOutput } from '../format-output';
@@ -25,7 +25,7 @@ const addCommand = defineCommand({
           ref: context.args.ref,
           ...(context.args.name !== undefined && { name: context.args.name }),
         },
-        'imp image add',
+        'impz image add',
       );
 
       console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
@@ -142,7 +142,7 @@ export const imageCommand = defineCommand({
   },
 });
 
-// `imp template`: the images API with an imp as the source
+// `impz template`: the images API with an imp as the source
 // (docs/guides/templates.md)
 const templateCreateCommand = defineCommand({
   meta: { name: 'create', description: "Make a template from an imp's disk" },
@@ -160,7 +160,7 @@ const templateCreateCommand = defineCommand({
       const image = await runImageAdd(
         client,
         { imp: context.args.imp, name: context.args.name },
-        'imp template create',
+        'impz template create',
       );
 
       console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
@@ -191,7 +191,7 @@ const templateRmCommand = defineCommand({
 
       if (image !== undefined && image.source !== 'imp') {
         throw new UsageError(
-          `${context.args.name} is a docker image, not a template: use imp image rm`,
+          `${context.args.name} is a docker image, not a template: use impz image rm`,
         );
       }
 

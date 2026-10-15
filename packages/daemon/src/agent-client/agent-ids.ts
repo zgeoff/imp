@@ -1,4 +1,4 @@
-import { ExecutionGenerationSchema, SessionNameSchema } from '@imp/api';
+import { ExecutionGenerationSchema, SessionNameSchema } from '@impz/api';
 import * as z from 'zod';
 
 // The names an agent reports that impd uses in paths, file names or logs.

@@ -1,4 +1,4 @@
-import type { Imp } from '@zgeoff/imp-client';
+import type { Imp } from '@impz/client';
 import { buildImpNotes } from '../lib/imp-notes';
 import styles from './imp-notes.module.css';
 

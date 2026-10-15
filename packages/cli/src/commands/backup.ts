@@ -61,14 +61,14 @@ const restoreCommand = defineCommand({
       const args = context.args;
 
       if ((args.all === true) === (args.name !== undefined)) {
-        throw new UsageError('usage: imp backup restore <name> [--as <name>] | --all [--merge]');
+        throw new UsageError('usage: impz backup restore <name> [--as <name>] | --all [--merge]');
       }
 
       // two hosts with one repository and one host name drop each other's
       // live locks (docs/architecture/backups.md#whole-host-restore)
       if (args.all === true) {
         console.error(
-          'imp: before a whole-host restore, stop the old impd or remove its IMP_BACKUP_* settings',
+          'impz: before a whole-host restore, stop the old impd or remove its IMP_BACKUP_* settings',
         );
       }
 
@@ -81,12 +81,12 @@ const restoreCommand = defineCommand({
       });
 
       for (const skipped of result.skippedGrants) {
-        console.error(`imp: ${skipped.imp}: grant ${skipped.secret} left off: ${skipped.reason}`);
+        console.error(`impz: ${skipped.imp}: grant ${skipped.secret} left off: ${skipped.reason}`);
       }
 
       for (const left of result.notRestorable ?? []) {
         console.error(
-          `imp: ${left.imp}: not restorable, the backup holds none of its files: ${left.reason}`,
+          `impz: ${left.imp}: not restorable, the backup holds none of its files: ${left.reason}`,
         );
       }
 
@@ -95,17 +95,17 @@ const restoreCommand = defineCommand({
         const database = result.database;
 
         if (database.tokens.length > 0) {
-          console.error(`imp: tokens restored: ${database.tokens.join(', ')}`);
+          console.error(`impz: tokens restored: ${database.tokens.join(', ')}`);
         }
 
         if (database.secrets.length > 0) {
           console.error(
-            `imp: secrets restored without values: ${database.secrets.join(', ')}; add each with imp secret add <name> --replace`,
+            `impz: secrets restored without values: ${database.secrets.join(', ')}; add each with impz secret add <name> --replace`,
           );
         }
 
         for (const skipped of database.skipped) {
-          console.error(`imp: ${skipped.name} left out: ${skipped.reason}`);
+          console.error(`impz: ${skipped.name} left out: ${skipped.reason}`);
         }
       }
 

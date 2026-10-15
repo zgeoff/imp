@@ -47,13 +47,13 @@ import { tokenCommand } from './commands/tokens';
 // it loads lazily: a static import would be a cycle.
 export const mainCommand = defineCommand({
   meta: {
-    name: 'imp',
+    name: 'impz',
     version: packageJson.version,
     description: 'Persistent Linux microVMs that sleep when idle and wake on request',
   },
 
   // main takes --host out before citty parses; declared here for --help
-  args: { host: { type: 'string', description: 'saved host to call (see imp host ls)' } },
+  args: { host: { type: 'string', description: 'saved host to call (see impz host ls)' } },
   subCommands: {
     new: newCommand,
     ls: lsCommand,

@@ -1,13 +1,13 @@
-# Copying files: `imp cp`
+# Copying files: `impz cp`
 
-`imp cp` copies a file or a directory into an imp or out of one. One side is a path on this machine;
-the other is `NAME:PATH` in an imp.
+`impz cp` copies a file or a directory into an imp or out of one. One side is a path on this
+machine; the other is `NAME:PATH` in an imp.
 
 ```sh
-imp cp ./app box:/srv          # makes /srv/app in the imp
-imp cp ./app box:/srv/site     # makes /srv/site, when it is not a directory yet
-imp cp box:/var/log/app.log .  # makes ./app.log
-imp cp --owner www-data ./site box:/var/www
+impz cp ./app box:/srv          # makes /srv/app in the imp
+impz cp ./app box:/srv/site     # makes /srv/site, when it is not a directory yet
+impz cp box:/var/log/app.log .  # makes ./app.log
+impz cp --owner www-data ./site box:/var/www
 ```
 
 The rules follow `cp -r`. When the target is a directory, the copy goes into it under its own name;
@@ -57,7 +57,7 @@ packs) is compressed already. For a large tree of text over a slow link, compres
 the image's USER:
 
 ```sh
-imp exec box -- tar czf - -C /srv app | tar xzf -
+impz exec box -- tar czf - -C /srv app | tar xzf -
 ```
 
 ## Safety

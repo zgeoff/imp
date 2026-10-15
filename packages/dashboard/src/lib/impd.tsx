@@ -1,6 +1,6 @@
+import type { ImpClient } from '@impz/client';
+import { createImpClient } from '@impz/client';
 import { createTanstackQueryUtils } from '@orpc/tanstack-query';
-import type { ImpClient } from '@zgeoff/imp-client';
-import { createImpClient } from '@zgeoff/imp-client';
 import type { ReactNode } from 'react';
 import { createContext, use } from 'react';
 

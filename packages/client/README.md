@@ -1,12 +1,12 @@
-# @zgeoff/imp-client
+# @impz/client
 
-A typed client for [impd](https://github.com/zgeoff/imp), the imp host daemon. It runs in Bun, in
+A typed client for [impd](https://github.com/zgeoff/impz), the imp host daemon. It runs in Bun, in
 binaries that `bun build --compile` makes, in Node 22.6 or later, and in browsers with
 `Promise.withResolvers`: Chrome 119, Firefox 121 and Safari 17.4 or later. CI checks each release
 under Node, Bun and a compiled Bun binary.
 
 ```sh
-npm install @zgeoff/imp-client
+npm install @impz/client
 ```
 
 `@opentelemetry/api` is an optional peer: oRPC's type declarations name it, so a project that
@@ -15,7 +15,7 @@ type-checks its dependencies (no `skipLibCheck`) installs it too.
 ## Connect
 
 ```ts
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
 
 const imp = createImpClient({
   url: 'http://localhost:7070',
@@ -86,7 +86,7 @@ try {
 }
 ```
 
-`imp.openConsole` opens a login shell with a tty, the shell of the image's user, as `imp console`
+`imp.openConsole` opens a login shell with a tty, the shell of the image's user, as `impz console`
 does. With [xterm.js](https://xtermjs.org):
 
 ```ts
@@ -180,7 +180,7 @@ impd lacks. impd's errors carry a `code` and typed `data`:
 | `AGENT_OUTDATED`      | The imp's agent has no sessions; stop and start it.  |                                        |
 
 ```ts
-import { isDefinedError, safe } from '@zgeoff/imp-client';
+import { isDefinedError, safe } from '@impz/client';
 
 const [error, created] = await safe(imp.imps.create({ name: 'dev' }));
 
@@ -219,7 +219,7 @@ it fails with `CONFLICT` and `data.reason: 'binding_changed'` unless `rebind` is
 CA bundle for this boot; otherwise the exec fails with `PRECONDITION_FAILED` and
 `data: { reason: 'broker_not_ready', detail }`, and nothing runs. Without the feature it fails the
 same way with `reason: 'impd_outdated'` before it sends the start. See
-[requiring the broker](https://github.com/zgeoff/imp/blob/main/docs/guides/connectors.md#requiring-the-broker).
+[requiring the broker](https://github.com/zgeoff/impz/blob/main/docs/guides/connectors.md#requiring-the-broker).
 
 ## Versions
 

@@ -1,4 +1,4 @@
-import type { ImpEvent } from '@imp/api';
+import type { ImpEvent } from '@impz/api';
 import type { StartTimer } from '../process/clock';
 import { startTimerAt } from '../process/start-timer-at';
 import type { EventBus } from './event-bus';

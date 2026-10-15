@@ -1,6 +1,6 @@
-import { formatBytes } from '@imp/shared';
+import type { Image } from '@impz/client';
+import { formatBytes } from '@impz/shared';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { Image } from '@zgeoff/imp-client';
 import { useState } from 'react';
 import { Button } from '../components/button';
 import { ConfirmDialog } from '../components/confirm-dialog';

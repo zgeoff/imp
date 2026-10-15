@@ -1,4 +1,4 @@
-import type { Imp } from '@imp/api';
+import type { Imp } from '@impz/api';
 import type { ImpRecord } from '../db/imps';
 import { createEventBus } from '../events/event-bus';
 import type { EventBus } from '../events/event-bus';

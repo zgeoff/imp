@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { CLIENT_VERSION, ExecError, createImpClient, openExecSession } from '@zgeoff/imp-client';
-import type { ExecOutcome, ExecSessionOptions } from '@zgeoff/imp-client';
+import { CLIENT_VERSION, ExecError, createImpClient, openExecSession } from '@impz/client';
+import type { ExecOutcome, ExecSessionOptions } from '@impz/client';
 
 // The client's smoke against run-stub-impd.ts, from the packed package under
 // Node, Bun and a compiled Bun binary (scripts/release/check-client-runtimes.sh).

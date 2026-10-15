@@ -1,4 +1,4 @@
-import type { AuditEntry, AuditRefusal, RefusedRequest } from '@imp/api';
+import type { AuditEntry, AuditRefusal, RefusedRequest } from '@impz/api';
 import { toLikePattern } from '../auth/imp-patterns';
 import type { ImpDatabase } from './open-database';
 

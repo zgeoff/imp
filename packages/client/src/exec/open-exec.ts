@@ -1,5 +1,5 @@
-import { CONSOLE_SHELL } from '@imp/api';
-import type { ExecRequirement, ImpContract, ResumeFrom } from '@imp/api';
+import { CONSOLE_SHELL } from '@impz/api';
+import type { ExecRequirement, ImpContract, ResumeFrom } from '@impz/api';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ExecError } from './exec-error';
 import { openExecSession } from './open-exec-session';
@@ -298,7 +298,7 @@ function readAbortReason(abort: Readonly<AbortSignal> | undefined): Error {
 
 export type ConsoleOptions = Omit<ExecOptions, 'tty'>;
 
-// A login shell with a tty, as `imp console` opens. TERM defaults to
+// A login shell with a tty, as `impz console` opens. TERM defaults to
 // xterm-256color, what xterm.js and most terminals speak.
 export function openConsole(
   deps: Readonly<ExecDeps>,

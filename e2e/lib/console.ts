@@ -10,7 +10,7 @@ export interface ConsoleStep {
   readonly line: string;
 }
 
-// Runs `imp console NAME` on a pseudo-terminal, typing each line once the
+// Runs `impz console NAME` on a pseudo-terminal, typing each line once the
 // terminal shows what it waits for; returns the exit code and what the
 // terminal showed, without carriage returns
 export async function runConsole(
@@ -23,7 +23,7 @@ export async function runConsole(
 
   let output = '';
 
-  const proc = Bun.spawn([join(REPO_ROOT, 'scripts', 'imp'), 'console', name], {
+  const proc = Bun.spawn([join(REPO_ROOT, 'scripts', 'impz'), 'console', name], {
     env: { ...process.env, ...impEnv },
     terminal: {
       cols: 80,

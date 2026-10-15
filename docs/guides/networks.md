@@ -5,14 +5,14 @@ its database, or a build imp and a cache. An imp can be on more than one network
 is separate: two imps reach each other only when they share one.
 
 ```sh
-imp net create lab                # an empty network
-imp new web --net lab             # on lab from its first boot
-imp net join lab db               # an existing imp, at once, whatever its state
-imp exec web -- ping db           # by its imp name
-imp exec web -- ping db.lab.internal
-imp net ls                        # NAME  IMPS
-imp net leave lab db              # its connections to web end
-imp net rm lab                    # every member's connections to the others end
+impz net create lab                # an empty network
+impz new web --net lab             # on lab from its first boot
+impz net join lab db               # an existing imp, at once, whatever its state
+impz exec web -- ping db           # by its imp name
+impz exec web -- ping db.lab.internal
+impz net ls                        # NAME  IMPS
+impz net leave lab db              # its connections to web end
+impz net rm lab                    # every member's connections to the others end
 ```
 
 `--net` takes a comma-separated list, and each network must exist. Joining twice and leaving a
@@ -26,10 +26,10 @@ network the imp is not on do nothing.
 - A non-member reaches no member, and no member reaches it. A packet between two imps that share no
   network is refused: TCP gets a reset, the rest ICMP admin-prohibited.
 - IPv4 only: two members do not reach each other over IPv6, and names answer A records only.
-- A leave, a `net rm` and an `imp rm` take effect at once. A held connection between two imps that
+- A leave, a `net rm` and an `impz rm` take effect at once. A held connection between two imps that
   no longer share a network gets a reset on its next packet, and impd deletes the pair's conntrack
   entries. A pair that still shares another network keeps its connections.
-- A sleeping imp does not wake for a packet from a peer. Hold it (`imp hold`), or wake it first.
+- A sleeping imp does not wake for a packet from a peer. Hold it (`impz hold`), or wake it first.
 - A fork joins no network: a join is a choice made for each imp. A
   [backup](../architecture/storage/backups.md) keeps each imp's network names, and a restore puts
   the imp back on them, making any network that is gone.
@@ -42,9 +42,9 @@ it carries a box imp's traffic anywhere. A `public` peer does the same to the in
 or `none` member. A `public`, `box` or `none` imp on a network trusts every open peer on it with its
 egress, and a `box` or `none` imp trusts every public peer.
 
-`imp net join` warns when a join puts a `public`, `box` or `none` imp on a network with an `open`
+`impz net join` warns when a join puts a `public`, `box` or `none` imp on a network with an `open`
 one, or a `box` or `none` imp with a `public` one, from either side, and `--json` carries the same
-text in `warning`. `imp new --net` and `imp policy` print the same warning on stderr, one for each
+text in `warning`. `impz new --net` and `impz policy` print the same warning on stderr, one for each
 of the imp's networks that mixes them; the API gives them with `networks.warnings`. To keep a box
 imp boxed, keep every imp on its networks `box` or `none`.
 
@@ -82,9 +82,9 @@ no network asks `IMP_DNS` directly, as before, and gets its NXDOMAIN from there.
 ## Access
 
 Every network call is host-wide. A [token](./tokens.md) limited to some imps cannot create, delete,
-join or leave a network, and cannot pass `--net` to `imp new`: a member reaches every other member,
+join or leave a network, and cannot pass `--net` to `impz new`: a member reaches every other member,
 so a `dev-*` token could reach past its imps. It can list networks, and sees only its own imps in
-them. `imp net ls` needs `read`; the other `imp net` commands need `manage`.
+them. `impz net ls` needs `read`; the other `impz net` commands need `manage`.
 
 ## How it works
 

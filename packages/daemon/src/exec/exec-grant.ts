@@ -1,4 +1,4 @@
-import { hasScope } from '@imp/api';
+import { hasScope } from '@impz/api';
 import { buildForbiddenError } from '../api-errors';
 import { formatCaller, isCallerAllowed } from '../auth/caller';
 import type { Caller } from '../auth/caller';

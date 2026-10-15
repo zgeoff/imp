@@ -1,4 +1,4 @@
-import type { ImpEvent } from '@imp/api';
+import type { ImpEvent } from '@impz/api';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { isUnauthorized } from './build-query-client';

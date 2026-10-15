@@ -1,4 +1,4 @@
-import type { Imp } from '@imp/api';
+import type { Imp } from '@impz/api';
 import { buildLeaseNotHeldError, buildLeasedError } from '../api-errors';
 import { listImps, updateImpActivity } from '../db/imps';
 import {

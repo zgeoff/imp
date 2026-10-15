@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, posix } from 'node:path';
-import { ImageRefSchema, NameSchema } from '@imp/api';
-import type { ImageBuildPhase } from '@imp/api';
+import { ImageRefSchema, NameSchema } from '@impz/api';
+import type { ImageBuildPhase } from '@impz/api';
 import {
   BuildContextError,
   MissingDockerfileError,
@@ -9,7 +9,7 @@ import {
   listContextEntries,
   readBuildContext,
   writeBuildContext,
-} from '@imp/local-tar';
+} from '@impz/local-tar';
 import { ORPCError } from '@orpc/server';
 import type { Config } from '../config';
 import type { ImageRecord } from '../db/images';
@@ -350,7 +350,7 @@ export function createImageBuilds(deps: ImageBuildsDeps, writer: ImageWriter): I
     // running the release image does not.
     if (!existsSync(contextDir)) {
       throw new ORPCError('BAD_REQUEST', {
-        message: `build context ${contextDir} does not exist on the impd host; build the image there and use \`imp image add\``,
+        message: `build context ${contextDir} does not exist on the impd host; build the image there and use \`impz image add\``,
       });
     }
 

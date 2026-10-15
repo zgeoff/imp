@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import { NameSchema, SystemInfoSchema } from '@imp/api';
+import { NameSchema, SystemInfoSchema } from '@impz/api';
 import { Collection } from '@msw/data';
 import * as z from 'zod';
 

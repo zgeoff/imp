@@ -1,4 +1,4 @@
-import type { EgressPolicy, ImpKind } from '@imp/api';
+import type { EgressPolicy, ImpKind } from '@impz/api';
 import { buildConflictError } from '../api-errors';
 import type { ImageRecord } from '../db/images';
 import { ImpClashError } from '../db/imp-clash-error';

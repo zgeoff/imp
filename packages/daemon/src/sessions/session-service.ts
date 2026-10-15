@@ -1,4 +1,4 @@
-import type { Session, SessionLog, SessionLogRead } from '@imp/api';
+import type { Session, SessionLog, SessionLogRead } from '@impz/api';
 import { sendActivity, sendSessionKill } from '../agent-client/agent-requests';
 import { isAgentError } from '../agent-client/is-agent-error';
 import { buildAgentOutdatedApiError, buildNotFoundError } from '../api-errors';

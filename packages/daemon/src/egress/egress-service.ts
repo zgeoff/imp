@@ -1,5 +1,5 @@
 import { Resolver } from 'node:dns/promises';
-import type { EgressPolicy } from '@imp/api';
+import type { EgressPolicy } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildMovingError, buildNotFoundError } from '../api-errors';
 import { REFUSED_RANGES } from '../broker/tunnel-target';

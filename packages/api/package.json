@@ -1,5 +1,5 @@
 {
-  "name": "@imp/api",
+  "name": "@impz/api",
   "version": "1.6.0",
   "private": true,
   "description": "oRPC contract, schemas and exec stream framing for the imp control API",
@@ -16,6 +16,6 @@
   },
   "devDependencies": {
     "@faker-js/faker": "catalog:",
-    "@imp/test-utils": "workspace:*"
+    "@impz/test-utils": "workspace:*"
   }
 }

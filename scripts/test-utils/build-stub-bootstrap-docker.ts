@@ -11,7 +11,7 @@ interface StubBootstrapDocker {
   readonly images?: readonly string[];
   readonly seccompImages?: readonly string[];
 
-  // what the imp-host container answers: `imp info` (with or without --json), `docker port`,
+  // what the imp-host container answers: `impz info` (with or without --json), `docker port`,
   // its findmnt of /var/lib/imp, its IPv6 default route, and its log
   readonly impInfo?: string;
   readonly published?: string;
@@ -53,7 +53,7 @@ ${images.map((image) => `  "image inspect "${image}) ;;`).join('\n')}
   "load -q -i "*) ;;
 ${seccompImages.map((image) => `  "run --rm "${image}" cat ${SECCOMP_IN_IMAGE}") echo '{}' ;;`).join('\n')}
   "run --rm "*" cat ${SECCOMP_IN_IMAGE}") echo "cat: ${SECCOMP_IN_IMAGE}: No such file or directory" >&2; exit 1 ;;
-  "exec imp-host imp info" | "exec imp-host imp info --json") ${buildPrint(stub.impInfo)} ;;
+  "exec imp-host impz info" | "exec imp-host impz info --json") ${buildPrint(stub.impInfo)} ;;
   "port imp-host") ${buildPrint(stub.published)} ;;
   "exec imp-host findmnt -n -r -o SOURCE,FSTYPE --mountpoint /var/lib/imp") ${buildPrint(stub.dataMount)} ;;
   "exec imp-host ip -6 route show default") ${buildPrint(stub.ipv6Route)} ;;

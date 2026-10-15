@@ -1,5 +1,5 @@
-import { ServiceRestartSchema, ServiceStateSchema } from '@imp/api';
-import type { ImpEvent, Service, ServiceDef, ServiceList, ServiceLog } from '@imp/api';
+import { ServiceRestartSchema, ServiceStateSchema } from '@impz/api';
+import type { ImpEvent, Service, ServiceDef, ServiceList, ServiceLog } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { LogCursor, ServiceStatus, ServicesList } from '../agent-client/agent-protocol';
 import { isAgentError } from '../agent-client/is-agent-error';

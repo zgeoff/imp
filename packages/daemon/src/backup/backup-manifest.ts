@@ -1,4 +1,4 @@
-import { GrantFilterSchema, ImageSourceSchema } from '@imp/api';
+import { GrantFilterSchema, ImageSourceSchema } from '@impz/api';
 import * as z from 'zod';
 import { LEGACY_DISK_BYTES } from '../process/legacy-disk-bytes';
 

@@ -5,13 +5,13 @@
 #   scripts/dev/bench-wake.sh [--cycles N] [--awake S] [--limit-ms MS] [--memory M]
 #
 # Each cycle stops and starts the imp, waits --awake seconds (default 0),
-# sleeps it and times `imp wake` as the client sees it, CLI start included.
+# sleeps it and times `impz wake` as the client sees it, CLI start included.
 # It fails when the median wake passes --limit-ms (default 500). A slow wake
 # takes 700-1100 ms on an affected host; a normal one 100-200 ms.
 #
 # It drives impd through the imp CLI, so it runs against any host: set
 # IMP_URL and IMP_TOKEN, or use the saved login. IMP_BIN picks the CLI
-# (default: scripts/imp from this checkout). To see the effect itself, run
+# (default: scripts/impz from this checkout). To see the effect itself, run
 # impd with IMP_SLEEP_MIN_GUEST_UPTIME_MS=0; with the default, impd waits
 # out the young guest and the wakes stay fast.
 set -euo pipefail
@@ -47,25 +47,25 @@ imp() {
 }
 
 cleanup() {
-  imp rm "$name" || true
+  impz rm "$name" || true
 }
 trap cleanup EXIT
 
 # the host kernel decides the result: record `uname -r` on the impd host with it
 echo "bench-wake: $cycles cycles, awake ${awake}s, limit ${limit_ms}ms"
 
-imp new "$name" --memory "$memory"
+impz new "$name" --memory "$memory"
 
 wakes=()
 for cycle in $(seq 1 "$cycles"); do
-  imp stop "$name"
-  imp start "$name"
+  impz stop "$name"
+  impz start "$name"
   sleep "$awake"
 
   started=$(now_ms)
-  imp sleep "$name"
+  impz sleep "$name"
   slept=$(now_ms)
-  imp wake "$name"
+  impz wake "$name"
   woke=$(now_ms)
 
   wakes+=($((woke - slept)))

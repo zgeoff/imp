@@ -1,14 +1,14 @@
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
-import type { ImpState } from '@imp/api';
-import { ORPCError, openReverseForward } from '@zgeoff/imp-client';
+import type { ImpState } from '@impz/api';
+import { ORPCError, openReverseForward } from '@impz/client';
 import type {
   ReverseForward,
   ReverseForwardEnd,
   ReverseListening,
   ReverseRelay,
   ReverseRelayHandlers,
-} from '@zgeoff/imp-client';
+} from '@impz/client';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
 import type { ReverseLocal, ReverseSpec } from './parse-reverse';
@@ -16,7 +16,7 @@ import { waitOrAbort } from './wait-or-abort';
 
 // what a reverse forward touches besides its sockets; tests swap it
 export interface ReverseIo {
-  // a line for the user on stderr, after `imp: `
+  // a line for the user on stderr, after `impz: `
   readonly writeNotice: (text: string) => void;
 
   // the imp's state now, then each change; throws once the imp is gone.
@@ -56,7 +56,7 @@ const RETRY_MS = 2000;
 
 const PROCESS_IO: ReverseIo = {
   writeNotice: (text) => {
-    console.error(`imp: ${text}`);
+    console.error(`impz: ${text}`);
   },
 };
 

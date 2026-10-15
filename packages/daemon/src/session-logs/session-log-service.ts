@@ -1,5 +1,5 @@
-import type { PreviousGeneration, ResumeFrom, SessionLog, SessionLogRead } from '@imp/api';
-import { PreviousGenerationSchema } from '@imp/api';
+import type { PreviousGeneration, ResumeFrom, SessionLog, SessionLogRead } from '@impz/api';
+import { PreviousGenerationSchema } from '@impz/api';
 import * as z from 'zod';
 import { isAgentLogIdentity } from '../agent-client/agent-ids';
 import type { SessionInfo } from '../agent-client/agent-protocol';

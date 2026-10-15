@@ -1,4 +1,4 @@
-import type { AuditRefusal, GrantFilter } from '@imp/api';
+import type { AuditRefusal, GrantFilter } from '@impz/api';
 import type { NewAuditEntry } from '../db/broker-audit';
 import { isRequestInFilter } from './is-request-in-filter';
 

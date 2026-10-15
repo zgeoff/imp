@@ -21,7 +21,7 @@ pre-commit:
       run: node_modules/.bin/format-codemod --quiet {staged_files}
       stage_fixed: true
     # the flags scripts/ci/shellcheck.sh checks with; needs shfmt on PATH, the
-    # version CI pins (3.14.1). Scripts without a .sh name (scripts/imp,
+    # version CI pins (3.14.1). Scripts without a .sh name (scripts/impz,
     # host/entrypoint) are left to that check.
     - name: shfmt
       glob: '*.sh'

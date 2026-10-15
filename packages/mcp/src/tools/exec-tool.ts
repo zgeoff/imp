@@ -1,4 +1,4 @@
-import { EXEC_REQUIREMENTS } from '@imp/api';
+import { EXEC_REQUIREMENTS } from '@impz/api';
 import * as z from 'zod';
 import { formatCappedText } from '../exec/output-cap';
 import { runCapped } from '../exec/run-capped';

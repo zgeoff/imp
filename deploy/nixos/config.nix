@@ -510,7 +510,7 @@ in
 
     systemd.services.imp-docker-proxy = {
       description = "imp Docker socket proxy (the Docker API calls impd makes)";
-      documentation = [ "https://github.com/zgeoff/imp/blob/main/docs/architecture/host.md" ];
+      documentation = [ "https://github.com/zgeoff/impz/blob/main/docs/architecture/host.md" ];
       wantedBy = [ "multi-user.target" ];
       requires = [
         "docker.service"
@@ -575,7 +575,7 @@ in
 
     systemd.services.imp-host = {
       description = "imp host (impd, Firecracker, tailscaled)";
-      documentation = [ "https://github.com/zgeoff/imp/blob/main/docs/guides/nixos.md" ];
+      documentation = [ "https://github.com/zgeoff/impz/blob/main/docs/guides/nixos.md" ];
       wantedBy = [ "multi-user.target" ];
       requires = [
         "docker.service"

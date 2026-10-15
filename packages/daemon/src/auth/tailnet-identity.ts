@@ -1,4 +1,4 @@
-import { ImpPatternSchema, ScopeSchema } from '@imp/api';
+import { ImpPatternSchema, ScopeSchema } from '@impz/api';
 import * as z from 'zod';
 import type { TailscaleStatus } from '../net/tailscale-status';
 import { runCommand } from '../process/run-command';

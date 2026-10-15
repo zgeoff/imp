@@ -1,4 +1,4 @@
-import type { Checkpoint } from '@imp/api';
+import type { Checkpoint } from '@impz/api';
 import type { Selectable } from 'kysely';
 import type { ImpDatabase } from './open-database';
 import type { DB } from './schema';

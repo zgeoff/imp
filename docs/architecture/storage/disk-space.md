@@ -67,12 +67,12 @@ written count as their owner's.
 ## The sweep
 
 A crash, or a removal that failed halfway, can leave storage that no row names. One sweep removes
-it, at start, on a timer and on `imp gc`. Its rule comes from what a lost database would do: a
+it, at start, on a timer and on `impz gc`. Its rule comes from what a lost database would do: a
 database restored from an older copy, or one that is gone while the pool survives, makes every newer
 disk and checkpoint unnamed, and a sweep that took them would delete every imp. So the sweep takes
 only what is provably impd's own and transient, such as a fork's or a backup's leftover snapshot or
 an empty directory, and keeps every disk, image and checkpoint that no row names as an orphan. It
-logs each orphan with its size and age, and `imp gc --orphans` retires them as a destroy would. A
+logs each orphan with its size and age, and `impz gc --orphans` retires them as a destroy would. A
 destroy removes the files first and the row last, so a destroy never makes an orphan.
 
 A sweep while impd runs must never take storage that is about to get its row: a checkpoint's

@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { ScopeSchema, hasScope } from '@imp/api';
-import type { OAuthApproval, OAuthClient, OAuthGrant, Scope } from '@imp/api';
+import { ScopeSchema, hasScope } from '@impz/api';
+import type { OAuthApproval, OAuthClient, OAuthGrant, Scope } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildConflictError, buildForbiddenError, buildNotFoundError } from '../api-errors';
 import type { Caller } from '../auth/caller';
@@ -96,7 +96,7 @@ export interface PendingView {
   readonly approvalCode: string;
   readonly expiresAt: number;
 
-  // what the approver gave; null until `imp oauth approve`
+  // what the approver gave; null until `impz oauth approve`
   readonly approval: { readonly scope: Scope; readonly imps: readonly string[] | null } | null;
 }
 
@@ -811,7 +811,7 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
         return { kind: 'too-many', retryS: APPROVAL_MS / 1000 };
       }
 
-      deps.log(`impd: oauth: ${client.name} asks to sign in; it waits for imp oauth approve`);
+      deps.log(`impd: oauth: ${client.name} asks to sign in; it waits for impz oauth approve`);
 
       return { kind: 'page', view: toView(entry) };
     },
@@ -1003,7 +1003,7 @@ function requireNamedToken(approver: Readonly<Caller>): string {
 
   if (!isNamedKind || approver.tokenId === null || approver.tokenId === ROOT_TOKEN_ID) {
     throw buildForbiddenError(
-      'only a named token approves a sign-in; make one with imp token new and use it',
+      'only a named token approves a sign-in; make one with impz token new and use it',
     );
   }
 

@@ -1,4 +1,4 @@
-import type { MovePlan, MoveStatus, WarmHost } from '@imp/api';
+import type { MovePlan, MoveStatus, WarmHost } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildInvalidStateError, buildNotFoundError } from '../api-errors';
 import type { Broker } from '../broker/broker-service';
@@ -255,7 +255,7 @@ function encodeHeader(header: Readonly<MoveHeader>): unknown {
 // a public imp's credential and DNS record belong to this host's domain
 function buildPublicError(name: string) {
   return new ORPCError('PRECONDITION_FAILED', {
-    message: `${name} is public: run imp unexpose ${name} first, and imp expose on the target after the move`,
+    message: `${name} is public: run impz unexpose ${name} first, and impz expose on the target after the move`,
   });
 }
 
@@ -669,7 +669,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
   // Before a receipt, a failure undoes the move on both hosts. The mark and
   // the row stay until the target confirms, so no staged copy is left
-  // behind with nothing here to end it; `imp move --abort` asks again.
+  // behind with nothing here to end it; `impz move --abort` asks again.
   const resetSend = async (
     imp: ImpRecord,
     peer: string | null,
@@ -684,7 +684,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     try {
       await sendAbort(imp, peer, ticket);
     } catch (error) {
-      const message = `the target did not confirm the abort (${readErrorMessage(error)}); run imp move ${imp.name} <host> --abort`;
+      const message = `the target did not confirm the abort (${readErrorMessage(error)}); run impz move ${imp.name} <host> --abort`;
 
       await updateMoveSend(deps.db, imp.id, { error: message });
 

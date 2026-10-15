@@ -1,4 +1,4 @@
-import type { ReverseGuest } from '@zgeoff/imp-client';
+import type { ReverseGuest } from '@impz/client';
 import { UsageError } from './usage-error';
 
 // The local side of a reverse forward: a unix socket or a port on this
@@ -7,7 +7,7 @@ export type ReverseLocal =
   | { readonly network: 'unix'; readonly path: string }
   | { readonly network: 'tcp'; readonly port: number };
 
-// One `imp proxy --reverse` spec: GUEST:LOCAL. Each side is an absolute
+// One `impz proxy --reverse` spec: GUEST:LOCAL. Each side is an absolute
 // path or a port; a lone side is both. An empty GUEST is a socket the imp's
 // agent makes, and a guest port 0 takes any free port.
 export interface ReverseSpec {

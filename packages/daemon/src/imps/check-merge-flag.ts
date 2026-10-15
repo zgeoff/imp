@@ -22,7 +22,7 @@ export function createMergeFlags(): MergeFlags {
 }
 
 // With IMP_KSM, checks that KSM may merge the VM's guest memory: before 6.19
-// (590c03ca6a3f) ksmd can clear the flag during the exec. `imp info` counts
+// (590c03ca6a3f) ksmd can clear the flag during the exec. `impz info` counts
 // such imps; a flag impd cannot read is logged.
 export async function checkMergeFlag(
   context: ImpContext,

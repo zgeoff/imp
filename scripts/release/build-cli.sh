@@ -1,6 +1,6 @@
 #!/bin/bash
-# Compile one standalone imp CLI binary per platform into dist/, named
-# imp-<target>. Every target cross-compiles from any host, so one runner
+# Compile one standalone impz CLI binary per platform into dist/, named
+# impz-<target>. Every target cross-compiles from any host, so one runner
 # builds the whole set. A target list on the command line narrows it.
 #
 #   scripts/release/build-cli.sh [target...]     e.g. scripts/release/build-cli.sh linux-x64
@@ -20,5 +20,5 @@ fi
 mkdir -p "$dist"
 for target in "${targets[@]}"; do
   bun build --compile --target="bun-$target" "$root/packages/cli/src/main.ts" \
-    --outfile "$dist/imp-$target"
+    --outfile "$dist/impz-$target"
 done

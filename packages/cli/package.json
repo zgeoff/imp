@@ -1,26 +1,26 @@
 {
-  "name": "@imp/cli",
+  "name": "@impz/cli",
   "version": "1.6.0",
   "private": true,
-  "description": "imp: the command-line client for impd",
+  "description": "impz: the command-line client for impd",
   "bin": {
-    "imp": "src/main.ts"
+    "impz": "src/main.ts"
   },
   "type": "module",
   "dependencies": {
-    "@imp/api": "workspace:*",
-    "@imp/local-tar": "workspace:*",
-    "@imp/mcp": "workspace:*",
-    "@imp/shared": "workspace:*",
-    "@zgeoff/imp-client": "workspace:*",
+    "@impz/api": "workspace:*",
+    "@impz/client": "workspace:*",
+    "@impz/local-tar": "workspace:*",
+    "@impz/mcp": "workspace:*",
+    "@impz/shared": "workspace:*",
     "citty": "catalog:",
     "tar-stream": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@faker-js/faker": "catalog:",
-    "@imp/daemon": "workspace:*",
-    "@imp/test-utils": "workspace:*",
+    "@impz/daemon": "workspace:*",
+    "@impz/test-utils": "workspace:*",
     "msw": "catalog:"
   }
 }

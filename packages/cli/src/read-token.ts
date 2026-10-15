@@ -59,7 +59,7 @@ function buildProcessTerminal(): TokenTerminal {
   };
 }
 
-// A token for `imp login` or `imp secret add`: the first line of piped
+// A token for `impz login` or `impz secret add`: the first line of piped
 // stdin, else typed at a prompt that does not echo. Never an argument,
 // which would land in the shell history and in `ps`.
 export async function readToken(

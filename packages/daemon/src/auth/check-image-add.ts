@@ -1,4 +1,4 @@
-import { ImageRefSchema, isImpAllowed } from '@imp/api';
+import { ImageRefSchema, isImpAllowed } from '@impz/api';
 import type { Refusal } from './access-policy';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';

@@ -6,11 +6,11 @@ import {
   MCP_PATH,
   TUNNEL_CLOSE_RESTARTING,
   TUNNEL_PATH,
-} from '@imp/api';
+} from '@impz/api';
+import type { ExecSocket } from '@impz/client';
 import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
-import type { ExecSocket } from '@zgeoff/imp-client';
 import { Elysia } from 'elysia';
 import * as z from 'zod';
 import type { ListenSpec } from './agent-client/listener-stream';
@@ -428,7 +428,7 @@ export function buildApp(deps: AppDeps) {
       },
     })
 
-    // `imp proxy`: a token or a tailnet identity. Never a ticket, which
+    // `impz proxy`: a token or a tailnet identity. Never a ticket, which
     // redeems once: a listener opens a tunnel per connection for hours.
     // Each tunnel checks the caller's scope.
     .ws(TUNNEL_PATH, {

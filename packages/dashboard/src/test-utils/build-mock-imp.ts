@@ -1,4 +1,4 @@
-import type { Imp } from '@imp/api';
+import type { Imp } from '@impz/api';
 import { ImpRowSchema } from '../mocks/db/imp-collection';
 
 // An imp as impd lists it, with the defaults of the mock impd's imps: a

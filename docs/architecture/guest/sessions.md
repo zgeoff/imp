@@ -2,7 +2,7 @@
 
 A session is a program on a pty in the guest that outlives its client. A plain exec ends when its
 connection does, but a session keeps running when the client goes, and any client may attach to it
-again later, from any machine. `imp console` opens one. The agent keeps each session's output in
+again later, from any machine. `impz console` opens one. The agent keeps each session's output in
 memory, impd tells a returning client exactly which bytes it missed, and a session started with a
 log keeps its output on the host past what the agent holds. The
 [session logs guide](../../guides/session-logs.md) covers their use.

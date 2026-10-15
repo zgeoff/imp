@@ -131,7 +131,7 @@ export function createTemplateService(deps: TemplateServiceDeps): TemplateServic
 
           const existing = await findImageByName(deps.db, name);
 
-          // `imp image add` over a template, or this over a docker image,
+          // `impz image add` over a template, or this over a docker image,
           // would change what the name is
           if (existing !== undefined && existing.source !== 'imp') {
             throw buildConflictError(

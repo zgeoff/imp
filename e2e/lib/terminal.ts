@@ -31,7 +31,7 @@ export async function openTerminal(
 ): Promise<Terminal> {
   const impEnv = await readImpEnv();
 
-  return openCommandTerminal([join(REPO_ROOT, 'scripts', 'imp'), ...args], impEnv, size);
+  return openCommandTerminal([join(REPO_ROOT, 'scripts', 'impz'), ...args], impEnv, size);
 }
 
 // Runs any command on a pseudo-terminal, such as `ssh` into an imp.

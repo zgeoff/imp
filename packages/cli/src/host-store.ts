@@ -42,7 +42,7 @@ const EMPTY_CONFIG: HostConfig = { current: null, hosts: {} };
 export function resolveConfigDir(env: CliEnv): string {
   const configHome = env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config');
 
-  return join(configHome, 'imp');
+  return join(configHome, 'impz');
 }
 
 export function resolveConfigPath(env: CliEnv): string {
@@ -52,7 +52,7 @@ export function resolveConfigPath(env: CliEnv): string {
 export function checkHostName(name: string): string {
   if (!HOST_NAME.test(name)) {
     throw new UsageError(
-      `not a host name: ${name} (letters, digits, '.', '_' and '-'; a URL goes to imp login)`,
+      `not a host name: ${name} (letters, digits, '.', '_' and '-'; a URL goes to impz login)`,
     );
   }
 
@@ -60,7 +60,7 @@ export function checkHostName(name: string): string {
 }
 
 // The saved hosts, or none without a config file. A file that does not parse
-// is an error, never an empty config, which `imp login` would write over.
+// is an error, never an empty config, which `impz login` would write over.
 // `warn` gets the warning about a file others can read.
 export function readHostConfig(
   env: CliEnv,
@@ -92,7 +92,7 @@ export function readHostConfig(
   const result = HostConfigSchema.safeParse(parsed);
 
   if (!result.success) {
-    throw new UsageError(`${path} is not an imp config (${z.prettifyError(result.error)})`);
+    throw new UsageError(`${path} is not an impz config (${z.prettifyError(result.error)})`);
   }
 
   return result.data;
@@ -142,6 +142,6 @@ function resolveWritePath(path: string): string {
 // mode to its owner
 function checkSharedMode(path: string, warn: (line: string) => void): void {
   if ((statSync(path).mode & 0o077) !== 0) {
-    warn(`imp: warning: ${path} is readable by other users; run chmod 600 ${path}`);
+    warn(`impz: warning: ${path} is readable by other users; run chmod 600 ${path}`);
   }
 }

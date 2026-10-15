@@ -1,4 +1,4 @@
-// `imp cp`'s progress line on a terminal: bytes of file content copied, of
+// `impz cp`'s progress line on a terminal: bytes of file content copied, of
 // the total when it is known. Off the terminal it prints nothing.
 export interface CopyProgress {
   readonly setTotal: (bytes: number) => void;
@@ -19,7 +19,7 @@ function formatMib(bytes: number): string {
   return `${(bytes / MIB).toFixed(1)} MiB`;
 }
 
-export function formatProgress(copied: number, total: number | null, label = 'imp cp'): string {
+export function formatProgress(copied: number, total: number | null, label = 'impz cp'): string {
   if (total === null || total === 0) {
     return `${label}: ${formatMib(copied)}`;
   }
@@ -33,7 +33,7 @@ export function formatProgress(copied: number, total: number | null, label = 'im
 export function createCopyProgress(
   output: ProgressOutput,
   now = Date.now,
-  label = 'imp cp',
+  label = 'impz cp',
 ): CopyProgress {
   const state = { copied: 0, total: null as number | null, drawnAt: 0, drawn: false };
 

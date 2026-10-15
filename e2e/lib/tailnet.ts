@@ -134,7 +134,7 @@ export async function waitForTailnetIp(options: Readonly<ImpRunOptions> = {}): P
   return ip;
 }
 
-// the per-imp tailnet name among `imp url`'s lines, or null
+// the per-imp tailnet name among `impz url`'s lines, or null
 export function findServiceUrl(stdout: string): string | null {
   return (
     stdout.split('\n').find((line) => /^https:\/\/[\w\-]+\.[\w\-]+\.ts\.net$/v.test(line)) ?? null

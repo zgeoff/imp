@@ -1,4 +1,4 @@
-import type { ForbiddenReason, ImpState } from '@imp/api';
+import type { ForbiddenReason, ImpState } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { LeaseRecord } from './db/leases';
 

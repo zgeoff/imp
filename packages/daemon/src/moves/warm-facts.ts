@@ -1,4 +1,4 @@
-import type { WarmHost, WarmMove } from '@imp/api';
+import type { WarmHost, WarmMove } from '@impz/api';
 import type { Config } from '../config';
 import { countSlots, formatSubnet } from '../net/addressing';
 import { UNKNOWN_CPU } from '../sleep/cpu-identity';

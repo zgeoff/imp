@@ -1,5 +1,5 @@
-import { formatMib } from '@imp/shared';
-import type { SystemInfo } from '@zgeoff/imp-client';
+import type { SystemInfo } from '@impz/client';
+import { formatMib } from '@impz/shared';
 import styles from './ram-meter.module.css';
 
 interface RamMeterProps {

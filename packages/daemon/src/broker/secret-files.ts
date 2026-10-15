@@ -32,7 +32,7 @@ export interface SecretFiles {
   // ORPHANED_DIR/<at> (0700), and returns their names
   readonly keepOrphansExcept: (keep: ReadonlySet<string>, at: Date) => KeptOrphans;
 
-  // each directory under ORPHANED_DIR, for `imp gc`, and its removal by name
+  // each directory under ORPHANED_DIR, for `impz gc`, and its removal by name
   readonly listKept: () => KeptDirectory[];
   readonly removeKept: (name: string) => void;
 }

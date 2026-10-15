@@ -1564,7 +1564,7 @@ unit_imp_host() {
 # /var/lib/imp must be XFS with reflink (docs/guides/install.md).
 [Unit]
 Description=imp host (impd, Firecracker, tailscaled)
-Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
+Documentation=https://github.com/zgeoff/impz/blob/main/docs/guides/install.md
 Requires=docker.service
 After=docker.service network-online.target imp-docker-proxy.service
 # impd reaches Docker through the proxy's socket. Wants, not BindsTo: a
@@ -1649,7 +1649,7 @@ unit_imp_docker_proxy() {
 # and deploy/upgrade.sh install both.
 [Unit]
 Description=imp Docker socket proxy (the Docker API calls impd makes)
-Documentation=https://github.com/zgeoff/imp/blob/main/docs/architecture/host.md
+Documentation=https://github.com/zgeoff/impz/blob/main/docs/architecture/host.md
 Requires=docker.service
 After=docker.service
 
@@ -1739,7 +1739,7 @@ IMP_DNS_API_TOKEN=
 # IMP_DNS_API_TOKEN_FILE=/etc/imp/dns-api-token
 IMP_ACME_EMAIL=
 
-# Public imps (docs/guides/https.md#public-imps): `imp expose <name>` serves
+# Public imps (docs/guides/https.md#public-imps): `impz expose <name>` serves
 # an imp to the internet. IMP_PUBLIC_IP is the host's public IPv4, which
 # their records point at. With the systemd unit, IMP_PUBLIC_PORTS publishes
 # the public listeners: -p 443:7443 -p 80:7480. With compose, uncomment the
@@ -1952,8 +1952,8 @@ blank_env_key() { sed 's/^TAILSCALE_AUTHKEY=.*/TAILSCALE_AUTHKEY=/'; }
 health() {
   phase health
   local name=bootstrap-check
-  wait_for "impd to answer" 120 docker exec imp-host imp info
-  docker exec imp-host imp info
+  wait_for "impd to answer" 120 docker exec imp-host impz info
+  docker exec imp-host impz info
 
   # Nothing may be published past loopback; the tailnet reaches impd through
   # the container's own tailscaled.
@@ -1973,12 +1973,12 @@ health() {
 
   # On a new host impd adds ubuntu:24.04 as `ubuntu` after it starts.
   wait_for "the ubuntu image" 600 has_ubuntu_image
-  trap 'docker exec imp-host imp rm '"$name"' >/dev/null 2>&1 || true' EXIT
-  docker exec imp-host imp rm "$name" >/dev/null 2>&1 || true
+  trap 'docker exec imp-host impz rm '"$name"' >/dev/null 2>&1 || true' EXIT
+  docker exec imp-host impz rm "$name" >/dev/null 2>&1 || true
   # uname needs little memory; the default would take 2 GiB of a small host
-  docker exec imp-host imp new "$name" --image ubuntu --memory 512m
-  docker exec imp-host imp exec "$name" -- uname -a
-  docker exec imp-host imp rm "$name"
+  docker exec imp-host impz new "$name" --image ubuntu --memory 512m
+  docker exec imp-host impz exec "$name" -- uname -a
+  docker exec imp-host impz rm "$name"
   trap - EXIT
   log "health: impd answered; created, ran and destroyed an imp"
 }
@@ -1988,7 +1988,7 @@ health() {
 # on /var/lib/imp.
 check_storage_live() {
   local backend
-  backend=$(docker exec imp-host imp info --json | jq -r '.storage.backend // empty')
+  backend=$(docker exec imp-host impz info --json | jq -r '.storage.backend // empty')
   [ "$backend" = "$storage" ] || die "impd reports storage backend '${backend:-none}', not $storage"
   if [ "$storage" = zfs ]; then
     [ "$(zpool list -H -o health "$zfs_pool")" = ONLINE ] || die "pool $zfs_pool is not ONLINE"
@@ -2025,7 +2025,7 @@ tailscale_backend() {
 
 tailscale_running() { [ "$(tailscale_backend)" = Running ]; }
 
-has_ubuntu_image() { docker exec imp-host imp image ls 2>/dev/null | grep -q '^ubuntu '; }
+has_ubuntu_image() { docker exec imp-host impz image ls 2>/dev/null | grep -q '^ubuntu '; }
 
 # wait_for WHAT SECONDS CMD...: retry CMD once a second until it succeeds.
 wait_for() {

@@ -9,7 +9,7 @@ import type {
   RefusedRequest,
   Secret,
   SecretAdded,
-} from '@imp/api';
+} from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import {
   buildConflictError,

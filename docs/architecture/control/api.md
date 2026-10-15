@@ -1,9 +1,9 @@
 # The API
 
 impd's API is one typed contract, `packages/api`, which the daemon implements and every client
-calls: the `imp` CLI, the `@zgeoff/imp-client` library on npm, the MCP server and the dashboard.
-Elysia serves the HTTP app, and oRPC serves the contract's procedures under `/rpc`. A few routes sit
-beside it, because they need a shape a procedure call does not have: two-way streams, an upload, the
+calls: the `impz` CLI, the `@impz/client` library on npm, the MCP server and the dashboard. Elysia
+serves the HTTP app, and oRPC serves the contract's procedures under `/rpc`. A few routes sit beside
+it, because they need a shape a procedure call does not have: two-way streams, an upload, the
 dashboard's files, the MCP endpoint, the login, and the routes a move's two hosts speak.
 [Auth](./auth.md) covers who may call what.
 
@@ -41,7 +41,7 @@ A file copy runs a tool of the system drive in the guest as root, with acknowled
 ways, so a large upload to a slow guest disk, or a large download to a slow client disk, grows
 nobody's memory. A tool runs as root in the guest, so it needs `manage` scope on the imp.
 
-A tunnel WebSocket carries one TCP connection of `imp proxy` or one relay of a reverse forward
+A tunnel WebSocket carries one TCP connection of `impz proxy` or one relay of a reverse forward
 ([ingress](../network/ingress.md#tunnels-and-reverse-forwards)). Neither end of a WebSocket can
 pause its reads, so each side acknowledges the bytes it delivered onward and a sender keeps a
 bounded window unacknowledged. A client that sends past the window is closed, so it cannot grow
@@ -54,7 +54,7 @@ stopping.
   library. It picks a host from its flags, the environment or the current saved host.
 - **The client library** is the oRPC client of the contract, with the WebSocket helpers, for
   browsers, Bun and Node.
-- **The MCP server** comes in two forms. `imp mcp` runs locally over stdio with the CLI's client,
+- **The MCP server** comes in two forms. `impz mcp` runs locally over stdio with the CLI's client,
   and its guard against mistakes is no security limit. impd's own `/mcp` endpoint is streamable
   HTTP, and runs each tool call through the same procedure handler in process, as the calling
   credential, so the access map and the audit log cover it as they cover the CLI. A public MCP

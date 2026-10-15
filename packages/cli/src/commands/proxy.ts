@@ -7,7 +7,7 @@ export const proxyCommand = defineCommand({
   meta: {
     name: 'proxy',
     description:
-      'Forward local ports to ports in an imp, waking it on connect (imp proxy <name> 5432 3001:3000), or with --reverse, a socket or port in the imp to this machine',
+      'Forward local ports to ports in an imp, waking it on connect (impz proxy <name> 5432 3001:3000), or with --reverse, a socket or port in the imp to this machine',
   },
   args: {
     name: nameArg,

@@ -1,4 +1,4 @@
-import { NameSchema } from '@imp/api';
+import { NameSchema } from '@impz/api';
 
 export type DomainRoute =
   | { readonly kind: 'apex' }

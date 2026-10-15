@@ -1,17 +1,17 @@
 # CPU limits and resource use
 
 Each imp can have a CPU limit and a CPU weight. impd also samples each running imp's CPU, memory and
-network every 5 s and shows the result in `imp ls`, `imp top`, the dashboard and the
+network every 5 s and shows the result in `impz ls`, `impz top`, the dashboard and the
 [telemetry](./events.md#telemetry).
 
 ## Limits and weights
 
 ```sh
-imp new box --cpu-limit 1.5 --cpu-weight 200
-imp set box --cpu-limit 0.5        # applies at once when box runs
-imp set box --cpu-limit none       # no limit
-imp set box --cpus 4               # vCPUs: only while box is stopped
-imp set box --http-port 3000       # the port box's URL reaches, from the next request
+impz new box --cpu-limit 1.5 --cpu-weight 200
+impz set box --cpu-limit 0.5        # applies at once when box runs
+impz set box --cpu-limit none       # no limit
+impz set box --cpus 4               # vCPUs: only while box is stopped
+impz set box --http-port 3000       # the port box's URL reaches, from the next request
 ```
 
 | Setting        | Default             | Range                       | Meaning                                                            |
@@ -29,20 +29,21 @@ limit never slows those steps. Memory has its own flags: `--memory` and `--max-m
 
 Each VM's cgroup also caps its memory a little over the guest's: 256 MiB more than `--memory`, or an
 eighth more above 2 GiB, with no swap. A guest never reaches it on its own; a VM that leaks host
-memory does. The kernel then kills the whole VM, and `imp ls --json` shows the stopped imp with the
+memory does. The kernel then kills the whole VM, and `impz ls --json` shows the stopped imp with the
 error `its memory limit killed firecracker`. See [cgroups](../architecture/isolation.md#cgroups).
 
 **NOTE:** impd enforces limits only when the host container runs in a private cgroup v2 namespace
 (`--cgroupns=private`, which `scripts/dev/dev.sh`, `deploy/imp-host.service` and
 `deploy/compose.yaml` pass) and `setup-cgroups.sh` can remount its cgroupfs read-write. Without
-either, impd logs `CPU limits are kept, not applied`, stores the settings, `imp info` shows
-`limits OFF`, and `imp info --json` shows `cpu.limitsEnforced: false`. Jailed VMs cannot start then.
+either, impd logs `CPU limits are kept, not applied`, stores the settings, `impz info` shows
+`limits OFF`, and `impz info --json` shows `cpu.limitsEnforced: false`. Jailed VMs cannot start
+then.
 
 ## Resource use
 
-`imp ls` has a `CPU` column: the last sample's use in percent of one core, over the limit when there
-is one (`45% / 1.5`). `imp top` refreshes a table of every imp, busiest first, as impd's events
-arrive and every 2 s; `imp top --once` prints it once, `--json` prints the imps with their
+`impz ls` has a `CPU` column: the last sample's use in percent of one core, over the limit when
+there is one (`45% / 1.5`). `impz top` refreshes a table of every imp, busiest first, as impd's
+events arrive and every 2 s; `impz top --once` prints it once, `--json` prints the imps with their
 `resources`.
 
 | Column      | Meaning                                                                        |
@@ -57,7 +58,7 @@ arrive and every 2 s; `imp top --once` prints it once, `--json` prints the imps 
 | `WAKES`     | Wakes since the imp was created, a cold boot that stood in for a wake too.     |
 | `AWAKE`     | Total time the imp ran. A crash ends the span when impd last saw the VM alive. |
 
-`THROTTLED`, `NET IN` and `NET OUT` count from `since` in `imp ls --json`: the end of the last boot
+`THROTTLED`, `NET IN` and `NET OUT` count from `since` in `impz ls --json`: the end of the last boot
 or wake, or the moment impd adopted a running VM after a restart. impd takes a baseline then,
 because the tap outlives its VM and its counters still hold earlier boots' traffic. `WAKES` and
 `AWAKE` live in the database and survive restarts.

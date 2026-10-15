@@ -4,7 +4,7 @@ import { readImpEnv } from './imp-cli';
 import { REPO_ROOT, instance } from './instance';
 import { waitFor } from './wait-for';
 
-const IMP_SCRIPT = join(REPO_ROOT, 'scripts', 'imp');
+const IMP_SCRIPT = join(REPO_ROOT, 'scripts', 'impz');
 const MessageSchema = z.looseObject({ id: z.unknown().optional() });
 const ContentSchema = z.object({ type: z.string(), text: z.string() });
 
@@ -31,7 +31,7 @@ export interface McpSession {
   readonly close: () => Promise<number>;
 }
 
-// `imp mcp ARGS...` against the dev instance, driven over stdio as an agent's
+// `impz mcp ARGS...` against the dev instance, driven over stdio as an agent's
 // MCP client drives it
 export async function startMcpSession(args: readonly string[]): Promise<McpSession> {
   const env = await readImpEnv();

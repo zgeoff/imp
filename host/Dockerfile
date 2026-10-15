@@ -165,7 +165,7 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
  && apt-get install -y --no-install-recommends squashfs-tools musl-tools bzip2 \
  && rm -rf /var/lib/apt/lists/*
 
-# busybox, static on musl, for `imp exec --agent` (host/busybox.config). musl
+# busybox, static on musl, for `impz exec --agent` (host/busybox.config). musl
 # has no kernel headers of its own, so it borrows the system's. A fixed
 # SOURCE_DATE_EPOCH and no config timestamp keep the build date out of the
 # binary. Before the agent's sources, so a change to them never rebuilds it;
@@ -227,7 +227,7 @@ FROM scratch AS system-files
 COPY --from=kernel /k/out/vmlinux /
 COPY --from=agent /out/imp-system.squashfs /
 
-# --- compile: impd and the imp CLI as standalone binaries ---
+# --- compile: impd and the impz CLI as standalone binaries ---
 FROM bun AS compile
 WORKDIR /src
 COPY package.json bun.lock bunfig.toml ./
@@ -235,8 +235,8 @@ COPY package.json bun.lock bunfig.toml ./
 COPY patches/ patches/
 COPY packages/ packages/
 # --ignore-scripts: the root prepare script installs git hooks. No
-# --production: the CLI builds @zgeoff/imp-client from source, and the client
-# bundles @imp/api for npm, so it lists it only as a devDependency. The
+# --production: the CLI builds @impz/client from source, and the client
+# bundles @impz/api for npm, so it lists it only as a devDependency. The
 # binaries carry only what they import, so dev dependencies never ship.
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile --ignore-scripts
@@ -247,7 +247,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 # try/catch, and --ignore-scripts leaves its .node file unbuilt.
 RUN bun build --compile --external cpu-features packages/daemon/src/main.ts --outfile /out/impd \
  && bun build --compile packages/daemon/src/docker-proxy/main.ts --outfile /out/imp-docker-proxy \
- && bun build --compile packages/cli/src/main.ts --outfile /out/imp
+ && bun build --compile packages/cli/src/main.ts --outfile /out/impz
 
 # --- dashboard: the web dashboard's static files. Its own stage: the build
 # needs the dev dependencies (vite) that the compile stage leaves out. ---
@@ -268,12 +268,12 @@ FROM runtime AS release
 ARG IMP_VERSION=unknown
 LABEL org.opencontainers.image.title="imp-host" \
       org.opencontainers.image.description="imp host: impd, Firecracker and tailscaled" \
-      org.opencontainers.image.source="https://github.com/zgeoff/imp" \
+      org.opencontainers.image.source="https://github.com/zgeoff/impz" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${IMP_VERSION}"
 
 COPY --from=system-files / /usr/local/share/imp/
-COPY --from=compile /out/impd /out/imp-docker-proxy /out/imp /usr/local/bin/
+COPY --from=compile /out/impd /out/imp-docker-proxy /out/impz /usr/local/bin/
 COPY --from=dashboard /src/packages/dashboard/dist /usr/local/share/imp/dashboard
 # deploy/bootstrap.sh and deploy/upgrade.sh install the units and seccomp
 # profile of the image they run; a host on an older release gets upgrade.sh,
@@ -282,7 +282,7 @@ COPY deploy/imp-host.service deploy/imp-docker-proxy.service deploy/imp-host.sec
      deploy/upgrade.sh /usr/local/share/imp/deploy/
 COPY deploy/lib/host-env.sh /usr/local/share/imp/deploy/lib/
 # the CLI in the container finds impd's token with no IMP_TOKEN
-RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/token
+RUN mkdir -p /root/.config/impz && ln -s /var/lib/imp/token /root/.config/impz/token
 
 # IMP_STORAGE_LOOP=0: /var/lib/imp must be a host XFS mount. A loop file in
 # the container layer would vanish, with every imp, when the container goes.

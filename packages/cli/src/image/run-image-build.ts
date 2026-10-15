@@ -1,13 +1,13 @@
 import { resolve } from 'node:path';
-import type { Image } from '@imp/api';
+import type { Image } from '@impz/api';
 import {
   MissingDockerfileError,
   countFileBytes,
   countTarBytes,
   listContextEntries,
   writeLocalEntries,
-} from '@imp/local-tar';
-import type { LocalEntry } from '@imp/local-tar';
+} from '@impz/local-tar';
+import type { LocalEntry } from '@impz/local-tar';
 import { createCopyProgress } from '../cp/copy-progress';
 import type { CopyProgress } from '../cp/copy-progress';
 import type { ImpClient } from '../create-imp-client';
@@ -57,10 +57,10 @@ export function createContextStream(
 }
 
 function writeWarning(text: string): void {
-  process.stderr.write(`imp image build: ${text}\n`);
+  process.stderr.write(`impz image build: ${text}\n`);
 }
 
-// `imp image build <dir>`: packs the directory here, honoring its
+// `impz image build <dir>`: packs the directory here, honoring its
 // .dockerignore, and uploads it for impd to build
 export async function runImageBuild(
   client: ImpClient,
@@ -84,8 +84,8 @@ export async function runImageBuild(
     },
   };
 
-  const progress = createCopyProgress(output, Date.now, 'imp image build');
-  const status = createBuildStatus(output, 'imp image build', quiet);
+  const progress = createCopyProgress(output, Date.now, 'impz image build');
+  const status = createBuildStatus(output, 'impz image build', quiet);
 
   const size = await countTarBytes(entries);
 

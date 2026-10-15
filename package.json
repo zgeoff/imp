@@ -1,5 +1,5 @@
 {
-  "name": "@zgeoff/imp",
+  "name": "impz",
   "version": "1.6.0",
   "private": true,
   "description": "Persistent Linux microVMs that sleep when idle and wake on request",
@@ -106,7 +106,7 @@
     "@bufbuild/protoc-gen-es": "2.16.0",
     "@commitlint/cli": "catalog:",
     "@faker-js/faker": "catalog:",
-    "@imp/test-utils": "workspace:*",
+    "@impz/test-utils": "workspace:*",
     "@stylistic/eslint-plugin": "catalog:",
     "@tsconfig/strictest": "catalog:",
     "@types/bun": "catalog:",

@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { BrokerRuleSchema, GrantFilterSchema, OAuthConfigSchema, SecretKindSchema } from '@imp/api';
+import {
+  BrokerRuleSchema,
+  GrantFilterSchema,
+  OAuthConfigSchema,
+  SecretKindSchema,
+} from '@impz/api';
 import type {
   BrokerRule,
   EgressPolicy,
@@ -8,7 +13,7 @@ import type {
   GrantNotCopied,
   OAuthConfig,
   SecretKind,
-} from '@imp/api';
+} from '@impz/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { parseStoredPolicy } from './egress';

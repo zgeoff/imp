@@ -1,6 +1,6 @@
-import { formatBytes } from '@imp/shared';
+import type { Checkpoint } from '@impz/client';
+import { formatBytes } from '@impz/shared';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { Checkpoint } from '@zgeoff/imp-client';
 import { useState } from 'react';
 import { formatRelativeTime } from '../lib/format';
 import { useImpd } from '../lib/impd';

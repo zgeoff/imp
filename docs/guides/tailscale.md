@@ -61,9 +61,10 @@ key for smoke tests.
 as an offline orphan until Tailscale deletes it. The next node with that hostname gets a `-1`
 suffix.
 
-impd reports the name the node got (the first label of its MagicDNS name) in `imp info` and uses it
-in `imp url`, so the URLs follow a `-1` suffix. The orphan keeps the plain name: `imp` then resolves
-to a dead node. Find the node by its IP (`imp info`), not by `HostName`, which both nodes share.
+impd reports the name the node got (the first label of its MagicDNS name) in `impz info` and uses it
+in `impz url`, so the URLs follow a `-1` suffix. The orphan keeps the plain name: `imp` then
+resolves to a dead node. Find the node by its IP (`impz info`), not by `HostName`, which both nodes
+share.
 
 ## Tailnet identity
 
@@ -172,14 +173,14 @@ Keep it in a file only root can read, and give it no other scope.
    JSON
    ```
 
-   impd reads it each time it needs a token, so the secret is never in its env, in `imp info` or in
+   impd reads it each time it needs a token, so the secret is never in its env, in `impz info` or in
    a log line. A file that group or others can read is refused. `IMP_TAILNET_OAUTH_FILE` moves it.
 
 2. Set `IMP_TAILNET_NAMES=1` in the host's env file and restart the host container.
    `IMP_TAILNET_NAME_PREFIX` puts a prefix on every name, for example `imp-` for `imp-box`.
 
-3. `imp url <name>` prints the name once it works, after the https URL of a domain and before the
-   others. `imp info` counts the live names and lists each one that failed, with the reason.
+3. `impz url <name>` prints the name once it works, after the https URL of a domain and before the
+   others. `impz info` counts the live names and lists each one that failed, with the reason.
 
 ### What impd does
 

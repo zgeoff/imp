@@ -59,7 +59,7 @@ export function resolveImageName(image: FixtureImage): string {
   return name;
 }
 
-// builds, through `imp image build`, each image impd does not have yet
+// builds, through `impz image build`, each image impd does not have yet
 export async function createMissingImages(images: readonly FixtureImage[]): Promise<void> {
   const existing = await listImageNames();
 

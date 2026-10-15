@@ -51,7 +51,7 @@ export async function removeBrokerUpstreams(): Promise<void> {
   await rm(readUpstreamsPath(), { force: true });
 }
 
-// the broker's requests for the imp, as `imp audit` lists them
+// the broker's requests for the imp, as `impz audit` lists them
 export async function readBrokerAudit(name: string) {
   const stdout = await runImp('audit', name, '--json');
 

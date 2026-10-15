@@ -1,5 +1,5 @@
-import { IMAGE_BUILD_PATH, IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
-import type { Image, ImageBuildProgress } from '@imp/api';
+import { IMAGE_BUILD_PATH, IMAGE_BUILD_STREAM_TYPE } from '@impz/api';
+import type { Image, ImageBuildProgress } from '@impz/api';
 import { readBuildAnswer } from './read-build-answer';
 import { resolveImpdUrl } from './resolve-impd-url';
 

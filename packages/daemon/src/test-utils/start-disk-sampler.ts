@@ -1,7 +1,7 @@
 import { onTestFinished } from 'bun:test';
 import { existsSync, rmSync, statfsSync } from 'node:fs';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 
 // what one run took of the filesystem, over its use before the run
 export interface DiskTrial {

@@ -5,18 +5,18 @@ config, a warm build cache), make a template of it, and create imps from the tem
 starts with a copy of that disk.
 
 ```sh
-imp new --name golden
-imp exec golden -- apt-get install -y build-essential
-imp template create golden builder      # the image `builder`, from golden's disk
-imp new --name job1 --image builder
-imp new --name job2 --image builder
+impz new --name golden
+impz exec golden -- apt-get install -y build-essential
+impz template create golden builder      # the image `builder`, from golden's disk
+impz new --name job1 --image builder
+impz new --name job2 --image builder
 ```
 
-`imp template` is a shortcut for the images API with an imp as the source. It has no routes of its
-own: `imp template create <imp> <name>` calls `images.add` with `{ imp, name }`, `imp template ls`
-lists the images whose `source` is `imp`, and `imp template rm` calls `images.delete`. A template is
-an image in every other way: `imp image ls` lists it, `imp new --image` takes it, and the RAM, disk
-and egress settings of a new imp come from the create call, not from the source imp.
+`impz template` is a shortcut for the images API with an imp as the source. It has no routes of its
+own: `impz template create <imp> <name>` calls `images.add` with `{ imp, name }`, `impz template ls`
+lists the images whose `source` is `imp`, and `impz template rm` calls `images.delete`. A template
+is an image in every other way: `impz image ls` lists it, `impz new --image` takes it, and the RAM,
+disk and egress settings of a new imp come from the create call, not from the source imp.
 
 ## Making a template
 
@@ -33,16 +33,16 @@ The copy is a reflink clone on XFS and a ZFS clone on ZFS, so a template costs n
 source or the template's imps write to their disks. The source imp keeps running, and later changes
 to it do not change the template.
 
-`imp template create` with a name that is a template already makes the template again from the imp's
-disk now. The name then points at the new copy. Imps made before keep their own disks. The old copy
-is removed once no image names it. A template and a docker image never share a name: impd refuses
-`imp template create` over a docker image and `imp image add` over a template.
+`impz template create` with a name that is a template already makes the template again from the
+imp's disk now. The name then points at the new copy. Imps made before keep their own disks. The old
+copy is removed once no image names it. A template and a docker image never share a name: impd
+refuses `impz template create` over a docker image and `impz image add` over a template.
 
-`imp template rm` refuses a template that an imp still uses, as `imp image rm` does for any image.
+`impz template rm` refuses a template that an imp still uses, as `impz image rm` does for any image.
 
-`imp template create` reads `images.addStream` from an impd that has it, and shows how long the copy
-takes ([long calls](./images.md#long-calls)). A copy runs to its end when the client goes, and the
-template is made.
+`impz template create` reads `images.addStream` from an impd that has it, and shows how long the
+copy takes ([long calls](./images.md#long-calls)). A copy runs to its end when the client goes, and
+the template is made.
 
 ## Disk size
 

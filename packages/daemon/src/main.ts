@@ -200,7 +200,7 @@ async function main(): Promise<void> {
     // what a crash or a failed removal left; start sweeps the same way
     startTicker('gc', 3_600_000, impd.gc.runScheduled, printLog),
 
-    // FIEMAP over every file on XFS: often enough for `imp ls`
+    // FIEMAP over every file on XFS: often enough for `impz ls`
     startTicker('disk-usage', 300_000, impd.diskUsage.runPass, printLog),
     ...(impd.backups === null
       ? []
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
   // the first usage numbers soon after start, not a ticker interval later
   impd.diskUsage.requestRefresh();
 
-  // ready either way: a failed seed leaves `imp image add` to the user
+  // ready either way: a failed seed leaves `impz image add` to the user
   const setupDefaultImage = async (): Promise<void> => {
     try {
       await impd.images.seedDefaultImage();
@@ -229,7 +229,7 @@ async function main(): Promise<void> {
 
       if (!existing.some((image) => image.name === config.defaultImage)) {
         printLog(
-          `impd: warning: no image named ${config.defaultImage} (IMP_DEFAULT_IMAGE); imp new uses ubuntu until \`imp image add <ref> --name ${config.defaultImage}\` adds it`,
+          `impd: warning: no image named ${config.defaultImage} (IMP_DEFAULT_IMAGE); impz new uses ubuntu until \`impz image add <ref> --name ${config.defaultImage}\` adds it`,
         );
       }
     } catch (error) {

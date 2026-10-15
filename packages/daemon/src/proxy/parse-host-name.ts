@@ -1,4 +1,4 @@
-import { NameSchema } from '@imp/api';
+import { NameSchema } from '@impz/api';
 
 // The imp a Host header names (docs/architecture/networking.md#the-wake-proxy):
 // the first label of `<name>.imp.localhost[:port]` or of any `<name>.<domain>`.

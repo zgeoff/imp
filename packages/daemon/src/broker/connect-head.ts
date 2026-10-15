@@ -1,4 +1,4 @@
-import type { AuditRefusal } from '@imp/api';
+import type { AuditRefusal } from '@impz/api';
 
 // The head of a request to the broker's front port. Only CONNECT is served:
 // the guest's tools reach it through HTTPS_PROXY.

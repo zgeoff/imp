@@ -2,7 +2,7 @@
   "extends": "../tsconfig.base.json",
   // The published types of packages/client (its tsdown.config.ts). It sits
   // here because the dts plugin uses this file's directory as rootDir, which
-  // must hold @imp/api and @imp/shared too: those packages are bundled, so
+  // must hold @impz/api and @impz/shared too: those packages are bundled, so
   // their declarations are emitted with the client's. No Bun globals, and the
   // DOM a browser sees.
   "compilerOptions": {

@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { SessionOutput } from '@imp/api';
+import type { SessionOutput } from '@impz/api';
 
 type OffsetsOutput = Extract<SessionOutput, { continuity: 'offsets' }>;
 

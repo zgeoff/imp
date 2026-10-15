@@ -1,6 +1,6 @@
-import type { BrokerRule, SecretKind } from '@imp/api';
+import type { BrokerRule, SecretKind } from '@impz/api';
 
-// The presets behind `imp secret add --kind`: each host's header, and the
+// The presets behind `impz secret add --kind`: each host's header, and the
 // variables a tool checks before it sends anything (gh with none stops at
 // `gh auth login`). They hold a placeholder; the broker sets the real value.
 

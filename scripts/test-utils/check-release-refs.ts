@@ -3,7 +3,7 @@ const RELEASE_REF =
   /ghcr\.io\/zgeoff\/imp-host:(?<tag>[\w.\-]+)|zgeoff\/imp\/v(?<source>[\w.\-]+)\//gv;
 
 // a deploy file from main names main's code, not a release's
-const MAIN_URL = 'raw.githubusercontent.com/zgeoff/imp/main/deploy/';
+const MAIN_URL = 'raw.githubusercontent.com/zgeoff/impz/main/deploy/';
 
 // release-please's VERSION_REGEX, less its pre-release and build parts
 const VERSION = /\d+\.\d+\.\d+/v;

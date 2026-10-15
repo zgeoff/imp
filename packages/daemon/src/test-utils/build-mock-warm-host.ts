@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker';
-import type { WarmHost } from '@imp/api';
+import type { WarmHost } from '@impz/api';
 
 // A host's warm facts (readWarmHost): XFS on the default /16, whose slot
 // count follows the subnet. Versions, the CPU, paths and ports are arbitrary.

@@ -1,4 +1,4 @@
-import { CheckpointCreateInputSchema } from '@imp/api';
+import { CheckpointCreateInputSchema } from '@impz/api';
 import * as z from 'zod';
 import { defineTool } from './define-tool';
 import type { Tool } from './define-tool';

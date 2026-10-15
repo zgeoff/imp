@@ -1,4 +1,4 @@
-import { mergeBytes } from '@imp/shared';
+import { mergeBytes } from '@impz/shared';
 
 // One output stream, held to `maxBytes`: the first `headBytes` and the last
 // bytes up to the cap. The middle is dropped, where the least is lost: a

@@ -1,4 +1,4 @@
-import type { Session } from '@imp/api';
+import type { Session } from '@impz/api';
 import { isAgentSessionState } from '../agent-client/is-agent-session-state';
 import { findSignalName } from '../exec/signal-names';
 import type { SeenSession } from './session-cache';

@@ -1,4 +1,4 @@
-import { FILES_GUEST_DIR } from '@imp/api';
+import { FILES_GUEST_DIR } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { sendFilesRemove, sendFilesWrite } from '../agent-client/file-requests';
 import { isAgentError } from '../agent-client/is-agent-error';

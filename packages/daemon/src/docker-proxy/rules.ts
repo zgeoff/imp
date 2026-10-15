@@ -11,7 +11,7 @@ function buildFailure(reason: string): Check {
   return { isOk: false, reason };
 }
 
-// a build tag: imp/<name>:latest, with NameSchema's name rule (@imp/api)
+// a build tag: imp/<name>:latest, with NameSchema's name rule (@impz/api)
 const BUILD_TAG = /^imp\/[a-z0-9][a-z0-9_.\-]{0,62}:latest$/v;
 
 // the one build arg impd sends, at the one value it sends

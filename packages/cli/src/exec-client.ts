@@ -1,13 +1,8 @@
 import { writeSync } from 'node:fs';
 import { constants } from 'node:os';
 import type { Readable } from 'node:stream';
-import { openExecSession } from '@zgeoff/imp-client';
-import type {
-  ExecOutcome,
-  ExecRequirement,
-  ExecSession,
-  ExecSessionOptions,
-} from '@zgeoff/imp-client';
+import { openExecSession } from '@impz/client';
+import type { ExecOutcome, ExecRequirement, ExecSession, ExecSessionOptions } from '@impz/client';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
@@ -26,12 +21,12 @@ export interface ExecOptions {
   // a session that outlives the CLI: closing it detaches (needs a tty)
   readonly session?: SessionOptions;
 
-  // runs in the imp's agent, outside its container: `imp exec --agent`.
+  // runs in the imp's agent, outside its container: `impz exec --agent`.
   // The SDK passes the start through as it is, and leaves the field out of
   // its types on purpose.
   readonly outer?: boolean;
 
-  // what impd must ensure before it starts the command: `imp exec --require`
+  // what impd must ensure before it starts the command: `impz exec --require`
   readonly require?: readonly ExecRequirement[];
 }
 
@@ -84,7 +79,7 @@ const EXEC_FAILED_CODE = 127;
 
 // the imp answers, but the container its commands run in is down
 const INNER_DOWN_HINT =
-  ' (the container in the imp starts again on its own; imp stop and imp start, or imp restore, bring it back)';
+  ' (the container in the imp starts again on its own; impz stop and impz start, or impz restore, bring it back)';
 
 const BROKEN_PIPE_CODE = 141;
 const TAKEN_OVER_CODE = 254;
@@ -135,7 +130,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
     config = loadCliConfig(io.env, options.host);
   } catch (error) {
     // a usage error, or a config.json that cannot be read (EACCES, EISDIR)
-    printError(`imp: ${error instanceof Error ? error.message : String(error)}`);
+    printError(`impz: ${error instanceof Error ? error.message : String(error)}`);
 
     return Promise.resolve(IMP_FAILED_CODE);
   }
@@ -167,7 +162,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
   };
 
   const writeNotice = (text: string): void => {
-    io.writeOutput(2, encoder.encode(`${isRaw ? '\r\n' : ''}imp: ${text}\r\n`));
+    io.writeOutput(2, encoder.encode(`${isRaw ? '\r\n' : ''}impz: ${text}\r\n`));
   };
 
   const openSession = (attach: boolean): ExecSession => {
@@ -272,7 +267,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
   const handleDetachKey = (): void => {
     stopSession(0);
-    printError(`imp: detached from ${formatSession(options.name, session?.name ?? '')}`);
+    printError(`impz: detached from ${formatSession(options.name, session?.name ?? '')}`);
   };
 
   const sendStdin = (chunk: Uint8Array): void => {
@@ -455,7 +450,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
         stopSession(result.code);
 
         if (result.message !== null) {
-          printError(`imp: ${result.message}`);
+          printError(`impz: ${result.message}`);
         }
 
         return;
@@ -487,7 +482,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
       if (elsewhere) {
         stopSession(TAKEN_OVER_CODE);
-        printError(`imp: another client attached to ${formatSession(options.name, sessionName)}`);
+        printError(`impz: another client attached to ${formatSession(options.name, sessionName)}`);
 
         return;
       }
@@ -518,7 +513,7 @@ function createAttachedCheck(
 }
 
 function formatSession(imp: string, session: string): string {
-  return `session ${session} (imp attach ${imp} ${session})`;
+  return `session ${session} (impz attach ${imp} ${session})`;
 }
 
 interface OutcomeResult {

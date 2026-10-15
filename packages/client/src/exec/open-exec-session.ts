@@ -6,15 +6,15 @@ import {
   ExecServerMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
-} from '@imp/api';
+} from '@impz/api';
 import type {
   DetachReason,
   ExecAttachMessageSchema,
   ExecClientMessage,
   ExecStartMessageSchema,
   SessionOutput,
-} from '@imp/api';
-import type { ReadonlyFields } from '@imp/shared';
+} from '@impz/api';
+import type { ReadonlyFields } from '@impz/shared';
 import type * as z from 'zod';
 import { resolveImpdUrl } from '../resolve-impd-url';
 import { checkExecRequire } from './check-exec-require';

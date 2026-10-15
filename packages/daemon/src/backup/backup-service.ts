@@ -8,8 +8,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { EgressPolicySchema } from '@imp/api';
-import type { BackupRestore, BackupRun, BackupStatus, EgressPolicy, Imp, ImpState } from '@imp/api';
+import { EgressPolicySchema } from '@impz/api';
+import type {
+  BackupRestore,
+  BackupRun,
+  BackupStatus,
+  EgressPolicy,
+  Imp,
+  ImpState,
+} from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
@@ -119,7 +126,7 @@ export interface BackupServiceDeps {
   readonly db: ImpDatabase;
   readonly imps: Pick<Imps, 'createImp' | 'destroyImp' | 'lockImp'>;
 
-  // the broker's grant, checked as `imp grant` checks one
+  // the broker's grant, checked as `impz grant` checks one
   readonly grants: Pick<Broker, 'addGrant'>;
 
   // the named tokens a restore of all brings back from the database copy

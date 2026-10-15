@@ -8,23 +8,23 @@ import type {
   SshKey,
   SystemInfo,
   Token,
-} from '@imp/api';
-import { EVENT_VERSION, SYSTEM_FEATURES, impContract, isImpAllowed } from '@imp/api';
+} from '@impz/api';
+import { EVENT_VERSION, SYSTEM_FEATURES, impContract, isImpAllowed } from '@impz/api';
 import {
   buildBuilderError,
   buildConflictError,
   buildForbiddenError,
   buildInvalidStateError,
   buildNotFoundError,
-} from '@imp/daemon/src/api-errors';
-import { checkAccess, findAccess } from '@imp/daemon/src/auth/access-policy';
-import { readChangedImps } from '@imp/daemon/src/auth/builder-calls';
-import type { Caller } from '@imp/daemon/src/auth/caller';
-import { toLeaseSummary } from '@imp/daemon/src/auth/caller-view';
-import { deriveImageName } from '@imp/daemon/src/images/image-naming';
-import { resolveCpuSettings } from '@imp/daemon/src/imps/cpu-limit';
-import { requireTransition } from '@imp/daemon/src/imps/imp-transitions';
-import { formatKeyFingerprint, parsePublicKey } from '@imp/daemon/src/ssh/authorized-keys';
+} from '@impz/daemon/src/api-errors';
+import { checkAccess, findAccess } from '@impz/daemon/src/auth/access-policy';
+import { readChangedImps } from '@impz/daemon/src/auth/builder-calls';
+import type { Caller } from '@impz/daemon/src/auth/caller';
+import { toLeaseSummary } from '@impz/daemon/src/auth/caller-view';
+import { deriveImageName } from '@impz/daemon/src/images/image-naming';
+import { resolveCpuSettings } from '@impz/daemon/src/imps/cpu-limit';
+import { requireTransition } from '@impz/daemon/src/imps/imp-transitions';
+import { formatKeyFingerprint, parsePublicKey } from '@impz/daemon/src/ssh/authorized-keys';
 import { ORPCError, implement } from '@orpc/server';
 import { checkpointCollection } from './db/checkpoint-collection';
 import { hostCollection } from './db/host-collection';

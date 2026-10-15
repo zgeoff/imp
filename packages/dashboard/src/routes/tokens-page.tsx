@@ -1,6 +1,6 @@
-import { ScopeSchema } from '@imp/api';
+import { ScopeSchema } from '@impz/api';
+import type { Scope, SshKey, Token } from '@impz/client';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { Scope, SshKey, Token } from '@zgeoff/imp-client';
 import { useState } from 'react';
 import { Button } from '../components/button';
 import { ConfirmDialog } from '../components/confirm-dialog';
@@ -193,7 +193,7 @@ function readImpPatterns(form: FormData): string[] {
     .filter((pattern) => pattern !== '');
 }
 
-// each key by its comment and fingerprint; `imp token key add` binds them
+// each key by its comment and fingerprint; `impz token key add` binds them
 function formatSshKeys(keys: readonly SshKey[]): string {
   if (keys.length === 0) {
     return 'none';

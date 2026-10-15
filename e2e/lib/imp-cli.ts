@@ -5,7 +5,7 @@ import type { ImpClient } from '../../packages/client/src/index';
 import type { CommandResult, DevInstance } from './instance';
 import { REPO_ROOT, instance, readToken, runCommand } from './instance';
 
-const IMP_SCRIPT = join(REPO_ROOT, 'scripts', 'imp');
+const IMP_SCRIPT = join(REPO_ROOT, 'scripts', 'impz');
 
 // The CLI's JSON output, with only the fields the suites read. Dates arrive
 // as ISO strings.
@@ -152,7 +152,7 @@ export async function tryImp(
 }
 
 // Starts the imp CLI for a command that runs until stopped, such as
-// `imp proxy` or `imp events`, with its output piped.
+// `impz proxy` or `impz events`, with its output piped.
 export async function startImp(args: readonly string[]) {
   const env = await readImpEnv();
 
@@ -184,7 +184,7 @@ export async function runImpWith(
   return result.stdout;
 }
 
-// `imp exec NAME -- ARGV...`, without the final newline
+// `impz exec NAME -- ARGV...`, without the final newline
 export async function runInImp(name: string, ...argv: readonly string[]): Promise<string> {
   const stdout = await runImp('exec', name, '--', ...argv);
 
@@ -204,7 +204,7 @@ export interface ImpUrls {
   readonly tailnet: string | null;
 }
 
-// `imp url NAME`, read by the shape of each line, not its place: the https
+// `impz url NAME`, read by the shape of each line, not its place: the https
 // suite's settings stay for the whole run, so its line may come first
 export async function readImpUrls(name: string): Promise<ImpUrls> {
   const stdout = await runImp('url', name);
@@ -213,7 +213,7 @@ export async function readImpUrls(name: string): Promise<ImpUrls> {
   const local = lines.find((line) => /^http:\/\/\S+\.imp\.localhost:\d+$/v.test(line));
 
   if (local === undefined) {
-    throw new Error(`imp url ${name} printed no local URL: ${stdout}`);
+    throw new Error(`impz url ${name} printed no local URL: ${stdout}`);
   }
 
   const service = lines.find((line) => /^https:\/\/[\w\-]+\.[\w\-]+\.ts\.net$/v.test(line)) ?? null;
@@ -242,7 +242,7 @@ export async function requireImp(name: string, target: DevInstance = instance): 
   const row = await findImp(name, target);
 
   if (row === undefined) {
-    throw new Error(`${name} is not in imp ls on ${target.container}`);
+    throw new Error(`${name} is not in impz ls on ${target.container}`);
   }
 
   return row;

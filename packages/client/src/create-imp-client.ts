@@ -1,4 +1,4 @@
-import type { Image, Imp, ImpContract } from '@imp/api';
+import type { Image, Imp, ImpContract } from '@impz/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';

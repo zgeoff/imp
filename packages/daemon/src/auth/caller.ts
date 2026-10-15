@@ -1,5 +1,5 @@
-import { hasScope, isImpAllowed } from '@imp/api';
-import type { ApiActor, Identity, Scope } from '@imp/api';
+import { hasScope, isImpAllowed } from '@impz/api';
+import type { ApiActor, Identity, Scope } from '@impz/api';
 import type { GrantableSecret } from '../db/tokens';
 
 // Who a request runs as (docs/guides/tokens.md): a token, the dashboard

@@ -1,4 +1,4 @@
-import type { ImpEvent } from '@imp/api';
+import type { ImpEvent } from '@impz/api';
 
 // Every lifecycle event, to whoever listens: the event stream's subscribers,
 // the proxy and broker resync, and the metrics. The database publishes its

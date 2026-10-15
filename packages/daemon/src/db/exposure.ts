@@ -1,5 +1,5 @@
-import { PublicAuthSchema } from '@imp/api';
-import type { ImpState } from '@imp/api';
+import { PublicAuthSchema } from '@impz/api';
+import type { ImpState } from '@impz/api';
 import type { StoredPublicAuth } from './imps';
 import type { ImpDatabase } from './open-database';
 

@@ -2,8 +2,8 @@ import type {
   AgentExecRequest,
   ExecEvent,
   ExecStream,
-} from '@imp/daemon/src/agent-client/exec-stream';
-import { TEST_TOKEN, buildTestApp, createImpTest } from '@imp/daemon/src/imps/test-imps';
+} from '@impz/daemon/src/agent-client/exec-stream';
+import { TEST_TOKEN, buildTestApp, createImpTest } from '@impz/daemon/src/imps/test-imps';
 import type { Server } from 'bun';
 
 // impd's own app with a fake agent and one imp, `smoke`, for smoke.ts.

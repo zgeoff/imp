@@ -12,7 +12,7 @@ const SessionRowSchema = z.object({
 
 export type SessionRow = z.infer<typeof SessionRowSchema>;
 
-// `imp sessions <imp> --json`, with the fields the suites read
+// `impz sessions <imp> --json`, with the fields the suites read
 export function parseSessions(stdout: string): SessionRow[] {
   return z.array(SessionRowSchema).parse(JSON.parse(stdout));
 }

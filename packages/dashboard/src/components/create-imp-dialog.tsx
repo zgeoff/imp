@@ -12,7 +12,7 @@ interface CreateImpDialogProps {
   readonly onOpenChange: (open: boolean) => void;
 }
 
-// Blank fields take impd's defaults (IMP_DEFAULT_IMAGE, …), as `imp new` does.
+// Blank fields take impd's defaults (IMP_DEFAULT_IMAGE, …), as `impz new` does.
 export function CreateImpDialog(props: CreateImpDialogProps) {
   const impd = useImpd();
   const refresh = useRefresh();

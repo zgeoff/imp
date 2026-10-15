@@ -5,8 +5,8 @@ import {
   TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_WINDOW_BYTES,
   TunnelClientMessageSchema,
-} from '@imp/api';
-import type { TunnelClientMessage, TunnelServerMessage } from '@imp/api';
+} from '@impz/api';
+import type { TunnelClientMessage, TunnelServerMessage } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
@@ -84,7 +84,7 @@ function buildErrorMessage(error: unknown): TunnelServerMessage {
   return { type: 'error', message: readErrorMessage(error) };
 }
 
-// One `imp proxy` connection: `open` dials 127.0.0.1:<port> in the imp through
+// One `impz proxy` connection: `open` dials 127.0.0.1:<port> in the imp through
 // the agent, so a loopback-only server works; bytes then flow both ways under
 // a window each way (packages/api tunnel-protocol).
 export function createTunnelSession(

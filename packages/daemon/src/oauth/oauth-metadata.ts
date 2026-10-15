@@ -1,4 +1,4 @@
-import { ScopeSchema } from '@imp/api';
+import { ScopeSchema } from '@impz/api';
 
 // The public route's discovery documents: protected resource metadata
 // (RFC 9728) for `<origin>/mcp`, and authorization server metadata (RFC

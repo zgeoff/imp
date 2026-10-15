@@ -1,5 +1,5 @@
 {
-  description = "imp: Firecracker microVMs on your tailnet";
+  description = "impz: Firecracker microVMs on your tailnet";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 

@@ -1,4 +1,4 @@
-import type { WarmHost } from '@imp/api';
+import type { WarmHost } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { Broker } from '../broker/broker-service';
 import type { Config } from '../config';

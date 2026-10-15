@@ -1,4 +1,4 @@
-import type { ImpState } from '@imp/api';
+import type { ImpState } from '@impz/api';
 
 // The imp's states as a reverse forward's `watchImp` reads them, added by
 // the test to one queue; a watch ends when its signal aborts or the test ends

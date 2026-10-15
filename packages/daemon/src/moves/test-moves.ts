@@ -1,8 +1,8 @@
 import { onTestFinished } from 'bun:test';
 import { writeFileSync } from 'node:fs';
-import type { MoveStatus } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @imp/daemon/testing
-import { waitFor } from '@imp/test-utils/wait-for'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @imp/daemon/testing
+import type { MoveStatus } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @impz/daemon/testing
+import { waitFor } from '@impz/test-utils/wait-for'; // oxlint-disable-line no-restricted-imports -- a test harness outside test-utils/; GEO-363 moves it to @impz/daemon/testing
 import { createImage } from '../db/images';
 import { buildTestApp, createImpTest } from '../imps/test-imps';
 import type { ImpTest, ImpTestOptions } from '../imps/test-imps';
@@ -137,7 +137,7 @@ export async function createMoveHosts(
       { timeoutMs: options.moveTimeoutMs ?? 5000 },
     );
 
-  // a whole move, as `imp move` runs it (packages/cli/src/commands/move.ts):
+  // a whole move, as `impz move` runs it (packages/cli/src/commands/move.ts):
   // ZFS streams to a ZFS target, and the memory too when the facts match;
   // a stop forces, as --stop does
   const runMove = async (name: string, stop = false): Promise<MoveStatus> => {

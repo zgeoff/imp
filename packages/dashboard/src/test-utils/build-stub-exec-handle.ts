@@ -1,4 +1,4 @@
-import type { ExecExit, ExecHandle } from '@zgeoff/imp-client';
+import type { ExecExit, ExecHandle } from '@impz/client';
 
 interface StubExecHandleOptions {
   // how the exec ends: its exit, or a rejection for a dropped connection

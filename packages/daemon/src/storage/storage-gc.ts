@@ -1,4 +1,4 @@
-import type { DroppedStorage, OrphanStorage, StorageGc } from '@imp/api';
+import type { DroppedStorage, OrphanStorage, StorageGc } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { SecretFiles } from '../broker/secret-files';
 import type { ImpDatabase } from '../db/open-database';
@@ -8,7 +8,7 @@ import { readLiveStorage } from './read-live-storage';
 import type { StorageBackend } from './storage-backend';
 import type { StorageGate } from './storage-gate';
 
-// `imp gc` waits this long for the operations in flight; the hourly pass
+// `impz gc` waits this long for the operations in flight; the hourly pass
 // waits longer, then skips the hour
 const MANUAL_WAIT_MS = 30_000;
 const SCHEDULED_WAIT_MS = 600_000;
@@ -22,7 +22,7 @@ interface StorageGcDeps {
   // the secret values the broker kept aside (docs/guides/connectors.md#value-files)
   readonly secretFiles?: Pick<SecretFiles, 'listKept' | 'removeKept'>;
 
-  // how long `imp gc` and the hourly pass wait for the gate; a test passes 0
+  // how long `impz gc` and the hourly pass wait for the gate; a test passes 0
   readonly manualWaitMs?: number;
   readonly scheduledWaitMs?: number;
 }
@@ -47,7 +47,7 @@ export interface StorageGcService {
 
 // The GC: the same sweep as start, while nothing that could make storage
 // without its row yet is in flight (docs/architecture/storage.md#cleanup).
-// Only `imp gc --orphans` takes orphans.
+// Only `impz gc --orphans` takes orphans.
 export function createStorageGc(deps: StorageGcDeps): StorageGcService {
   const hourly = { lastKept: null as string | null };
 

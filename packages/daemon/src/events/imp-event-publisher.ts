@@ -1,5 +1,5 @@
-import { EVENT_VERSION } from '@imp/api';
-import type { Imp, ImpEvent } from '@imp/api';
+import { EVENT_VERSION } from '@impz/api';
+import type { Imp, ImpEvent } from '@impz/api';
 import { toApiCheckpoint } from '../db/checkpoints';
 import type { ImpWrite } from '../db/imp-write-feed';
 import { findImpById } from '../db/imps';

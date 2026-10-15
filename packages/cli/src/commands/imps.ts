@@ -1,6 +1,6 @@
-import type { ExposeResult, ForkResult, Imp } from '@imp/api';
-import { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@zgeoff/imp-client';
-import type { ExecRequirement } from '@zgeoff/imp-client';
+import type { ExposeResult, ForkResult, Imp } from '@impz/api';
+import { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@impz/client';
+import type { ExecRequirement } from '@impz/client';
 import type { CliConfig } from '../cli-config';
 import { createImpClient } from '../create-imp-client';
 import type { ImpClient } from '../create-imp-client';
@@ -59,9 +59,9 @@ export const newCommand = defineCommand({
     },
     'cpu-limit': cpuLimitArg,
     'cpu-weight': cpuWeightArg,
-    public: { type: 'boolean', description: 'serve it to the internet too, as imp expose does' },
+    public: { type: 'boolean', description: 'serve it to the internet too, as impz expose does' },
     ...authArgs,
-    net: { type: 'string', description: 'networks to join, comma-separated (see imp net)' },
+    net: { type: 'string', description: 'networks to join, comma-separated (see impz net)' },
     backup: {
       type: 'boolean',
       default: true,
@@ -70,7 +70,7 @@ export const newCommand = defineCommand({
     },
     place: {
       type: 'boolean',
-      description: 'create it on the saved host with the most free RAM (see imp host ls)',
+      description: 'create it on the saved host with the most free RAM (see impz host ls)',
     },
     json: jsonArg,
   },
@@ -108,7 +108,7 @@ async function runPlacedNew(request: NewRequest): Promise<void> {
   const ranking = buildRanking(answers, place);
 
   for (const dropped of ranking.dropped) {
-    console.error(`imp: ${dropped.host}: skipped: ${dropped.reason}`);
+    console.error(`impz: ${dropped.host}: skipped: ${dropped.reason}`);
   }
 
   if (ranking.ranked.length === 0) {
@@ -129,12 +129,12 @@ async function runPlacedNew(request: NewRequest): Promise<void> {
 
         config = target.config;
 
-        console.error(`imp: placing on ${host}`);
+        console.error(`impz: placing on ${host}`);
 
         await runNew(createImpClient(target.config), request, target);
       },
       (host, message) => {
-        console.error(`imp: ${host}: ${message}; trying the next host`);
+        console.error(`impz: ${host}: ${message}; trying the next host`);
       },
     );
   } catch (error) {
@@ -265,7 +265,7 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
       await printTrustWarnings(client, imp.name);
     }
 
-    // a failure here leaves the imp tailnet-only; `imp expose` tries again
+    // a failure here leaves the imp tailnet-only; `impz expose` tries again
     exposed = auth === null ? null : await client.imps.expose({ name: imp.name, ...auth });
   } catch (error) {
     if (placed === null) {
@@ -306,13 +306,13 @@ function printPlacedFailure(imp: Imp, placed: SavedTarget, error: unknown, json:
   return new Error(`${imp.name} was created on ${placed.host}; ${message}`);
 }
 
-// `imp ls --all` when some hosts answered and some did not
+// `impz ls --all` when some hosts answered and some did not
 const PARTIAL_CODE = 3;
 
 export const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List imps' },
   args: {
-    all: { type: 'boolean', description: 'list the imps on every saved host (see imp host ls)' },
+    all: { type: 'boolean', description: 'list the imps on every saved host (see impz host ls)' },
     builders: {
       type: 'boolean',
       description: 'list the image builders impd runs for builds too',
@@ -392,7 +392,7 @@ export async function listAllImps(run: Readonly<AllImpsRun>): Promise<number> {
   run.print(output);
 
   for (const error of errors) {
-    run.printError(`imp: ${error.host}: ${error.message}`);
+    run.printError(`impz: ${error.host}: ${error.message}`);
   }
 
   if (errors.length === 0) {
@@ -580,7 +580,7 @@ export const forkCommand = defineCommand({
 
       // the fork exists either way, so these warn and the exit stays 0
       for (const warning of listForkWarnings(context.args.source, imp)) {
-        console.error(`imp: ${warning}`);
+        console.error(`impz: ${warning}`);
       }
 
       console.log(formatOutput(imp, context.args.json, formatImp));
@@ -588,7 +588,10 @@ export const forkCommand = defineCommand({
 });
 
 export const execCommand = defineCommand({
-  meta: { name: 'exec', description: 'Run a command in an imp (imp exec [-t] <name> -- cmd args)' },
+  meta: {
+    name: 'exec',
+    description: 'Run a command in an imp (impz exec [-t] <name> -- cmd args)',
+  },
   args: {
     name: nameArg,
     tty: { type: 'boolean', alias: 't', description: 'run on a terminal' },
@@ -607,7 +610,7 @@ export const execCommand = defineCommand({
     const argv = splitCommand(process.argv, context.args._.slice(1));
 
     if (argv.length === 0) {
-      console.error('imp: exec needs a command: imp exec <name> -- cmd args');
+      console.error('impz: exec needs a command: impz exec <name> -- cmd args');
       process.exit(2);
     }
 
@@ -656,13 +659,13 @@ function parseRequire(
   const bad = names.find((name) => !known.has(name));
 
   if (names.length === 0 || bad !== undefined) {
-    console.error(`imp: --require takes ${EXEC_REQUIREMENTS.join(', ')}; not ${bad ?? text}`);
+    console.error(`impz: --require takes ${EXEC_REQUIREMENTS.join(', ')}; not ${bad ?? text}`);
 
     return null;
   }
 
   if (isAgent) {
-    console.error('imp: --require does not go with --agent: an exec in the agent gets no broker');
+    console.error('impz: --require does not go with --agent: an exec in the agent gets no broker');
 
     return null;
   }
@@ -700,7 +703,7 @@ export const consoleCommand = defineCommand({
     log: {
       type: 'boolean',
       description:
-        'impd keeps the output of the session this starts, for imp sessions log (docs/guides/session-logs.md)',
+        'impd keeps the output of the session this starts, for impz sessions log (docs/guides/session-logs.md)',
     },
     'detach-key': detachKeyArg,
   },

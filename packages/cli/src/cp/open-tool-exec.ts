@@ -6,9 +6,9 @@ import {
   ExecServerMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
-} from '@imp/api';
-import type { ExecClientMessage, ExecServerMessage, ExecTool } from '@imp/api';
-import type { ExecSocket } from '@zgeoff/imp-client';
+} from '@impz/api';
+import type { ExecClientMessage, ExecServerMessage, ExecTool } from '@impz/api';
+import type { ExecSocket } from '@impz/client';
 import { buildWebSocketUrl } from '../build-websocket-url';
 import type { CliConfig } from '../cli-config';
 

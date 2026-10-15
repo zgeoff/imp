@@ -1,8 +1,8 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { IMAGE_BUILD_STREAM_TYPE, ImageBuildQuerySchema } from '@imp/api';
-import type { Image, ImageBuildQuery } from '@imp/api';
+import { IMAGE_BUILD_STREAM_TYPE, ImageBuildQuerySchema } from '@impz/api';
+import type { Image, ImageBuildQuery } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { ApiAudit } from '../audit/api-audit';
 import { checkAccess, findAccess } from '../auth/access-policy';

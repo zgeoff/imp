@@ -1,5 +1,5 @@
 {
-  "name": "@imp/shared",
+  "name": "@impz/shared",
   "version": "0.0.0",
   "private": true,
   "description": "Pure helpers that know nothing about imp: byte and duration formats, a newline splitter and byte merging",

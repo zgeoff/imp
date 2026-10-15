@@ -38,7 +38,7 @@ export function defineCommand<T extends ArgsDef>(def: ImpCommandDef<T>): Command
         const noun = flags.length === 1 ? 'flag' : 'flags';
         const where = command === undefined ? '' : ` for ${command}`;
 
-        console.error(`imp: unknown ${noun} ${flags.join(', ')}${where} (see --help)`);
+        console.error(`impz: unknown ${noun} ${flags.join(', ')}${where} (see --help)`);
 
         process.exitCode = 2;
 

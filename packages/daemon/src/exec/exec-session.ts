@@ -8,8 +8,8 @@ import {
   ExecClientMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
-} from '@imp/api';
-import type { DetachReason, ExecChannel, ExecServerMessage, SessionOutput } from '@imp/api';
+} from '@impz/api';
+import type { DetachReason, ExecChannel, ExecServerMessage, SessionOutput } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { AgentFeature } from '../agent-client/agent-outdated';

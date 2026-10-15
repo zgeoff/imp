@@ -1,4 +1,4 @@
-import { ORPCError } from '@zgeoff/imp-client';
+import { ORPCError } from '@impz/client';
 import * as z from 'zod';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
@@ -7,7 +7,7 @@ import type { ImpClient } from './create-imp-client';
 import { UsageError } from './usage-error';
 
 const TOKEN_HINT =
-  'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>';
+  'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run impz login <url>';
 
 // what oRPC puts in a BAD_REQUEST's data when the input fails its schema
 const PathKeySchema = z.union([z.string(), z.number(), z.object({ key: z.unknown() })]);
@@ -33,7 +33,7 @@ export async function runAction(
 }
 
 export function printError(error: unknown, config: CliConfig | null = null): void {
-  console.error(`imp: ${formatError(error, config)}`);
+  console.error(`impz: ${formatError(error, config)}`);
 
   process.exitCode = error instanceof UsageError ? 2 : 1;
 }
@@ -85,5 +85,5 @@ export function formatUnauthorized(config: CliConfig | null): string {
     return TOKEN_HINT;
   }
 
-  return `unauthorized: ${config.host} (${config.url}) refused the token; run imp login ${config.url} --name ${config.host}`;
+  return `unauthorized: ${config.host} (${config.url}) refused the token; run impz login ${config.url} --name ${config.host}`;
 }
