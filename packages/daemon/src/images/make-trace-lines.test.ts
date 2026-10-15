@@ -128,6 +128,67 @@ test('it passes over a vertex that has not started and output of a vertex it nev
   expect(lines).toStrictEqual([]);
 });
 
+test('it reads a character a vertex split across two log chunks, beside another vertex', () => {
+  const lines: string[] = [];
+
+  const readTrace = makeTraceLines({
+    emitLog: (line) => {
+      lines.push(line);
+    },
+    setStep: () => {},
+  });
+
+  const bytes = new TextEncoder().encode('café ready\n');
+
+  const vertex = { cached: false, started: true, completed: false, error: '' };
+
+  readTrace({
+    vertexes: [
+      { ...vertex, digest: 'sha256:aa', name: '[2/3] RUN ./brew' },
+      { ...vertex, digest: 'sha256:bb', name: '[builder 2/2] RUN make' },
+    ],
+    logs: [
+      { vertex: 'sha256:aa', msg: bytes.slice(0, 4) },
+      { vertex: 'sha256:bb', msg: new TextEncoder().encode('ok\n') },
+      { vertex: 'sha256:aa', msg: bytes.slice(4) },
+    ],
+  });
+
+  expect(lines).toStrictEqual([
+    '#1 [2/3] RUN ./brew',
+    '#2 [builder 2/2] RUN make',
+    '#2 ok',
+    '#1 café ready',
+  ]);
+});
+
+test('it sends output with no newline in pieces as it grows past what a log event holds', () => {
+  const lines: string[] = [];
+
+  const readTrace = makeTraceLines({
+    emitLog: (line) => {
+      lines.push(line);
+    },
+    setStep: () => {},
+  });
+
+  readTrace({
+    vertexes: [
+      {
+        digest: 'sha256:aa',
+        name: '[1/1] RUN ./progress-bar',
+        cached: false,
+        started: true,
+        completed: false,
+        error: '',
+      },
+    ],
+    logs: [{ vertex: 'sha256:aa', msg: new TextEncoder().encode('z'.repeat(10_000)) }],
+  });
+
+  expect(lines).toStrictEqual(['#1 [1/1] RUN ./progress-bar', `#1 ${'z'.repeat(8128)}`]);
+});
+
 test('it cuts a line longer than a log event holds', () => {
   const lines: string[] = [];
 

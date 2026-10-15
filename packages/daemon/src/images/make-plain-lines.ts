@@ -43,5 +43,12 @@ export function makePlainLines(output: BuildOutput): (chunk: Uint8Array) => void
     for (const line of lines) {
       readLine(line);
     }
+
+    // a line past what a log event holds goes out in pieces as it grows
+    while (state.partial.length > IMAGE_BUILD_LOG_MAX_CHARS) {
+      output.emitLog(state.partial.slice(0, IMAGE_BUILD_LOG_MAX_CHARS));
+
+      state.partial = state.partial.slice(IMAGE_BUILD_LOG_MAX_CHARS);
+    }
   };
 }

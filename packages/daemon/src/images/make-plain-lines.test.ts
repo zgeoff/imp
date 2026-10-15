@@ -53,6 +53,22 @@ test('it follows the step that runs, back to the one still running when another 
   ]);
 });
 
+test('it sends output with no newline in pieces as it grows past what a log event holds', () => {
+  const lines: string[] = [];
+
+  const readChunk = makePlainLines({
+    emitLog: (line) => {
+      lines.push(line);
+    },
+    setStep: () => {},
+  });
+
+  readChunk(new TextEncoder().encode('z'.repeat(5000)));
+  readChunk(new TextEncoder().encode('z'.repeat(5000)));
+
+  expect(lines).toStrictEqual(['z'.repeat(8192)]);
+});
+
 test('it reads a character split across two chunks', () => {
   const lines: string[] = [];
 

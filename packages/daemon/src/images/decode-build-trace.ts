@@ -2,7 +2,7 @@ import { BinaryReader, WireType } from '@bufbuild/protobuf/wire';
 
 // One vertex of a BuildKit build as a trace message reports it: a Dockerfile
 // step such as `[2/5] RUN make`, or the frontend's own work
-export interface TraceVertex {
+interface TraceVertex {
   readonly digest: string;
   readonly name: string;
   readonly cached: boolean;
@@ -14,7 +14,7 @@ export interface TraceVertex {
 }
 
 // output a vertex wrote, in the chunks the engine sent
-export interface TraceLog {
+interface TraceLog {
   readonly vertex: string;
   readonly msg: Uint8Array;
 }
