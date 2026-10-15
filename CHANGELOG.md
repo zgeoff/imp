@@ -2,14 +2,15 @@
 
 ## [2.0.0](https://github.com/zgeoff/impz/compare/v1.6.0...v2.0.0) (2026-10-15)
 
-
 ### ⚠ BREAKING CHANGES
 
-* **geo-480:** the CLI is impz, not imp.
+- **geo-480:** the CLI is impz, not imp.
 
 ### Features
 
-* **geo-480:** rename the cli, packages and release assets to impz ([#397](https://github.com/zgeoff/impz/issues/397)) ([df985e2](https://github.com/zgeoff/impz/commit/df985e29d3b875f57fc55299bbf9ffcf62915ebb))
+- **geo-480:** rename the cli, packages and release assets to impz
+  ([#397](https://github.com/zgeoff/impz/issues/397))
+  ([df985e2](https://github.com/zgeoff/impz/commit/df985e29d3b875f57fc55299bbf9ffcf62915ebb))
 
 ## [1.6.0](https://github.com/zgeoff/imp/compare/v1.5.1...v1.6.0) (2026-10-15)
 
