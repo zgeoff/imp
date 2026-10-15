@@ -1,6 +1,7 @@
 import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
 import type { ImageBuildEvent, ImageBuildPhase } from '@imp/api';
 import type { BuildOutput } from './create-build-steps';
+import { BUILD_LOG_QUEUE_MAX_BYTES, createLogBudget } from './create-log-budget';
 
 // A progress line this often keeps a client's fetch reading: Bun's gives up
 // after 360 s with no byte, undici's after 300 s (its headersTimeout before
@@ -68,84 +69,98 @@ export function createBuildEventStream(
     state.stopKeepalive();
   };
 
-  const body = new ReadableStream<Uint8Array>({
-    start: (controller) => {
-      // a client gone mid-write closes the stream under us: then nothing
-      // more is sent, and the build stops through the signal
-      const send = (event: ImageBuildEvent): void => {
-        if (!state.open) {
-          return;
-        }
+  const body = new ReadableStream<Uint8Array>(
+    {
+      start: (controller) => {
+        // a client gone mid-write closes the stream under us: then nothing
+        // more is sent, and the build stops through the signal
+        const send = (event: ImageBuildEvent): void => {
+          if (!state.open) {
+            return;
+          }
 
-        try {
-          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-        } catch {
-          stop();
-        }
-      };
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          } catch {
+            stop();
+          }
+        };
 
-      const sendProgress = (): void => {
-        send({
-          type: 'progress',
-          phase: state.phase,
-          elapsedMs: deps.now() - startedAt,
-          ...(state.step !== null && { step: state.step }),
+        const sendProgress = (): void => {
+          send({
+            type: 'progress',
+            phase: state.phase,
+            elapsedMs: deps.now() - startedAt,
+            ...(state.step !== null && { step: state.step }),
+          });
+        };
+
+        const logs = createLogBudget();
+
+        // Bun sends the headers with the first chunk
+        sendProgress();
+
+        state.stopKeepalive = repeat(deps.keepaliveMs, sendProgress);
+
+        // nobody reads the progress of a build that stops for its client
+        signal.addEventListener('abort', () => {
+          state.stopKeepalive();
         });
-      };
 
-      // Bun sends the headers with the first chunk
-      sendProgress();
-
-      state.stopKeepalive = repeat(deps.keepaliveMs, sendProgress);
-
-      // nobody reads the progress of a build that stops for its client
-      signal.addEventListener('abort', () => {
-        state.stopKeepalive();
-      });
-
-      const report: BuildReport = {
-        setPhase: (phase) => {
-          state.phase = phase;
-
-          sendProgress();
-        },
-        output: {
-          emitLog: (line) => {
-            send({ type: 'log', text: line });
-          },
-          setStep: (step) => {
-            state.step = step;
+        const report: BuildReport = {
+          setPhase: (phase) => {
+            state.phase = phase;
 
             sendProgress();
           },
-        },
-      };
+          output: {
+            // the stream's queue holds what the client has not read yet
+            emitLog: (line) => {
+              const hasRoom = (controller.desiredSize ?? 0) > 0;
 
-      const sendOutcome = async (): Promise<void> => {
-        const outcome = await run(signal, report);
+              for (const text of logs.admit(line, hasRoom)) {
+                send({ type: 'log', text });
+              }
+            },
+            setStep: (step) => {
+              state.step = step;
 
-        send(outcome);
+              sendProgress();
+            },
+          },
+        };
 
-        if (state.open) {
-          stop();
+        const sendOutcome = async (): Promise<void> => {
+          const outcome = await run(signal, report);
 
-          // a client that went as the build ended may have closed it already
-          try {
-            controller.close();
-          } catch {
-            // nothing is left to send
+          for (const text of logs.drain()) {
+            send({ type: 'log', text });
           }
-        }
-      };
 
-      void sendOutcome();
-    },
-    cancel: () => {
-      stop();
+          send(outcome);
 
-      cancelled.abort();
+          if (state.open) {
+            stop();
+
+            // a client that went as the build ended may have closed it already
+            try {
+              controller.close();
+            } catch {
+              // nothing is left to send
+            }
+          }
+        };
+
+        void sendOutcome();
+      },
+      cancel: () => {
+        stop();
+
+        cancelled.abort();
+      },
     },
-  });
+    new ByteLengthQueuingStrategy({ highWaterMark: BUILD_LOG_QUEUE_MAX_BYTES }),
+  );
 
   return new Response(body, { headers: { 'content-type': IMAGE_BUILD_STREAM_TYPE } });
 }

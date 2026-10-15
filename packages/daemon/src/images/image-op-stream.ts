@@ -1,6 +1,7 @@
 import type { Image, ImageBuildPhase, ImageOpEvent } from '@imp/api';
 import { runOnInterval } from './build-event-stream';
 import type { BuildReport, Repeat } from './build-event-stream';
+import { BUILD_LOG_QUEUE_MAX_BYTES, createLogBudget } from './create-log-budget';
 
 export interface ImageOpStreamOptions {
   readonly firstPhase: ImageBuildPhase;
@@ -42,8 +43,17 @@ export async function* runImageOp(
     changed: Promise.withResolvers<void>(),
   };
 
-  // the lines not yet yielded; none is kept once the client went
+  // the lines not yet yielded, and their bytes; none is kept once the
+  // client went
   const lines: string[] = [];
+  const queued = { bytes: 0 };
+  const logs = createLogBudget();
+
+  const drainLines = (): string[] => {
+    queued.bytes = 0;
+
+    return lines.splice(0);
+  };
 
   const report: BuildReport = {
     setPhase: (phase) => {
@@ -53,10 +63,20 @@ export async function* runImageOp(
     },
     output: {
       emitLog: (line) => {
-        if (options.logs === true && !options.signal.aborted) {
-          lines.push(line);
-          state.changed.resolve();
+        if (options.logs !== true || options.signal.aborted) {
+          return;
         }
+
+        const bytes = Buffer.byteLength(line);
+        const hasRoom = queued.bytes + bytes <= BUILD_LOG_QUEUE_MAX_BYTES;
+
+        for (const text of logs.admit(line, hasRoom)) {
+          lines.push(text);
+
+          queued.bytes += Buffer.byteLength(text);
+        }
+
+        state.changed.resolve();
       },
       setStep: (step) => {
         state.step = step;
@@ -112,11 +132,15 @@ export async function* runImageOp(
 
     state.changed = Promise.withResolvers<void>();
 
-    for (const text of lines.splice(0)) {
+    for (const text of drainLines()) {
       yield { type: 'log', text };
     }
 
     if (ended !== 'tick' && ended !== undefined) {
+      for (const text of logs.drain()) {
+        yield { type: 'log', text };
+      }
+
       if (!ended.ok) {
         throw ended.error;
       }

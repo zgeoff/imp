@@ -301,6 +301,41 @@ test('it sends progress with the step the build reached while it runs', async ()
   });
 });
 
+test('it holds at most 1 MiB of build output for a client that has not read, and counts what it dropped', async () => {
+  const image = buildMockImage();
+
+  const events = await Array.fromAsync(
+    runImageOp(
+      (_signal, report) => {
+        for (let line = 0; line < 4096; line += 1) {
+          report.output.emitLog('x'.repeat(8000));
+        }
+
+        return Promise.resolve(image);
+      },
+      {
+        firstPhase: 'build',
+        signal: new AbortController().signal,
+        keepaliveMs: 10_000,
+        now: () => 0,
+        record: () => {},
+        logs: true,
+      },
+    ),
+  );
+
+  const kept = events.filter((event) => event.type === 'log' && event.text.startsWith('x'));
+
+  expect(kept).toHaveLength(Math.floor(1024 ** 2 / 8000));
+
+  expect(events.at(-2)).toStrictEqual({
+    type: 'log',
+    text: `imp: ${String(4096 - kept.length)} lines of build output dropped: the client read them more slowly than the build wrote them`,
+  });
+
+  expect(events.at(-1)).toStrictEqual({ type: 'image', image });
+});
+
 test('it sends no log events to a client that did not ask for them', async () => {
   const image = buildMockImage();
 

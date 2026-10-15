@@ -7,10 +7,16 @@ import type { BuildOutput } from './create-build-steps';
 const VERTEX_LINE = /^#(?<id>\d+) (?<rest>.*)$/v;
 const VERTEX_END = /^(?:DONE|CACHED|ERROR)\b/v;
 
+export interface PlainLines {
+  readonly readChunk: (chunk: Uint8Array) => void;
+
+  // the last line, when the output ended without its newline
+  readonly flush: () => void;
+}
+
 // Each line of `docker build --progress=plain` as it comes, from the chunks
-// of its stderr, with the step it runs. A line still open when the chunks
-// stop is not sent: plain progress ends each of its lines.
-export function makePlainLines(output: BuildOutput): (chunk: Uint8Array) => void {
+// of its stderr, with the step it runs
+export function createPlainLines(output: BuildOutput): PlainLines {
   const steps = createBuildSteps(output.setStep);
 
   const decoder = new TextDecoder();
@@ -35,7 +41,7 @@ export function makePlainLines(output: BuildOutput): (chunk: Uint8Array) => void
     }
   };
 
-  return (chunk) => {
+  const readChunk = (chunk: Uint8Array): void => {
     const lines = (state.partial + decoder.decode(chunk, { stream: true })).split(/\r?\n/v);
 
     state.partial = lines.pop() ?? '';
@@ -50,5 +56,18 @@ export function makePlainLines(output: BuildOutput): (chunk: Uint8Array) => void
 
       state.partial = state.partial.slice(IMAGE_BUILD_LOG_MAX_CHARS);
     }
+  };
+
+  return {
+    readChunk,
+    flush: () => {
+      const line = state.partial + decoder.decode();
+
+      state.partial = '';
+
+      if (line !== '') {
+        readLine(line);
+      }
+    },
   };
 }

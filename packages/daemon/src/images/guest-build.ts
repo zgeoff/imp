@@ -5,11 +5,11 @@ import type { StartTimer } from '../process/clock';
 import { startRealTimer } from '../process/start-real-timer';
 import { countTreeBytes } from '../storage/count-tree-bytes';
 import type { BuildOutput } from './create-build-steps';
+import { createPlainLines } from './create-plain-lines';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
 import { PIN_INSPECT_FORMAT, PinInspectSchema, formatPlatform, pickRepoDigest } from './image-pin';
-import { makePlainLines } from './make-plain-lines';
 import { planRootfsOverhead } from './rootfs-plan';
 import { UNPACK_TAR_ARGS, assertUnpacked } from './unpack-export';
 
@@ -41,6 +41,8 @@ export async function runGuestBuild(
   exec: GuestExec,
   options: Readonly<GuestBuildOptions>,
 ): Promise<void> {
+  const lines = options.output === undefined ? null : createPlainLines(options.output);
+
   const result = await exec(
     [
       'docker',
@@ -57,9 +59,11 @@ export async function runGuestBuild(
     {
       stdinPath: options.tarPath,
       signal: options.signal,
-      ...(options.output !== undefined && { onStderr: makePlainLines(options.output) }),
+      ...(lines !== null && { onStderr: lines.readChunk }),
     },
   );
+
+  lines?.flush();
 
   if (result.exitCode !== 0) {
     const log = `${result.stdout}${result.stderr}`.trim().slice(-LOG_MAX_CHARS);

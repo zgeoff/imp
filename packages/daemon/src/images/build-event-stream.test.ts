@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import type { ImageBuildEvent } from '@imp/api';
-import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
+import { IMAGE_BUILD_STREAM_TYPE, ImageBuildEventSchema } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
@@ -255,4 +255,38 @@ test('#createBuildEventStream sends nothing more and stops its keepalive once a 
   invariant(tick);
 
   expect(tick).not.toThrow();
+});
+
+test('#createBuildEventStream holds at most 1 MiB of build output for a client that has not read, and counts what it dropped', async () => {
+  const response = createBuildEventStream(
+    new AbortController().signal,
+    (_signal, report) => {
+      for (let line = 0; line < 4096; line += 1) {
+        report.output.emitLog('x'.repeat(8000));
+      }
+
+      return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
+    },
+    { keepaliveMs: 10_000, now: () => 0 },
+  );
+
+  const text = await response.text();
+
+  const events = text
+    .trim()
+    .split('\n')
+    .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
+
+  const kept = events.filter((event) => event.type === 'log' && event.text.startsWith('x'));
+  const marker = events.at(-2);
+
+  expect(Buffer.byteLength(text)).toBeLessThan(1024 ** 2 + 16_384);
+  expect(kept.length).toBeGreaterThan(0);
+
+  expect(marker).toStrictEqual({
+    type: 'log',
+    text: `imp: ${String(4096 - kept.length)} lines of build output dropped: the client read them more slowly than the build wrote them`,
+  });
+
+  expect(events.at(-1)).toStrictEqual({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
 });

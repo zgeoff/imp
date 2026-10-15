@@ -110,7 +110,9 @@ digest as `images/examples/hello` names it, works on both.
   ```
 
   A progress event carries `step` once a Dockerfile step has started, and impd sends one at each new
-  step. Each line of the build's output comes as a `log` event.
+  step. Each line of the build's output comes as a `log` event. impd holds at most 1 MiB of output
+  for a client that reads more slowly than the build writes; it drops the lines past that and sends
+  a `log` line that counts them.
 
   An error ends the stream as `{"type":"error","code":"...","message":"..."}`, with the code an oRPC
   call would give. A client skips an event type it does not know. The stream exists because a
