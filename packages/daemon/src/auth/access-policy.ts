@@ -1,8 +1,10 @@
-import { ImageRefSchema, SecretNameSchema, hasScope, isImpAllowed } from '@imp/api';
+import { hasScope, isImpAllowed } from '@imp/api';
 import type { ForbiddenReason, ImpContract, Scope } from '@imp/api';
 import type { ForkAuthority, GrantAuthority } from '../db/secrets';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';
+import { checkGrantable } from './check-grantable';
+import { checkImageAdd } from './check-image-add';
 
 // host-wide: only a caller with no imp patterns
 interface HostAccess {
@@ -297,7 +299,11 @@ export async function checkAccess(
   }
 
   if (access.on === 'image') {
-    return checkImageAdd(caller, caller.imps, input);
+    return checkImageAdd(caller, caller.imps, {
+      ref: readField(input, 'ref'),
+      name: readField(input, 'name'),
+      hasImp: typeof input === 'object' && input !== null && 'imp' in input,
+    });
   }
 
   if (access.on === 'host') {
@@ -375,88 +381,6 @@ function findOutsideImp(
   }
 
   return null;
-}
-
-// a ref pinned by digest, which names one image for good; a tag can move
-const PINNED_REF = /@sha256:[0-9a-f]{64}$/;
-
-// The caller's prefix, a ref that starts with it and is pinned, and a name
-// within the caller's patterns. The input is not checked yet, so a field
-// that is not a string reads as missing.
-function checkImageAdd(
-  caller: Readonly<Caller>,
-  patterns: readonly string[],
-  input: unknown,
-): Refusal | null {
-  const who = formatCaller(caller);
-  const prefix = caller.imageRefPrefix;
-
-  if (prefix === null) {
-    return { message: `${who} is limited to some imps; this call is host-wide`, reason: null };
-  }
-
-  const ref = readField(input, 'ref');
-
-  if (ref === null || (typeof input === 'object' && input !== null && 'imp' in input)) {
-    return { message: `${who} may add only an image from a ref, not a template`, reason: null };
-  }
-
-  // the input is parsed after this check, and an `imp` beside a ref that
-  // fails its schema would parse as a template copy of that imp
-  if (!ImageRefSchema.safeParse(ref).success) {
-    return { message: `${who} may add only an image from a valid ref`, reason: null };
-  }
-
-  const name = readField(input, 'name');
-
-  if (name === null) {
-    return {
-      message: `${who} is limited to some imps, so the call must name the image (name)`,
-      reason: 'imp_out_of_scope',
-    };
-  }
-
-  if (!isImpAllowed(patterns, name)) {
-    return { message: `${who} may not add image ${name}`, reason: 'imp_out_of_scope' };
-  }
-
-  if (!ref.startsWith(prefix)) {
-    return { message: `${who} may add only images whose ref starts with ${prefix}`, reason: null };
-  }
-
-  if (!PINNED_REF.test(ref)) {
-    return {
-      message: `${who} may add only an image ref pinned by digest, such as ${prefix}app@sha256:…`,
-      reason: null,
-    };
-  }
-
-  return null;
-}
-
-// The secret must be on the caller's list, and the secret by that name now
-// must be the one it was given. A missing secret reads as a stale entry, so
-// the refusal is the same whether it exists or not.
-async function checkGrantable(
-  caller: Readonly<Caller>,
-  secret: string | null,
-  readSecretGeneration: ReadSecretGeneration,
-): Promise<Refusal | null> {
-  const entry = secret === null ? undefined : caller.grantable.find((each) => each.name === secret);
-  const current = entry === undefined ? null : await readSecretGeneration(entry.name);
-
-  if (entry !== undefined && current === entry.generation) {
-    return null;
-  }
-
-  // the input is not checked yet: it is named only when it has a name's form
-  const named = SecretNameSchema.safeParse(secret);
-  const what = named.success ? `secret ${named.data}` : 'that secret';
-
-  return {
-    message: `${formatCaller(caller)} may not grant or revoke ${what}`,
-    reason: 'not_grantable',
-  };
 }
 
 export function readField(input: unknown, field: string): string | null {

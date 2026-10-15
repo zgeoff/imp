@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,23 +9,27 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { utils } from 'ssh2';
-import { checkAccess, findAccess } from './auth/access-policy';
-import { loadConfig } from './config';
-import { createImpd } from './create-impd';
-import type { ImpdDeps } from './create-impd';
-import { listApiCalls } from './db/api-audit';
-import { createImage } from './db/images';
-import { findImpByName } from './db/imps';
-import { openDatabase } from './db/open-database';
-import { createForkGrants } from './db/secrets';
-import { listTokenRecords } from './db/tokens';
-import { createEd25519Key } from './ssh/host-key';
-import { buildImagePaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
-import { createXfsBackend } from './storage/xfs-backend';
-import { buildMockNewImage } from './test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from './test-utils/build-stub-vmm';
-import { findFreePorts } from './test-utils/find-free-ports';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import type { ImpdDeps } from '../create-impd';
+import { listApiCalls } from '../db/api-audit';
+import { createImage } from '../db/images';
+import { findImpByName } from '../db/imps';
+import { openDatabase } from '../db/open-database';
+import { createForkGrants } from '../db/secrets';
+import { listTokenRecords } from '../db/tokens';
+import { createEd25519Key } from '../ssh/host-key';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
+import { checkAccess, findAccess } from './access-policy';
 
 // Scoped tokens that may grant selected secrets (docs/guides/tokens.md#granting-secrets),
 // through the API as a client calls it.
