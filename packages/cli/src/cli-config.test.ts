@@ -1,5 +1,5 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadCliConfig } from './cli-config';
@@ -40,6 +40,31 @@ test('it pairs the old token file with the local impd', () => {
     token: 'file-token',
     host: null,
   });
+});
+
+test('it pairs a token file saved before the rename to impz with the local impd', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'imp'));
+  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+
+  expect(
+    loadCliConfig({ XDG_CONFIG_HOME: ctx.dir }, null, mock<(line: string) => void>()),
+  ).toStrictEqual({
+    url: 'http://localhost:7070',
+    token: 'file-token',
+    host: null,
+  });
+});
+
+test('it leaves a config saved before the rename to impz where it is when IMP_URL is set', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'imp'));
+  writeFileSync(join(ctx.dir, 'imp', 'config.json'), '{"current":null,"hosts":{}}\n');
+  loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_URL: 'http://127.0.0.1:1' }, null);
+
+  expect(readdirSync(ctx.dir)).toStrictEqual(['imp']);
 });
 
 test('it takes IMP_TOKEN alone over the token file', () => {

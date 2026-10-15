@@ -1873,8 +1873,14 @@ test('it takes the terminal out of raw mode when an output write calls process.e
       });
     `;
 
+  // HOME is the test's temp dir, so the child never reads the developer's config
   const child = Bun.spawn(['bun', '-e', script], {
-    env: { PATH: process.env['PATH'] ?? '', IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      HOME: ctx.dataDir,
+      IMP_URL: ctx.url,
+      IMP_TOKEN: ctx.rootToken,
+    },
     stdin: 'ignore',
     stderr: 'pipe',
   });

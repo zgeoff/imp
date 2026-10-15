@@ -261,9 +261,10 @@ one on a throwaway pool.
 
 The CLI keeps named impd hosts in `~/.config/impz/config.json` (under `XDG_CONFIG_HOME` when set).
 The file holds each host's URL and token, so the CLI writes it with mode 0600 and warns when other
-users can read it. No command prints a token. On its first run, the CLI moves `config.json` and
-`token` from `~/.config/imp/`, where the CLI kept them before its rename to `impz`, unless
-`~/.config/impz/` exists.
+users can read it. No command prints a token. The CLI kept `config.json` and `token` in
+`~/.config/imp/` before its rename to `impz`. The first command that reads or writes the config
+moves each of the two files that `~/.config/impz/` lacks, and never writes over a file there, so a
+move that fails part way finishes on a later call.
 
 ```sh
 impz login https://imp.example.ts.net             # asks for the token; saves the host "imp"

@@ -4,14 +4,11 @@ import { mainCommand } from './command-tree';
 import { splitHostFlag } from './host-flag';
 import { checkHostName } from './host-store';
 import { printError } from './run-action';
-import { updateLegacyConfig } from './update-legacy-config';
 
 // runMain shows help when --help appears anywhere, and citty would parse
 // the command's own flags, so it sees only the arguments before `--`;
 // `impz exec` reads the command after it from process.argv
 try {
-  updateLegacyConfig(process.env);
-
   const split = splitHostFlag(process.argv.slice(2));
   const separator = split.args.indexOf('--');
   const args = separator === -1 ? [...split.args] : split.args.slice(0, separator);

@@ -13,6 +13,7 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as z from 'zod';
+import { updateLegacyConfig } from './update-legacy-config';
 import { UsageError } from './usage-error';
 
 export type CliEnv = Readonly<Record<string, string | undefined>>;
@@ -61,11 +62,13 @@ export function checkHostName(name: string): string {
 
 // The saved hosts, or none without a config file. A file that does not parse
 // is an error, never an empty config, which `impz login` would write over.
-// `warn` gets the warning about a file others can read.
+// `warn` gets the notes: a file others can read, a move from before impz.
 export function readHostConfig(
   env: CliEnv,
   warn: (line: string) => void = console.error,
 ): HostConfig {
+  updateLegacyConfig(resolveConfigDir(env), warn);
+
   const path = resolveConfigPath(env);
   let text: string;
 
@@ -102,6 +105,7 @@ export function readHostConfig(
 // crash leaves the old file or the new one and no other user can read the
 // tokens at any point.
 export function writeHostConfig(env: CliEnv, config: HostConfig): void {
+  updateLegacyConfig(resolveConfigDir(env));
   mkdirSync(resolveConfigDir(env), { recursive: true, mode: 0o700 });
 
   // a symlinked config.json (dotfiles) stays a link: the rename replaces

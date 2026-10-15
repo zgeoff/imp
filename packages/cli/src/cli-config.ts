@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkHostName, readHostConfig, resolveConfigDir } from './host-store';
 import type { CliEnv } from './host-store';
+import { updateLegacyConfig } from './update-legacy-config';
 import { UsageError } from './usage-error';
 
 export interface CliConfig {
@@ -81,8 +82,12 @@ function readHostVariable(env: CliEnv): string | null {
   return name === null ? null : checkHostName(name);
 }
 
-function readTokenFile(env: CliEnv): string | null {
-  const path = join(resolveConfigDir(env), 'token');
+function readTokenFile(env: CliEnv, warn: (line: string) => void): string | null {
+  const dir = resolveConfigDir(env);
+
+  updateLegacyConfig(dir, warn);
+
+  const path = join(dir, 'token');
 
   return existsSync(path) ? readFileSync(path, 'utf8').trim() : null;
 }
