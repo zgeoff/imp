@@ -63,6 +63,10 @@ const HOP_HEADERS = [
   'upgrade',
 ];
 
+// Some frameworks run the method one of these names in place of the
+// request's own, so on a filtered grant they could turn an allowed POST into
+// a method the filter refused.
+const METHOD_OVERRIDE_HEADERS = ['x-http-method-override', 'x-http-method', 'x-method-override'];
 const MAX_AUDIT_PATH = 512;
 
 // The handler for a terminator bound to one imp and one host. The URL is the
@@ -158,6 +162,13 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
     const headers = buildEndToEndHeaders(request.headers);
 
     headers.delete('host');
+
+    if (credential.filter !== null) {
+      for (const name of METHOD_OVERRIDE_HEADERS) {
+        headers.delete(name);
+      }
+    }
+
     headers.set(credential.header, credential.value);
 
     const body =

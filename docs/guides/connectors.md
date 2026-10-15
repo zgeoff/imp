@@ -91,8 +91,13 @@ A path pattern matches whole segments of the request's path, never part of one:
 The broker matches the path after the URL parser has resolved its dot segments, and that path is the
 one it sends upstream. A request on a filtered grant whose path holds an encoded `/` or `\` (`%2F`,
 `%5C`) is refused, because the service could decode it into a segment break that the pattern never
-saw. The query string is not matched, so a filter narrows what the credential can do but not what
-data can leave on an allowed request.
+saw. On a filtered grant the broker drops the `X-HTTP-Method-Override`, `X-HTTP-Method` and
+`X-Method-Override` headers, so a service that honours them cannot run a method the filter refused.
+
+A path filter narrows neither a GraphQL endpoint nor the query string. A GraphQL service takes every
+query and mutation on one path, so a grant for `POST /graphql` lets the imp send any operation the
+credential allows. The broker never matches the query string, so a filter narrows what the
+credential can do but not what data can leave on an allowed request.
 
 A request outside the filter gets a 403 `the grant for <host> does not cover <method> <path>`, and
 the broker never sends it upstream. The refusal is in `impz audit --kind refused` with the reason
