@@ -24,6 +24,7 @@ import { startStubDockerEngine } from '@imp/daemon/src/test-utils/start-stub-doc
 import { invariant } from '@imp/test-utils/invariant';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
+import * as z from 'zod';
 import { runCli } from '../test-utils/start-cli';
 
 // impd's real app, listening on a loopback port for the spawned CLI
@@ -328,7 +329,9 @@ test('#imageCommand lists a running build with its start and step from another s
       env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     });
 
-    const builds = JSON.parse(result.stdout) as { step: string | null }[];
+    const builds = z
+      .array(z.object({ step: z.string().nullable() }))
+      .parse(JSON.parse(result.stdout));
 
     invariant(builds[0]?.step);
 
@@ -359,7 +362,9 @@ test('#imageCommand lists a running build with its start and step from another s
     },
   ]);
 
-  expect(table.stdout.split('\n')).toStrictEqual([
+  const tableLines: unknown = table.stdout.split('\n');
+
+  expect(tableLines).toStrictEqual([
     expect.stringMatching(/^NAME +SOURCE +STARTED +ELAPSED +PHASE +STEP +BUILDER *$/v),
     expect.stringMatching(
       /^web +upload +\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ +\d+s +build +\[2\/3\] RUN echo compiling widget && echo second line +- *$/v,

@@ -540,7 +540,7 @@ test('it streams the step and output of a running build, and lists it in images.
     {
       type: 'progress',
       phase: 'build',
-      elapsedMs: expect.any(Number),
+      elapsedMs: expect.any(Number) as unknown,
       step: '[2/3] RUN echo compiling widget && echo second line',
     },
   ]);

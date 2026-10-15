@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import * as z from 'zod';
 import { decodeBuildTrace } from '../images/decode-build-trace';
 import { buildStubTracedBuild } from './build-stub-traced-build';
 
@@ -18,7 +19,7 @@ test('it streams the trace of a RUN step and then the image ID to a build', asyn
   const messages = (text ?? '')
     .trim()
     .split('\n')
-    .map((line) => JSON.parse(line) as { id: string; aux: unknown });
+    .map((line) => z.object({ id: z.string(), aux: z.unknown() }).parse(JSON.parse(line)));
 
   const traces = messages
     .filter((message) => message.id === 'moby.buildkit.trace')

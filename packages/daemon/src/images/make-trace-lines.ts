@@ -24,7 +24,7 @@ export function makeTraceLines(output: BuildOutput): (trace: BuildTrace) => void
 
   const steps = createBuildSteps(output.setStep);
 
-  const emit = (state: VertexState, text: string): void => {
+  const emit = (state: Readonly<VertexState>, text: string): void => {
     output.emitLog(`#${String(state.number)} ${text}`.slice(0, IMAGE_BUILD_LOG_MAX_CHARS));
   };
 
