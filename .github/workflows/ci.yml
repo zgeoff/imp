@@ -316,7 +316,7 @@ jobs:
       - name: Embedded shell
         run: >-
           bun test -t shellcheck ./packages/api/src/protocols/login-shell.test.ts
-          ./packages/mcp/src/tools/file-tools.test.ts ./packages/cli/src/completion.test.ts
+          ./packages/mcp/src/tools/write-script.test.ts ./packages/cli/src/completion.test.ts
 
   # Compiles the CLI for every platform, as a release does, and runs the
   # linux-x64 one. The release workflow runs each binary on its own platform;

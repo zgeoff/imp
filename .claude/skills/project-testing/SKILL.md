@@ -135,7 +135,7 @@ Utils that take a caller's stack and register nothing themselves:
 A daemon test file's `setupTest()` seeds the image that every imp create boots, with a one-line
 comment that says so. That image is boot data, so a test may name it in a create. A test that
 asserts on the image takes it from `setupTest()` as `ctx.image`, as `reset-baseline.test.ts` and
-`mcp/imp-tools.test.ts` do.
+`packages/mcp/src/tools/imp-tools.test.ts` do.
 
 The `setupTest()` of `vmm/jail.test.ts` and of `vmm/vm-runner.test.ts` returns `createImpDir`, a
 closure that makes a per-test imp directory under the test's temp root from a name the test passes.
@@ -729,11 +729,12 @@ Paths are under `packages/daemon/src/` unless they start with `e2e/`, `scripts/`
     run's MSW server sees them.
 
 The mcp package's tests boot impd's real app with `createImpd` and reach it through the real
-`@zgeoff/imp-client`, whose `fetch` is `impd.api.app.handle`. A test that needs a tool call to wait
-holds impd's read of the imps with `buildQueryGate`. One stand-in models an impd release from before
-the fork's grant report: `packages/mcp/src/test-utils/build-stub-older-impd-fetch.ts`
-(`buildStubOlderImpdFetch`) takes `grantsNotCopied` and `grantsError` out of the real `imps.fork`
-answer. The progress timer of `createImpServer` takes a `repeat`, and the tests pass
+`@zgeoff/imp-client`, on a loopback port where a tool call's exec needs a socket, or with
+`impd.api.app.handle` as its `fetch`. A test that needs a tool call to wait holds impd's read of the
+imps with `buildQueryGate`. One stand-in models an impd release from before the fork's grant report:
+`packages/mcp/src/test-utils/build-stub-older-impd-fetch.ts` (`buildStubOlderImpdFetch`) takes
+`grantsNotCopied` and `grantsError` out of the real `imps.fork` answer. The progress timer of
+`createImpServer` takes a `repeat`, and the tests pass
 `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks only when the
 test says so. The SSE keepalive is the MCP SDK's own interval, which takes only a period, so its
 test passes a short `keepaliveMs` and reads the first frame of a held call's stream. A tool call's
@@ -741,7 +742,7 @@ deadline (`timeoutSeconds`) and kill grace take `createImpServer`'s `after`, `se
 default, and the tests pass `packages/mcp/src/test-utils/build-stub-after.ts` (`buildStubAfter`),
 which fires only when the test says so.
 
-In the `mcp/*.test.ts` files, an exec through impd's real app reaches the guest through
+In the MCP tests, an exec through impd's real app reaches the guest through
 `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path, which runs
 each command on `buildStubExecGuest`; the agent keeps its socket through a sleep or stop and wake.
 The tool tests drive the real server in process through
@@ -750,7 +751,8 @@ in-memory transport and takes one JSON-RPC line at a time. The HTTP tests read a
 answers with `read-mcp-answer.ts` (`readMcpAnswer`), and drive the `2026-07-28` protocol with the
 SDK's own client (`@modelcontextprotocol/client`). `exec-tool.test.ts` passes `buildStubRepeat` and
 `buildStubAfter` as its timers, except one timeout test that keeps the default timers and waits its
-one-second deadline. `imp mcp` runs as a subprocess against impd's app on a loopback port.
+one-second deadline. `packages/cli/src/commands/mcp.test.ts` runs `imp mcp` as a subprocess against
+impd's app on a loopback port.
 
 The broker takes `beforeGrantWrite` (through `createImpd`'s `broker` deps), which runs between a
 grant call's access check and its transaction, as `afterRuleRead` runs between a request's rule read

@@ -2,24 +2,40 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildApiListenOptions } from '@imp/daemon/src/api-listen-options';
 import { loadConfig } from '@imp/daemon/src/config';
 import { createImpd } from '@imp/daemon/src/create-impd';
+import { createImage } from '@imp/daemon/src/db/images';
+import { findImpByName } from '@imp/daemon/src/db/imps';
 import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
+import {
+  buildImagePaths,
+  buildImpPaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '@imp/daemon/src/storage/data-layout';
 import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
 import { buildQueryGate } from '@imp/daemon/src/test-utils/build-query-gate';
 import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '@imp/daemon/src/test-utils/build-stub-exec-guest';
 import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
+import { startStubExecAgent } from '@imp/daemon/src/test-utils/start-stub-exec-agent';
+import { invariant } from '@imp/test-utils/invariant';
+import { waitFor } from '@imp/test-utils/wait-for';
 import { INVALID_PARAMS, METHOD_NOT_FOUND } from '@modelcontextprotocol/server';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { PROTOCOL_VERSIONS } from './create-imp-server';
 import { createImpGuard } from './imp-guard';
+import { buildStubAfter } from './test-utils/build-stub-after';
+import { buildStubRepeat } from './test-utils/build-stub-repeat';
 import { createMcpServer } from './test-utils/create-mcp-server';
 
-// The server's replies, parsed, and a client of impd's real app; an armed
-// `gate` holds impd's next imps read.
+// impd's real app on a loopback port for an exec's socket, a root client,
+// `stack`, whose releases run before impd stops, an armed `gate` that holds
+// impd's next imps read, and the replies of `mcp` or the test's own server
 async function setupTest() {
   // first, so a held read lets go before impd stops
   const gate = buildQueryGate('imps');
@@ -32,18 +48,24 @@ async function setupTest() {
 
   stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 
-  const opened = await openDatabase(':memory:');
+  const db = await openDatabase(':memory:');
 
-  stack.defer(() => opened.destroy());
+  stack.defer(() => db.destroy());
 
   // the stub VMM runs no jailer and builds no boot template; the resolver
   // binds its port on every address, so each impd takes a free one
-  const config = loadConfig({
-    IMP_DATA_DIR: dataDir,
-    IMP_JAILER: 'false',
-    IMP_BOOT_TEMPLATES: 'false',
-    IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
-  });
+  const config = {
+    ...loadConfig({
+      IMP_DATA_DIR: dataDir,
+      IMP_JAILER: 'false',
+      IMP_BOOT_TEMPLATES: 'false',
+      IMP_EGRESS_DNS_PORT: String(findFreePorts(1).take()),
+    }),
+
+    // a new disk stays the size of its image, since the plain-copy clone of
+    // a fork or a checkpoint copies every byte
+    defaultDiskBytes: 0,
+  };
 
   // the system drive impd boots imps with, as setupSystemFiles installs it
   const drive = 'd1'.repeat(32);
@@ -55,9 +77,9 @@ async function setupTest() {
   const vmm = buildStubVmm();
 
   const impd = await createImpd(config, {
-    db: gate.wrap(opened),
+    db: gate.wrap(db),
 
-    // the bearer the tools' client sends
+    // the bearer the root client sends
     rootToken: 'root-token',
     storage: createXfsBackend({ dataDir, cloneFile: (source, target) => copyFile(source, target) }),
 
@@ -74,6 +96,9 @@ async function setupTest() {
     // the host's free space, so impd never reads this machine's disk
     readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
     log: () => {},
+
+    // a frozen clock, so a later read of an imp matches the answer about it
+    now: () => Date.UTC(2026, 0, 1),
 
     // Firecracker, the kernel and the CPU as this host reports them
     readIdentity: (files, ipv6Prefix) => ({
@@ -125,21 +150,57 @@ async function setupTest() {
     impd.diskUsage.stop();
   });
 
-  const client = createImpClient({
-    url: 'http://impd.test',
-    token: 'root-token',
-    fetch: (request) => impd.api.app.handle(request),
+  // as main.ts listens, on a free loopback port
+  const server = impd.api.app.listen({
+    ...buildApiListenOptions(config),
+    port: 0,
+    hostname: '127.0.0.1',
   });
+
+  stack.defer(async () => {
+    await server.stop(true);
+  });
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  // the image every imps.create boots when it names none
+  await Bun.write(buildImagePaths(dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(db, image);
+
+  const url = `http://127.0.0.1:${String(server.server?.port)}`;
+  const repeat = buildStubRepeat();
+  const after = buildStubAfter();
+
+  // progress ticks only when the test steps `repeat` by 1000 ms, and a
+  // stopped command's SIGKILL comes only when the test fires its 50 ms grace
+  const mcp = createMcpServer({
+    version: '1.2.3',
+    killGraceMs: 50,
+    progressIntervalMs: 1000,
+    repeat: repeat.repeat,
+    after: after.after,
+  });
+
+  // its calls in flight end before impd's app closes
+  stack.defer(() => mcp.close());
 
   const sent: unknown[] = [];
 
   return {
+    db,
+    dataDir,
+    stack,
+    url,
+    client: createImpClient({ url, token: 'root-token' }),
+    mcp,
+    repeat,
+    after,
     gate,
     sent,
     reply: (message: string) => {
       sent.push(JSON.parse(message));
     },
-    client,
   };
 }
 
@@ -608,4 +669,288 @@ test.each([
   });
 
   expect(ctx.sent).toBeEmpty();
+});
+
+test('it still answers a cancelled create, so the agent learns the name of what it made', async () => {
+  const ctx = await setupTest();
+
+  const context = {
+    reply: ctx.reply,
+    client: createImpClient({ url: ctx.url, token: 'root-token' }),
+    guard: createImpGuard({ prefix: 'agent-' }),
+    scope: 'manage' as const,
+  };
+
+  ctx.gate.arm();
+
+  const call = ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_create', arguments: {} },
+    }),
+    context,
+  );
+
+  // the create waits inside impd while the cancel lands
+  await ctx.gate.reached;
+
+  await ctx.mcp.receive(
+    JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }),
+    context,
+  );
+
+  const sentAtCancel = [...ctx.sent];
+
+  ctx.gate.release();
+
+  await call;
+
+  const [made] = await ctx.client.imps.list();
+
+  invariant(made);
+
+  // the imp as it crosses impd's API, its dates as ISO strings
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(made));
+  const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  expect(sentAtCancel).toStrictEqual([]);
+  expect(made.name).toStartWith('agent-');
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: {
+          imp: {
+            ...stored,
+
+            // its awake time runs on the wall clock between the answer and the read
+            resources: { ...stored.resources, awakeMs: expect.any(Number) as unknown },
+          },
+        },
+        isError: false,
+      },
+    },
+  ]);
+});
+
+test('it still answers a cancelled fork, so the agent learns the name of what it made', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'agent-src' });
+
+  const context = {
+    reply: ctx.reply,
+    client: createImpClient({ url: ctx.url, token: 'root-token' }),
+    guard: createImpGuard({ prefix: 'agent-' }),
+    scope: 'manage' as const,
+  };
+
+  ctx.gate.arm();
+
+  const call = ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_fork', arguments: { source: 'agent-src' } },
+    }),
+    context,
+  );
+
+  // the fork waits inside impd while the cancel lands
+  await ctx.gate.reached;
+
+  await ctx.mcp.receive(
+    JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }),
+    context,
+  );
+
+  const sentAtCancel = [...ctx.sent];
+
+  ctx.gate.release();
+
+  await call;
+
+  const listed = await ctx.client.imps.list();
+
+  const fork = listed.find((imp) => imp.name !== 'agent-src');
+
+  invariant(fork);
+
+  // the imp as it crosses impd's API, its dates as ISO strings
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(fork));
+  const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  expect(sentAtCancel).toStrictEqual([]);
+  expect(fork.name).toStartWith('agent-');
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: {
+          imp: {
+            ...stored,
+
+            // its awake time runs on the wall clock between the answer and the read
+            resources: { ...stored.resources, awakeMs: expect.any(Number) as unknown },
+          },
+          grantsNotCopied: [],
+        },
+        isError: false,
+      },
+    },
+  ]);
+});
+
+test('it still answers a cancelled restore, so the agent learns the state of the imp', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'agent-src' });
+  await ctx.client.checkpoints.create({ name: 'agent-src', label: 'cp' });
+
+  const context = {
+    reply: ctx.reply,
+    client: createImpClient({ url: ctx.url, token: 'root-token' }),
+    guard: createImpGuard({ prefix: 'agent-' }),
+    scope: 'manage' as const,
+  };
+
+  ctx.gate.arm();
+
+  const call = ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_restore', arguments: { name: 'agent-src', checkpoint: 'cp' } },
+    }),
+    context,
+  );
+
+  // the restore waits inside impd while the cancel lands
+  await ctx.gate.reached;
+
+  await ctx.mcp.receive(
+    JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }),
+    context,
+  );
+
+  const sentAtCancel = [...ctx.sent];
+
+  ctx.gate.release();
+
+  await call;
+
+  const restored = await ctx.client.imps.get({ name: 'agent-src' });
+
+  // the imp as it crosses impd's API, its dates as ISO strings
+  // oxlint-disable-next-line prefer-structured-clone -- the JSON round trip is the point
+  const json: unknown = JSON.parse(JSON.stringify(restored));
+  const stored = z.looseObject({ resources: z.looseObject({}) }).parse(json);
+
+  expect(sentAtCancel).toStrictEqual([]);
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: expect.any(String) as unknown }],
+        structuredContent: {
+          imp: {
+            ...stored,
+
+            // its awake time runs on the wall clock between the answer and the read
+            resources: { ...stored.resources, awakeMs: expect.any(Number) as unknown },
+          },
+        },
+        isError: false,
+      },
+    },
+  ]);
+});
+
+test('it stops reporting progress for a cancelled call', async () => {
+  const ctx = await setupTest();
+
+  const guest = buildStubExecGuest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  invariant(record);
+
+  const agent = await startStubExecAgent(buildImpPaths(ctx.dataDir, record.id).vsockSocket, guest);
+
+  ctx.stack.defer(() => {
+    agent.close();
+  });
+
+  const context = {
+    reply: ctx.reply,
+    client: createImpClient({ url: ctx.url, token: 'root-token' }),
+    guard: createImpGuard({ all: true }),
+    scope: 'manage' as const,
+  };
+
+  const call = ctx.mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'tools/call',
+      params: {
+        name: 'imp_exec',
+        arguments: { name: 'dev', command: 'stubborn' },
+        _meta: { progressToken: 'p' },
+      },
+    }),
+    context,
+  );
+
+  // the command runs in the guest
+  await waitFor(() => {
+    invariant(guest.requests[0]);
+  });
+
+  ctx.repeat.tick(1000);
+
+  await ctx.mcp.receive(
+    JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 9 } }),
+    context,
+  );
+
+  // a tick after the cancel, while the stubborn command still waits for its
+  // SIGKILL
+  ctx.repeat.tick(1000);
+
+  await waitFor(() => {
+    expect(ctx.after.countPending(50)).toBe(1);
+  });
+
+  ctx.after.fire(50);
+
+  await call;
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      method: 'notifications/progress',
+      params: {
+        progressToken: 'p',
+        progress: 1,
+        message: expect.stringMatching(/^still running after \d+ s$/) as unknown,
+      },
+    },
+  ]);
 });
