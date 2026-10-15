@@ -7,8 +7,6 @@ import { updateEnv } from '@imp/test-utils/update-env';
 import { loadConfig } from '../config';
 import { createImage } from '../db/images';
 import { openDatabase } from '../db/open-database';
-import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
-import { checkBuildQuery } from '../docker-proxy/rules';
 import { buildImagePaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
@@ -16,7 +14,7 @@ import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { BUILDER_IMAGE } from './builder-imps';
-import { createImageService, normalizeDockerfilePath, parseDuCount } from './image-service';
+import { createImageService } from './image-service';
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -543,40 +541,3 @@ test('#removeImage removes the rootfs once no image uses its digest', async () =
 
   expect(existsSync(rootfs)).toBeFalse();
 });
-
-test('#parseDuCount reads the count du prints before its path', () => {
-  expect(parseDuCount('4096\t/data/root\n')).toBe(4096);
-});
-
-test('#parseDuCount refuses du output that does not start with a count', () => {
-  expect(() => parseDuCount('du: cannot access')).toThrowWithMessage(
-    TypeError,
-    'du printed du: cannot access',
-  );
-});
-
-test.each([
-  [undefined, 'Dockerfile'],
-  ['./Dockerfile', 'Dockerfile'],
-  ['sub//./web.Dockerfile', 'sub/web.Dockerfile'],
-  ['a/../Dockerfile', 'Dockerfile'],
-])('#normalizeDockerfilePath writes %p as %p, a path the proxy lets through', (given, expected) => {
-  const path = normalizeDockerfilePath(given);
-
-  const query = new Map([
-    ['t', ['imp/x:latest']],
-    ['version', ['2']],
-    ['buildargs', [JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND })]],
-    ['dockerfile', [path]],
-  ]);
-
-  expect(path).toBe(expected);
-  expect(checkBuildQuery(query)).toStrictEqual({ isOk: true });
-});
-
-test.each(['../Dockerfile', 'a/../../Dockerfile', '/etc/passwd', '.', 'sub/'])(
-  '#normalizeDockerfilePath refuses %p, which leaves the context or names it',
-  (path) => {
-    expect(() => normalizeDockerfilePath(path)).toThrow('not a file inside the build context');
-  },
-);

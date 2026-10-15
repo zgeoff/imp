@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -31,14 +30,15 @@ import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { createStubImageMkfs } from '../test-utils/create-stub-image-mkfs';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
-import { HOST_ADD_WARNING, createImageService } from './image-service';
+import { HOST_ADD_WARNING } from './image-adds';
+import { createImageService } from './image-service';
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
 
   onTestFinished(() => stack.disposeAsync());
 
-  const dataDir = await mkdtemp(join(tmpdir(), 'isolated-add-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'image-adds-'));
 
   stack.defer(() => rm(dataDir, { recursive: true, force: true }));
 

@@ -3,6 +3,7 @@ import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { getImpdLogger } from '../process/get-impd-logger';
 import type { ExternalImage } from './dockerfile-check';
+import type { GuestExec } from './guest-exec';
 import { PIN_INSPECT_FORMAT, PinInspectSchema, normalizePlatform } from './image-pin';
 import type { PinInspect } from './image-pin';
 
@@ -124,4 +125,9 @@ export function createBuildEngine(run: EngineRun): BuildEngine {
       });
     },
   };
+}
+
+// a builder's engine, through its agent
+export function toEngineRun(exec: GuestExec): EngineRun {
+  return (argv, signal) => exec(argv, { signal });
 }

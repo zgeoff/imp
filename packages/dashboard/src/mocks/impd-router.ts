@@ -565,8 +565,8 @@ function findImage(name: string): Image {
   return image;
 }
 
-// impd's FALLBACK_DEFAULT_IMAGE (packages/daemon images/image-service.ts),
-// which the daemon does not export
+// impd's FALLBACK_DEFAULT_IMAGE (packages/daemon images/image-adds.ts), copied:
+// that module pulls Bun-only types into the dashboard's DOM typecheck
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 
 // impd's findDefaultImage (packages/daemon images/image-service.ts): the
@@ -690,7 +690,7 @@ function writeTemplate(name: string, imp: Imp): Promise<Image> {
   return writeImageRow(name, { ref: `imp:${imp.name}`, source: 'imp' });
 }
 
-// impd's pull (packages/daemon images/image-service.ts): the name of a
+// impd's pull (packages/daemon images/image-adds.ts): the name of a
 // template is refused, a docker image's is pulled again
 function writeDockerImage(name: string, ref: string): Promise<Image> {
   const existing = imageCollection.findFirst((query) => query.where({ name }));
