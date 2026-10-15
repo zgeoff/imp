@@ -3,7 +3,7 @@ import { DOCKERFILE_FRONTEND } from '../../packages/daemon/src/docker-proxy/dock
 import { buildProxyBuildScript, parseProxyAnswer } from '../lib/docker-proxy-build';
 import { getHostImage, runChecked, runCommand, runInContainer } from '../lib/instance';
 
-// imp-docker-proxy (docs/architecture/host-contract.md#the-docker-socket):
+// imp-docker-proxy (docs/architecture/host.md#the-docker-socket):
 // root in the dev container reaches Docker only through it. It closes the
 // Docker socket path only: SYS_ADMIN still lets root out of the container.
 

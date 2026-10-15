@@ -16,7 +16,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// Spoofed IPv6 sources (docs/architecture/networking.md#ipv6), on the
+// Spoofed IPv6 sources (docs/architecture/network/networking.md#ipv6), on the
 // topology's near network behind NAT66. The instance reboots onto it, and
 // back to its own network at the end.
 

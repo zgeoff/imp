@@ -41,7 +41,7 @@ interface StorageUsage {
 }
 
 // Exclusive is what removing the imp frees; shared, what it holds with an
-// image, another imp or the backup tree. docs/architecture/storage.md has more.
+// image, another imp or the backup tree. docs/architecture/storage/disk-space.md#usage has more.
 export interface ImpDiskUsage {
   readonly exclusiveBytes: number;
   readonly sharedBytes: number;
@@ -57,7 +57,7 @@ export interface DiskUsageReport {
 
 // What the database holds when impd starts. A backend drops what else it
 // finds only when a crash explains it; the rest is an orphan, and stays
-// (docs/architecture/storage.md#cleanup).
+// (docs/architecture/storage/disk-space.md#the-sweep).
 export interface LiveStorage {
   readonly impIds: ReadonlySet<string>;
   readonly checkpointIds: ReadonlySet<string>;
@@ -149,7 +149,7 @@ export interface ReceivedCheckpoint {
   readonly sizeBytes: number;
 }
 
-// The disks, checkpoints and image rootfs files of imps (docs/architecture/storage.md). XFS
+// The disks, checkpoints and image rootfs files of imps (docs/architecture/storage/storage.md). XFS
 // clones files with reflink; ZFS keeps each disk in a dataset, a checkpoint as a snapshot and
 // a fork as a clone.
 export interface StorageBackend {
@@ -161,7 +161,7 @@ export interface StorageBackend {
 
   // Removes what `live` does not name and a crash explains, and the orphans
   // with `isOrphans`. The caller holds the storage gate alone, so nothing is
-  // in flight (docs/architecture/storage.md#cleanup).
+  // in flight (docs/architecture/storage/disk-space.md#the-sweep).
   readonly dropUnnamed: (live: LiveStorage, options: SweepOptions) => Promise<SweepResult>;
 
   // the data layout, with the disk and the memory snapshot where this
@@ -169,7 +169,7 @@ export interface StorageBackend {
   readonly resolveImpPaths: (impId: string) => ImpPaths;
 
   // What a move sends of a stopped, marked imp, until close: `checkpointIds`
-  // oldest first. `zfs` needs a ZFS backend (docs/architecture/moves.md).
+  // oldest first. `zfs` needs a ZFS backend (docs/architecture/storage/moves.md).
   readonly openMoveSource: (
     impId: string,
     checkpointIds: readonly string[],

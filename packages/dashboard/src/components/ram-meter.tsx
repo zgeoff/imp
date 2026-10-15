@@ -8,7 +8,7 @@ interface RamMeterProps {
 
 // The budget as the governor sees it: what awake VMs own, plus what it holds
 // back for boots and wakes in flight. Committed (what awake imps could grow
-// to) may pass the budget (docs/architecture/sleep-and-wake.md).
+// to) may pass the budget (docs/architecture/lifecycle/ram-governor.md).
 export function RamMeter(props: RamMeterProps) {
   const info = props.info;
   const budget = Math.max(info.ramBudgetMib, 1);

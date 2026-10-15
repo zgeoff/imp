@@ -22,7 +22,7 @@ import type { FirecrackerPaths } from './firecracker-process';
 import { isProcessOfUid, stopProcessOfUid } from './process-owner';
 import { writeRegularFile } from './vm-files';
 
-// The Firecracker jailer (docs/architecture/daemon.md#the-jailer): each VM in a
+// The Firecracker jailer (docs/architecture/isolation.md#the-jailer): each VM in a
 // chroot as its imp's own uid, with the files it opens bound in at their own
 // absolute paths, so they have one path inside the jail and out.
 
@@ -47,7 +47,7 @@ interface JailPlan {
   readonly isDiskLate?: boolean;
 }
 
-// A template build's jail (docs/architecture/boot-templates.md#make): its
+// A template build's jail (docs/architecture/lifecycle/boot-templates.md#build): its
 // work dir bound in, run/ the VM's until the seal.
 interface BuildJailPlan {
   readonly id: string;

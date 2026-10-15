@@ -13,7 +13,7 @@ export type ReclaimStep =
 
 // The next step that frees a retired disk or image, or null when none can go
 // yet: promote the newest snapshot's clone, never one in staging, which impd
-// destroys soon (docs/architecture/storage.md#reclaim).
+// destroys soon (docs/architecture/storage/storage.md#zfs).
 export function planReclaimStep(
   entries: readonly ZfsEntry[],
   roots: ReclaimRoots,

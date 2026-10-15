@@ -11,7 +11,7 @@ import {
   writeSync,
 } from 'node:fs';
 
-// Files impd opens as root next to a VM (docs/architecture/daemon.md#the-jailer).
+// Files impd opens as root next to a VM (docs/architecture/isolation.md#the-jailer).
 // Never through a symlink, and never a FIFO, which would block the event loop.
 const SAFE_FLAGS = constants.O_NOFOLLOW | constants.O_NONBLOCK;
 

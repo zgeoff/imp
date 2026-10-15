@@ -1,7 +1,7 @@
 import type { JsonValue } from '@bufbuild/protobuf';
 import * as z from 'zod';
 
-// The agent wire format (docs/architecture/protocol.md#frames):
+// The agent wire format (docs/architecture/guest/protocol.md#one-request-per-connection):
 // `[u8 type][u32 BE length][payload]`.
 
 export const FRAME_TYPES = {

@@ -4,12 +4,12 @@ import type { CommandRunner } from '../process/run-command';
 import type { SlotAddress } from './addressing';
 import { GATEWAY_IP6 } from './addressing6';
 
-// Tap devices for imp slots (docs/architecture/networking.md#addressing). An
+// Tap devices for imp slots (docs/architecture/network/networking.md#addressing). An
 // interface, so tests fake it.
 export interface TapDevices {
   // creates `imp<slot>` with the host end of the /30 and brings it up. With
   // IPv6, the tap also gets the gateway fe80::1 and a route to the imp's
-  // /128. A jailed Firecracker owns its tap (docs/architecture/daemon.md#the-jailer).
+  // /128. A jailed Firecracker owns its tap (docs/architecture/isolation.md#the-jailer).
   readonly setupTap: (address: SlotAddress, owner?: TapOwner | null) => Promise<void>;
 
   // succeeds when it is already gone
@@ -95,7 +95,7 @@ export function createTapDevices(
       );
 
       // the slot's MAC, not a random one, so a guest woken on another host
-      // still knows its gateway (docs/architecture/networking.md#addressing);
+      // still knows its gateway (docs/architecture/network/networking.md#addressing);
       // a tap that exists keeps its own, as its guest knows it
       if (isNew) {
         await runIp(['link', 'set', address.tap, 'address', address.hostMac], []);
@@ -104,7 +104,7 @@ export function createTapDevices(
       await runIp(['addr', 'add', cidr, 'dev', address.tap], ['exists', 'already assigned']);
 
       // before the link is up: a guest never sets the host's routes, with
-      // or without IPv6 (docs/architecture/networking.md#ipv6)
+      // or without IPv6 (docs/architecture/network/networking.md#ipv6)
       await runSysctls(address.tap, {
         accept_ra: '0',
         accept_redirects: '0',

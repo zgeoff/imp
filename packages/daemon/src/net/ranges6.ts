@@ -2,7 +2,7 @@ import { BlockList } from 'node:net';
 import { parseIpv6 } from './addressing6';
 
 // What no open, public or box imp reaches over IPv6, and no broker tunnel
-// dials; docs/architecture/networking.md#blocked-ranges says why, and
+// dials; docs/architecture/network/egress.md#public says why, and
 // ranges6.test.ts checks them against the IANA registry.
 export const BLOCKED_RANGES6: readonly string[] = [
   'fc00::/7',
@@ -29,7 +29,7 @@ export const BLOCKED_RANGES6: readonly string[] = [
 export const DOCUMENTATION_RANGES6: readonly string[] = ['2001:db8::/32', '3fff::/20'];
 
 // The rest of 2001::/23, not globally reachable, refused to public imps
-// only; docs/architecture/networking.md#blocked-ranges says which global
+// only; docs/architecture/network/egress.md#public says which global
 // blocks stay, and why 2001:1::/32 goes whole.
 export const RESERVED_RANGES6: readonly string[] = [
   '2001::/31',

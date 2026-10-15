@@ -27,7 +27,7 @@ export interface ImpRecord {
   readonly vcpus: number;
   readonly memoryMib: number;
 
-  // what the guest may grow to (docs/architecture/memory.md); memoryMib for
+  // what the guest may grow to (docs/architecture/lifecycle/elastic-memory.md); memoryMib for
   // an imp that does not grow
   readonly maxMemoryMib: number;
   readonly slot: number;
@@ -68,7 +68,7 @@ export interface ImpRecord {
   // (docs/architecture/storage/backups.md#imps-left-out)
   readonly isBackedUp: boolean;
 
-  // a warm move's imp until its first wake here (docs/architecture/moves.md#warm-moves)
+  // a warm move's imp until its first wake here (docs/architecture/storage/moves.md#warm-moves)
   readonly isTrustPending: boolean;
 
   // set while the imp moves between hosts (moves/)
@@ -137,7 +137,7 @@ export interface ImpStateChange {
   readonly awakeUntil?: Date;
 
   // the cause the next cold boot records, whichever path boots it: a repair
-  // knows it before that boot (docs/architecture/daemon.md#output-offsets)
+  // knows it before that boot (docs/architecture/guest/sessions.md#generations-boots-and-offsets)
   readonly nextBootCause?: Extract<ColdBootCause, 'recovery' | 'wake_fallback'>;
 }
 
@@ -175,7 +175,7 @@ async function allocateJailUid(db: ImpQueries): Promise<number> {
 }
 
 // The slots imps hold, and those that a warm move's live ticket keeps for
-// the imp it brings (docs/architecture/moves.md#warm-moves): until the
+// the imp it brings (docs/architecture/storage/moves.md#warm-moves): until the
 // commit, once its stream started, else until the stream's start window ends
 async function listTakenSlots(db: ImpQueries, now: number): Promise<Set<number>> {
   const imps = await db.selectFrom('imps').select('slot').execute();

@@ -294,7 +294,7 @@ export const impContract = {
   moves: {
     // the source: marks the imp `sending`, counts what a send to a
     // `targetStorage` target carries; a sleeping imp without `stop` moves
-    // warm when `target` matches (docs/architecture/moves.md#warm-moves)
+    // warm when `target` matches (docs/architecture/storage/moves.md#warm-moves)
     prepare: base
       .input(
         z.object({
@@ -361,7 +361,7 @@ export const impContract = {
       .output(EmptySchema),
   },
 
-  // off-host backups with restic (docs/architecture/backups.md); every call
+  // off-host backups with restic (docs/architecture/storage/backups.md); every call
   // fails with PRECONDITION_FAILED when the host has no repository set
   backups: {
     run: base.output(BackupRunSchema),

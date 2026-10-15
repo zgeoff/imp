@@ -25,7 +25,7 @@ interface CreateImpInput {
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
 
-  // what the guest may grow to; memoryMib by default (docs/architecture/memory.md)
+  // what the guest may grow to; memoryMib by default (docs/architecture/lifecycle/elastic-memory.md)
   readonly maxMemoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
   readonly policy?: EgressPolicy | undefined;
@@ -86,7 +86,7 @@ export interface ImpCommands {
   readonly readUrls: (name: string) => Promise<ImpUrls>;
 
   // snapshot memory to disk and stop Firecracker
-  // (docs/architecture/sleep-and-wake.md#sleep); `force` as for stopImp
+  // (docs/architecture/lifecycle/sleep-and-wake.md#sleep); `force` as for stopImp
   readonly sleepImp: (name: string, force?: boolean) => Promise<Imp>;
 
   // a sleeping imp resumes from its snapshot, a stopped one boots cold; an

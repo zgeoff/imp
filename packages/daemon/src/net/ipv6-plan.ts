@@ -8,7 +8,7 @@ import { readErrorMessage } from '../read-error-message';
 import { buildUlaPrefix, formatCidr6, parsePrefix64 } from './addressing6';
 import type { Prefix64 } from './addressing6';
 
-// IMP_SUBNET6 (docs/architecture/networking.md#ipv6): `auto` is a unique
+// IMP_SUBNET6 (docs/architecture/network/networking.md#ipv6): `auto` is a unique
 // local /64 behind NAT66, when the host container has an IPv6 route out;
 // a routed /64 is used as it is; `off` gives imps no IPv6.
 export type Ipv6Setting =
@@ -55,7 +55,7 @@ export interface Ipv6PlanDeps {
 
 // The plan, or null when imps get no IPv6, logged either way. It fails
 // closed: no setup-net rules, or no NAT66 when auto needs it, means no IPv6
-// (docs/architecture/networking.md#ipv6).
+// (docs/architecture/network/networking.md#ipv6).
 export async function resolveIpv6Plan(
   setting: Ipv6Setting,
   deps: Ipv6PlanDeps,
@@ -117,7 +117,7 @@ async function removeNat66(deps: Readonly<Pick<Ipv6PlanDeps, 'runNft'>>): Promis
 }
 
 // What setup-net.sh puts in place for imps' IPv6
-// (docs/architecture/networking.md#ipv6), by table.
+// (docs/architecture/network/networking.md#ipv6), by table.
 const HOST_RULES6: readonly (readonly [string, string])[] = [
   ['filter', '-A INPUT -i imp+ -j DROP'],
   ['filter', '-A FORWARD -i imp+ -o imp+ -j DROP'],

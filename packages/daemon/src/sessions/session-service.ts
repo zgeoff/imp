@@ -14,7 +14,7 @@ import { readSeenSessions } from './count-sessions';
 import { toSeenSessions } from './session-cache';
 import { toApiSession } from './to-api-session';
 
-// The `sessions` API (docs/architecture/protocol.md#sessions). The sessions
+// The `sessions` API (docs/architecture/guest/sessions.md#in-the-guest). The sessions
 // live in the guest; impd keeps what it last saw, so a list never wakes an
 // imp.
 export interface SessionService {

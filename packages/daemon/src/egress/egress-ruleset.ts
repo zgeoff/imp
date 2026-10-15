@@ -1,6 +1,6 @@
 import type { EgressMode } from '@impz/api';
 
-// The nftables table impd owns (docs/architecture/networking.md#the-firewall).
+// The nftables table impd owns (docs/architecture/network/egress.md#the-firewall).
 // It only drops and rejects: setup-net.sh's FORWARD rules still accept what
 // it lets through, and a drop in any base chain is final.
 const EGRESS_TABLE = 'inet imp_egress';
@@ -302,7 +302,7 @@ function formatTap(tap: string): string {
   return `"${tap}"`;
 }
 
-// NAT66 for a unique local prefix (docs/architecture/networking.md#ipv6), in
+// NAT66 for a unique local prefix (docs/architecture/network/networking.md#ipv6), in
 // a table of its own: written once at start, never with the egress table
 // NAT66 gone, whether it was there or not: IPv6 off, or a routed /64
 export function buildNat66Removal(): string {

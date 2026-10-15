@@ -93,7 +93,7 @@ export async function sendPing(vsockPath: string, timeoutMs = 2000): Promise<Pin
 }
 
 // What a guest restored from a boot template needs to become one imp
-// (docs/architecture/boot-templates.md#claim).
+// (docs/architecture/lifecycle/boot-templates.md#restore).
 export interface Claim {
   readonly id: string;
   readonly hostname: string;

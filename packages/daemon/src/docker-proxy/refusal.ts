@@ -29,7 +29,7 @@ export function formatEngineFailure(message: string): string {
 }
 
 // The proxy's refusal when it is the whole text: its 403 body, or stderr of
-// the engine error alone (docs/architecture/host-contract.md#the-docker-socket).
+// the engine error alone (docs/architecture/host.md#the-docker-socket).
 // A registry's text can add lines, so a refusal among others is none.
 export function readProxyRefusal(text: string): string | null {
   const body = readJsonMessage(text.trim());

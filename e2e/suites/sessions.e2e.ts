@@ -12,7 +12,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { openTerminal } from '../lib/terminal';
 import { waitFor } from '../lib/wait-for';
 
-// Sessions (docs/architecture/agent.md) through `impz console` and `impz attach`
+// Sessions (docs/architecture/guest/sessions.md) through `impz console` and `impz attach`
 // on a pseudo-terminal, as a user at a terminal. Ctrl-] (\u001D) detaches.
 
 // one stack for every release, so each terminal closes before its imp goes

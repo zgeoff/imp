@@ -11,7 +11,7 @@ export type MoveState = z.infer<typeof MoveStateSchema>;
 export const PeerUrlSchema = z.url({ protocol: /^https?$/ });
 
 // What a host must share with the source of a warm move
-// (docs/architecture/moves.md#warm-moves): what loads a memory snapshot,
+// (docs/architecture/storage/moves.md#warm-moves): what loads a memory snapshot,
 // and what the snapshot holds of the host
 export const WarmHostSchema = z.object({
   firecrackerVersion: z.string(),

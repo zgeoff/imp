@@ -15,7 +15,7 @@ export interface SystemFiles {
 
 // Copies the kernel and the system drive into <dataDir>/system; each is
 // hashed once here. Drives are content-addressed and never written over
-// (docs/architecture/storage.md#system-files).
+// (docs/architecture/storage/storage.md#system-files).
 export async function setupSystemFiles(config: Config): Promise<SystemFiles> {
   const kernelSource = config.kernelSource ?? config.kernelPath;
 

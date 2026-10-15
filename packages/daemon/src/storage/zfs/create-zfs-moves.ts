@@ -41,7 +41,7 @@ interface ZfsMoveContext {
 }
 
 // A move's side of the ZFS backend: its source as streams or read-only
-// clones, and the streams it receives (docs/architecture/moves.md#zfs-to-zfs)
+// clones, and the streams it receives (docs/architecture/storage/moves.md#zfs)
 export function createZfsMoves(
   ctx: ZfsMoveContext, // oxlint-disable-line prefer-readonly-parameter-types -- the backend's held snapshots, which a move adds to and clears
 ): Pick<StorageBackend, 'openMoveSource' | 'receiveMoveSnapshots'> {
@@ -98,7 +98,7 @@ export function createZfsMoves(
 
   // The snapshots in the order they were made, each incremental from the
   // last one before it on its dataset, a clone stream from its dataset's
-  // origin, or else full (docs/architecture/moves.md#zfs-to-zfs)
+  // origin, or else full (docs/architecture/storage/moves.md#zfs)
   const planSendSteps = async (
     entries: readonly ZfsEntry[],
     wanted: ReadonlyMap<string, string | null>,
@@ -164,7 +164,7 @@ export function createZfsMoves(
 
   // Each stream into staging, then the disk's into place and the others
   // retired, as a restore leaves them. What a failure leaves:
-  // docs/architecture/moves.md#zfs-to-zfs
+  // docs/architecture/storage/moves.md#zfs
   const writeReceived = async (
     impId: string,
     steps: readonly ReceiveStep[],

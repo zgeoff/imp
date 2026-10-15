@@ -38,7 +38,7 @@ export interface AgentExecRequest {
   readonly session?: string;
 
   // after a stop signal, how long the rest of the process group gets before
-  // the agent kills it; see docs/architecture/protocol.md#exec
+  // the agent kills it; see docs/architecture/guest/protocol.md#the-schema
   readonly killGraceMs?: number;
 
   // with a session: the output after this byte, not a replay
@@ -90,7 +90,7 @@ export interface ExecStream {
   readonly groupKill: boolean;
 
   // a session's place in its output, null for a plain exec; coldBoots is
-  // empty until impd adds the imp's (docs/architecture/daemon.md#output-offsets)
+  // empty until impd adds the imp's (docs/architecture/guest/sessions.md#generations-boots-and-offsets)
   readonly output: SessionOutput | null;
   readonly writeStdin: (data: Uint8Array) => void;
 

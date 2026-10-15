@@ -88,7 +88,7 @@ interface HostNetwork {
 }
 
 export interface HostArgs {
-  // replaces --privileged (docs/architecture/host-contract.md#privileges)
+  // replaces --privileged (docs/architecture/host.md#privileges)
   readonly privileges: Lines;
 
   readonly probed: readonly Probed[];

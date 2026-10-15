@@ -12,7 +12,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// Session output offsets (docs/architecture/daemon.md#output-offsets): a
+// Session output offsets (docs/architecture/guest/sessions.md#generations-boots-and-offsets): a
 // client resumes from the byte it last saw, and learns what it missed.
 
 // one stack for every release, so each session socket closes before its imp

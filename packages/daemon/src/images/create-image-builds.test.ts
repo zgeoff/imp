@@ -1282,7 +1282,7 @@ test('it writes nothing into the host directory an /etc/imp link names', async (
 
 // A build's disk hold against what it takes on a real filesystem: a small
 // one that IMP_TEST_SMALL_FS names (CI mounts a loop XFS for it;
-// docs/architecture/storage.md#disk-budget). Without it these skip.
+// docs/architecture/storage/disk-space.md#the-budget). Without it these skip.
 test.skipIf(process.env['IMP_TEST_SMALL_FS'] === undefined)(
   'it takes no more than its hold for a one-file image on a small filesystem',
   async () => {

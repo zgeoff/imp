@@ -14,7 +14,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// Elastic memory (docs/architecture/memory.md): a 256 MiB guest that may grow
+// Elastic memory (docs/architecture/lifecycle/elastic-memory.md): a 256 MiB guest that may grow
 // to 1 GiB, which stays the most this suite boots. One imp grows, shrinks,
 // then sleeps and wakes, each step on what the one before it left plugged.
 

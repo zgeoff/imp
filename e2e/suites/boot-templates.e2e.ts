@@ -19,7 +19,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
-// Boot templates (docs/architecture/boot-templates.md): every restored imp
+// Boot templates (docs/architecture/lifecycle/boot-templates.md): every restored imp
 // is its own machine. Each test removes the templates of its shape after
 // its imps, so a later run never starts on one.
 

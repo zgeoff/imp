@@ -15,7 +15,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// Egress policies over IPv6 (docs/architecture/networking.md#ipv6), on the
+// Egress policies over IPv6 (docs/architecture/network/networking.md#ipv6), on the
 // topology's near network behind NAT66. The instance reboots onto it, and
 // back to its own network at the end.
 

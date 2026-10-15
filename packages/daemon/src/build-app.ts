@@ -68,7 +68,7 @@ export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
   // `POST /images/build`: a build context streamed from the client
   readonly buildContexts: BuildContextRoute;
 
-  // `POST /move/*`: another host's side of a move (docs/architecture/moves.md)
+  // `POST /move/*`: another host's side of a move (docs/architecture/storage/moves.md)
   readonly moves: MoveService;
 
   // where an unexpected RPC failure is logged; stderr by default

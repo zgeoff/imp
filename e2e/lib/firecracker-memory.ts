@@ -31,7 +31,7 @@ export interface FirecrackerMemory {
   readonly pssMib: number;
 
   // anonymous and shmem pages: what the governor counts and the budget caps
-  // (docs/architecture/sleep-and-wake.md#5-ram-what-the-governor-measures)
+  // (docs/architecture/lifecycle/ram-governor.md#what-it-measures)
   readonly ownedMib: number;
   readonly count: number;
 

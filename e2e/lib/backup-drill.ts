@@ -6,7 +6,7 @@ import { runImp } from './imp-cli';
 import { REPO_ROOT, instance, runChecked, runCommand, runInContainer } from './instance';
 import { waitFor } from './wait-for';
 
-// The restore drill's repository (docs/architecture/backups.md): MinIO in a
+// The restore drill's repository (docs/architecture/storage/backups.md): MinIO in a
 // container that shares the dev instance's network, so impd reaches it on
 // 127.0.0.1:9000, pinned by digest.
 const MINIO_IMAGE =

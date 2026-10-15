@@ -13,7 +13,7 @@ interface DockerOptions {
 }
 
 // A refusal by imp-docker-proxy as the client's BAD_REQUEST, with the
-// proxy's message alone (docs/architecture/host-contract.md#the-docker-socket);
+// proxy's message alone (docs/architecture/host.md#the-docker-socket);
 // null when the output holds none
 export function readRefusalError(call: string, output: string): ORPCError<string, unknown> | null {
   const refusal = readProxyRefusal(output);

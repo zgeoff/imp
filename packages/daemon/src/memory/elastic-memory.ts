@@ -1,11 +1,11 @@
 import { ORPCError } from '@orpc/server';
 
-// Elastic memory (docs/architecture/memory.md): an imp boots with memoryMib
+// Elastic memory (docs/architecture/lifecycle/elastic-memory.md): an imp boots with memoryMib
 // and a virtio-mem region it can grow into, up to maxMemoryMib.
 
 // Movable memory cannot hold the kernel's own allocations, so a guest that is
 // mostly hot-plugged memory runs out of kernel memory first
-// (docs/architecture/memory.md#limits).
+// (docs/architecture/lifecycle/elastic-memory.md#limits).
 const MAX_GROWTH_FACTOR = 4;
 
 // virtio-mem's units: the region is whole slots, a plug or an unplug whole
@@ -23,13 +23,13 @@ export const GROW_STEP_MIB = 256;
 
 // a guest with less than this free grows: the larger of 128 MiB and 15 % of
 // what it has. The stats lag up to 1 s and a tick is 500 ms, so the margin
-// covers a burst of about 100 MiB/s (docs/architecture/memory.md#growing).
+// covers a burst of about 100 MiB/s (docs/architecture/lifecycle/elastic-memory.md#the-controller).
 const LOW_FLOOR_MIB = 128;
 const LOW_FRACTION = 0.15;
 
 // The guest's struct pages for plugged memory, paid in its base memory: 64
 // bytes per 4 KiB page. Measured: 3 GiB plugged cost 48 MiB, and an unplugged
-// region nothing (docs/architecture/memory.md#what-it-costs).
+// region nothing (docs/architecture/lifecycle/elastic-memory.md#how-the-guest-grows).
 const STRUCT_PAGE_MIB_PER_GIB = 16;
 
 // the hot-plug region of an imp, in MiB: whole slots covering max − memory;

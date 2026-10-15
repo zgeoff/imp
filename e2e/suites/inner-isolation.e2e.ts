@@ -12,7 +12,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
 // User code runs in the inner container over the user disk; the agent stays
-// outside it (docs/architecture/agent.md#the-inner-container). Nothing done
+// outside it (docs/architecture/guest/agent.md#the-inner-container). Nothing done
 // inside may take the agent down. Each test boots its own imp.
 
 async function setupTest() {

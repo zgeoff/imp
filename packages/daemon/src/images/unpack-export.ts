@@ -5,7 +5,7 @@ import type { CommandResult } from '../process/run-command';
 
 // CAP_SETFCAP's bit in /proc/<pid>/status (linux/capability.h)
 const CAP_SETFCAP_BIT = 31n;
-const SETFCAP_HELP = 'imp-host needs CAP_SETFCAP (docs/architecture/host-contract.md#privileges)';
+const SETFCAP_HELP = 'imp-host needs CAP_SETFCAP (docs/architecture/host.md#privileges)';
 
 // GNU tar's `--xattrs` alone restores only `user.*`; docker export writes
 // file capabilities as `security.capability`. Run with LC_ALL=C, which keeps

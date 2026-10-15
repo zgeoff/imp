@@ -18,7 +18,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// IMP_KSM with real merges (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
+// IMP_KSM with real merges (docs/architecture/lifecycle/ram-governor.md#ksm).
 // KSM is global to the kernel: CI turns it on, and on any other host the
 // suite skips. Its settings put the instance on KSM and a 512 MiB budget.
 
@@ -155,7 +155,7 @@ test.skipIf(!checkHostRunsKsm())(
 );
 
 // Plugged memory is guest memory KSM may merge, as its boot memory is
-// (docs/architecture/memory.md#how-the-guest-grows).
+// (docs/architecture/lifecycle/elastic-memory.md#how-the-guest-grows).
 test.skipIf(!checkHostRunsKsm())(
   'it makes the memory an elastic guest grows into private and mergeable, as its boot memory is',
   async () => {

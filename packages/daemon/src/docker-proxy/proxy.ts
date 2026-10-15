@@ -1,6 +1,6 @@
 // imp-docker-proxy's handler: a call impd or its `docker` CLI makes, checked and
 // rebuilt. It closes the Docker socket path only; SYS_ADMIN still lets root
-// out of imp-host (docs/architecture/host-contract.md).
+// out of imp-host (docs/architecture/host.md#the-docker-socket).
 
 import { z } from 'zod';
 import { formatEngineFailure, formatRefusal } from './refusal';

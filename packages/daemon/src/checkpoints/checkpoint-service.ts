@@ -48,7 +48,7 @@ export interface CheckpointService {
   readonly restoreCheckpoint: (name: string, ref: string) => Promise<Imp>;
 
   // disk only: a memory fork would duplicate entropy and IDs
-  // (docs/architecture/storage.md#checkpoints-restores-and-forks)
+  // (docs/architecture/storage/storage.md#checkpoints-restores-and-forks)
   readonly forkImp: (input: ForkInput) => Promise<ForkedImp>;
 }
 
@@ -227,7 +227,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         const started = performance.now();
 
         // a failed clone leaves the imp as it was; the halt kills the VM,
-        // whose disk and memory go anyway (docs/architecture/storage.md)
+        // whose disk and memory go anyway (docs/architecture/storage/storage.md)
         const halted = await storage.restoreCheckpoint(imp.id, checkpoint.id, async () => {
           const stopped = await deps.imps.haltImp(imp, false);
 

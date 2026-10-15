@@ -14,7 +14,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// Egress policies in real guests (docs/architecture/networking.md#egress):
+// Egress policies in real guests (docs/architecture/network/egress.md):
 // impd's nft table, its resolver, and the nat redirect of port 53. The
 // public hosts are example.com and Quad9; this machine is the private one.
 

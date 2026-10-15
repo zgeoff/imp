@@ -12,7 +12,7 @@ import { buildTestApp, createImpTest, findBrokenInvariants } from './test-imps';
 
 // Cold boots with IMP_BOOT_TEMPLATES on, over the stub VMM: the first boot
 // of a shape boots the kernel and builds the template beside it; later ones
-// restore it (docs/architecture/boot-templates.md).
+// restore it (docs/architecture/lifecycle/boot-templates.md).
 
 async function setupTest(
   config: Readonly<{

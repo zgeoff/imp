@@ -32,7 +32,7 @@ export function readPresentedLeases(imp: Imp): readonly LeaseRecord[] | undefine
 }
 
 // Imp records as the API shows them; the URLs follow
-// docs/architecture/networking.md#urls.
+// docs/architecture/network/ingress.md#the-wake-proxy.
 export interface ImpPresenter {
   readonly toApi: (imp: ImpRecord) => Promise<Imp>;
   readonly toApiList: (imps: readonly ImpRecord[]) => Promise<Imp[]>;

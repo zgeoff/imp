@@ -20,7 +20,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// IPv6 for imps (docs/architecture/networking.md#ipv6) behind NAT66: the
+// IPv6 for imps (docs/architecture/network/networking.md#ipv6) behind NAT66: the
 // instance reboots onto the topology's near network with a ULA /64, and
 // back to its own network at the end.
 

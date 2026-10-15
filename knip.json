@@ -17,6 +17,8 @@
         "e2e/main.ts",
         "e2e/suites/*.e2e.ts",
         "scripts/ci/run-related-tests.ts",
+        // a one-off rewrite of doc citations, kept as the record of how they moved
+        "scripts/dev/rewrite-doc-citations.ts",
         // a protoc plugin buf.gen.yaml runs
         "scripts/proto/protoc-gen-protocol-reference.ts"
       ],

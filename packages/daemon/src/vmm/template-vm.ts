@@ -30,7 +30,7 @@ const CLAIMED_AGENT_DEADLINE_MS = 10_000;
 // cold boot's backoff
 const RESTORE_PING_DELAY_MS = 5;
 
-// The cold boot a template is made from (docs/architecture/boot-templates.md).
+// The cold boot a template is made from (docs/architecture/lifecycle/boot-templates.md).
 export interface TemplateBuildPlan {
   readonly firecrackerBin: string;
   readonly kernelPath: string;

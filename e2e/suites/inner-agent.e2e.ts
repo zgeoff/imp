@@ -9,7 +9,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { startTextCapture } from '../lib/text-capture';
 import { waitFor } from '../lib/wait-for';
 
-// `impz exec --agent` (docs/architecture/agent.md#outer-exec): a root shell
+// `impz exec --agent` (docs/architecture/guest/agent.md#execs-and-services): a root shell
 // beside the inner container, in the agent's own 32 MiB cgroup.
 
 async function setupTest() {

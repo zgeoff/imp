@@ -28,7 +28,7 @@ interface ColdVmStart {
 
 // A cold boot: a restore of the shape's boot template when one is ready,
 // else the kernel's boot. A template that fails to restore goes, and the
-// imp boots the kernel (docs/architecture/boot-templates.md#restore).
+// imp boots the kernel (docs/architecture/lifecycle/boot-templates.md#restore).
 export async function startColdVm(
   context: ImpContext,
   start: Readonly<ColdVmStart>,
@@ -40,7 +40,7 @@ export async function startColdVm(
   const hostSteps = start.hostSteps;
 
   // a template has no hot-plug region: an elastic imp boots the kernel
-  // (docs/architecture/memory.md#limits)
+  // (docs/architecture/lifecycle/elastic-memory.md#limits)
   const template =
     imp.maxMemoryMib > imp.memoryMib
       ? null

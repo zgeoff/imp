@@ -32,7 +32,7 @@ function readMib(parsed: object, key: string, text: string): number {
 
 // What impd's memory controller reads for an awake imp: the balloon
 // statistics on its Firecracker's API socket, jailed or not, which lag the
-// guest (docs/architecture/memory.md#growing).
+// guest (docs/architecture/lifecycle/elastic-memory.md#the-controller).
 export async function readBalloonStats(impID: string): Promise<BalloonStats> {
   const socket = `/var/lib/imp/imps/${impID}/run/api.sock`;
 

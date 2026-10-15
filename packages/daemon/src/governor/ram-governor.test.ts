@@ -7,7 +7,7 @@ import type { RoomLeft } from '../test-utils/build-stub-governed-host';
 import { buildStubGovernedHostArbitraries } from '../test-utils/build-stub-governed-host-arbitraries';
 import { ENFORCE_INTERVAL_MS, createRamGovernor } from './ram-governor';
 
-// docs/architecture/sleep-and-wake.md says every 5 s, and the scale e2e suite
+// docs/architecture/lifecycle/ram-governor.md#enforcement says every 5 s, and the scale e2e suite
 // allows use over the budget for that long
 test('it enforces the budget every 5 s, as the docs say', () => {
   expect(ENFORCE_INTERVAL_MS).toBe(5000);

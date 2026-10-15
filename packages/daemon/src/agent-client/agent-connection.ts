@@ -13,7 +13,7 @@ const PAUSE_FRAMES = 64;
 const RESUME_FRAMES = 16;
 
 // One agent connection carries one request
-// (docs/architecture/protocol.md#transport).
+// (docs/architecture/guest/protocol.md#one-request-per-connection).
 export interface AgentConnection {
   readonly send: (type: FrameType, payload?: Uint8Array) => void;
 

@@ -46,7 +46,7 @@ export interface StorageGcService {
 }
 
 // The GC: the same sweep as start, while nothing that could make storage
-// without its row yet is in flight (docs/architecture/storage.md#cleanup).
+// without its row yet is in flight (docs/architecture/storage/disk-space.md#the-sweep).
 // Only `impz gc --orphans` takes orphans.
 export function createStorageGc(deps: StorageGcDeps): StorageGcService {
   const hourly = { lastKept: null as string | null };

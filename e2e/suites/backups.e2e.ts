@@ -39,7 +39,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// The restore drill (docs/architecture/backups.md). Each test reboots the
+// The restore drill (docs/architecture/storage/backups.md). Each test reboots the
 // instance with backups on to a MinIO of its own, with the schedule every
 // 60 s, and back to no backups at its end.
 

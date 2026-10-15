@@ -1,4 +1,4 @@
-// IPv6 for imps (docs/architecture/networking.md#ipv6): one /64 per host,
+// IPv6 for imps (docs/architecture/network/networking.md#ipv6): one /64 per host,
 // and one /128 per imp in it. The interface ID is the imp's IPv4 address, so
 // a packet capture reads the same imp in both families.
 

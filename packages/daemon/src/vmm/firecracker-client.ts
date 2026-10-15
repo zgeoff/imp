@@ -36,9 +36,9 @@ interface Vsock {
   readonly udsPath: string;
 }
 
-// docs/architecture/sleep-and-wake.md#sleep: free page reporting hands memory
+// docs/architecture/lifecycle/sleep-and-wake.md#sleep: free page reporting hands memory
 // the guest frees back to the host. impd never inflates it, so
-// deflate_on_oom has nothing to give back (docs/architecture/memory.md).
+// deflate_on_oom has nothing to give back (docs/architecture/lifecycle/elastic-memory.md).
 interface Balloon {
   readonly amountMib: number;
   readonly deflateOnOom: boolean;
@@ -46,7 +46,7 @@ interface Balloon {
   readonly freePageReporting: boolean;
 }
 
-// a virtio-mem region the guest can grow into (docs/architecture/memory.md)
+// a virtio-mem region the guest can grow into (docs/architecture/lifecycle/elastic-memory.md)
 interface HotplugMemory {
   readonly totalSizeMib: number;
   readonly slotSizeMib: number;
@@ -70,7 +70,7 @@ interface SnapshotFiles {
   readonly memFilePath: string;
 }
 
-// A boot template's restore (docs/architecture/boot-templates.md): the
+// A boot template's restore (docs/architecture/lifecycle/boot-templates.md): the
 // imp's own tap and vsock socket in place of the ones the snapshot names.
 interface SnapshotOverrides {
   readonly ifaceId: string;

@@ -12,7 +12,7 @@ import type { MoveSender, MoveSenderDeps } from './move-sender';
 import { createPeerRanges } from './peer-address';
 import { readWarmHost } from './warm-facts';
 
-// Moves between hosts (docs/architecture/moves.md): this host as a source,
+// Moves between hosts (docs/architecture/storage/moves.md): this host as a source,
 // its sender, and as a target, its receiver
 export type MoveService = MoveSender &
   Pick<MoveReceiver, 'issueTicket' | 'reissueTicket' | 'handle'> & {
@@ -80,7 +80,7 @@ export function createMoveService(deps: MoveServiceDeps): MoveService {
 
   // The first wake after a warm move installs this host's broker CA in the
   // guest at once, not at its first exec: until then the guest trusts the
-  // source's (docs/architecture/moves.md#warm-moves)
+  // source's (docs/architecture/storage/moves.md#warm-moves)
   const applyPendingTrust = async (imp: ImpRecord): Promise<void> => {
     try {
       const isPending = await claimTrustPending(deps.db, imp.id);

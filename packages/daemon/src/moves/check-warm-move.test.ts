@@ -250,7 +250,7 @@ test('it lets the first wake on the target hold the memory an elastic imp had pl
 });
 
 // The target's Firecracker runs as the uid the target gives the imp, never
-// the source's (docs/architecture/daemon.md#the-jailer)
+// the source's (docs/architecture/isolation.md#the-jailer)
 test("it gives a jailed imp moved warm the target's own jail uid", async () => {
   const ctx = await setupTest({
     isShared: true,

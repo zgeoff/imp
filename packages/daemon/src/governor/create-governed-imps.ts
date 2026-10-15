@@ -56,7 +56,7 @@ export function createGovernedImps(deps: GovernedDeps): {
   // an open exec session or proxied request pins the imp, like a hold
   const isBusy = (id: string) => imps.isImpBusy(id) || imps.tracker.count(id) > 0;
 
-  // elastic guests grow and shrink here (docs/architecture/memory.md)
+  // elastic guests grow and shrink here (docs/architecture/lifecycle/elastic-memory.md)
   const memory = createMemoryController({
     listElastic: async () => {
       const listed = await listImps(deps.db);

@@ -4,7 +4,7 @@ import * as z from 'zod';
 
 // Docker's default profile, moby/profiles 6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef
 // seccomp/default.json, plus pivot_root. To follow upstream, append the rule to the new file
-// and update the commit and the digest here (docs/architecture/host-contract.md).
+// and update the commit and the digest here (docs/architecture/host.md#privileges).
 test('it is the moby/profiles default profile at 6fe7deb plus pivot_root', () => {
   const text = readFileSync(new URL('imp-host.seccomp.json', import.meta.url), 'utf8');
 

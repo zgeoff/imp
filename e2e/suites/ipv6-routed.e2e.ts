@@ -19,7 +19,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// A routed /64 for imps (docs/architecture/networking.md#ipv6): the router
+// A routed /64 for imps (docs/architecture/network/networking.md#ipv6): the router
 // sends the topology's third /64 to the host, and each imp dials out from its
 // own address in it. The instance ends back on its own network.
 

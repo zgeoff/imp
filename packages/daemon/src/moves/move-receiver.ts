@@ -78,7 +78,7 @@ import type { PeerRanges } from './peer-address';
 import { findWarmMismatches } from './warm-facts';
 
 // a stream must start this soon after its ticket; the commit is good this
-// long after the receipt (docs/architecture/moves.md#tickets)
+// long after the receipt (docs/architecture/storage/moves.md#one-live-copy)
 const STREAM_WINDOW_MS = 10 * 60 * 1000;
 const COMMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const ID_ATTEMPTS = 5;

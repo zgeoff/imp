@@ -28,7 +28,7 @@ import type { JailUser } from '../vmm/jail';
 import type { TemplateBuildPlan } from '../vmm/template-vm';
 
 // The cmdline of every template: the agent parks for a claim, and nothing in
-// it names an imp (docs/architecture/boot-templates.md#make)
+// it names an imp (docs/architecture/lifecycle/boot-templates.md#build)
 export const TEMPLATE_BOOT_ARGS = [...BASE_BOOT_ARGS, 'imp.template=1'].join(' ');
 
 // The template VM's own tap: it is only ever opened by a build, one at a
@@ -53,7 +53,7 @@ const PLACEHOLDER_BYTES = 1024 * 1024;
 const PLACEHOLDER_NAME = 'placeholder.ext4';
 const MIB = 1024 * 1024;
 
-// docs/architecture/boot-templates.md#limits has why each is what it is
+// docs/architecture/lifecycle/boot-templates.md#restore has why each is what it is
 const MIN_MISSES = 2;
 const MAX_TEMPLATES = 4;
 const MAX_BUILD_FAILURES = 3;
@@ -152,7 +152,7 @@ interface KeyRecord {
 
 // Everything a restore inherits from the snapshot; the drive's sha covers
 // the agent, and the image is not in it, since the disk is the imp's own
-// (docs/architecture/boot-templates.md#key).
+// (docs/architecture/lifecycle/boot-templates.md#the-key).
 export function buildTemplateKey(identity: Readonly<HostIdentity>, shape: Readonly<TemplateShape>) {
   const fields = {
     guestKernel: identity.guestKernel,

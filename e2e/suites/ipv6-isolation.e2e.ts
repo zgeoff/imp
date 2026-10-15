@@ -19,7 +19,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// Isolation over IPv6 (docs/architecture/networking.md#ipv6): an imp reaches
+// Isolation over IPv6 (docs/architecture/network/networking.md#ipv6): an imp reaches
 // neither another imp nor the host, on the topology's near network behind
 // NAT66. The instance reboots onto it, and back to its own network at the end.
 

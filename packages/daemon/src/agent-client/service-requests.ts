@@ -13,7 +13,7 @@ import {
 import { decodeAgentMessage } from './decode-agent-message';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 
-// The agent's services ops (docs/architecture/protocol.md#servicesadd-servicesremove-servicesrestart). Each
+// The agent's services ops (docs/architecture/guest/agent.md#execs-and-services). Each
 // throws AgentError NO_SERVICE for a name it does not have, and
 // AGENT_OUTDATED for an agent from before them.
 

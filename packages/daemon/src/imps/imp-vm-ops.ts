@@ -44,7 +44,7 @@ import { startColdVm } from './start-cold-vm';
 const SLEEP_SHRINK_LIMIT_MS = 2000;
 
 // snapshot writes put the whole mem file through the page cache
-// (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 8): a few at a time
+// (docs/architecture/lifecycle/sleep-and-wake.md#sleep): a few at a time
 const SLEEP_CONCURRENCY = 2;
 
 // how long a sleep waits for the services list it records
@@ -76,7 +76,7 @@ export interface ImpVmOps {
   readonly writeFailure: (imp: LockedImp, error: unknown) => Promise<void>;
 
   // boots the imp's disk; a memory snapshot is dropped first. `cause` is
-  // what the boot records (docs/architecture/daemon.md#output-offsets).
+  // what the boot records (docs/architecture/guest/sessions.md#generations-boots-and-offsets).
   readonly startImpVm: (
     imp: LockedImp,
     cause: Extract<ColdBootCause, 'start' | 'restore'>,
@@ -91,7 +91,7 @@ export interface ImpVmOps {
   // memory are thrown away next.
   readonly stopImpVm: (imp: LockedImp, graceful?: boolean) => Promise<LockedImp>;
 
-  // snapshots the VM and stops it (docs/architecture/sleep-and-wake.md#sleep);
+  // snapshots the VM and stops it (docs/architecture/lifecycle/sleep-and-wake.md#sleep);
   // a failed snapshot leaves it running, a failure after the kill stops the
   // imp. A sleep that gives way to a busy imp returns it still running.
   readonly sleepImpVm: (
@@ -330,7 +330,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   };
 
   // An elastic guest gives back what it can spare before the pause, so the
-  // snapshot writes less (docs/architecture/memory.md#sleep); returns what it
+  // snapshot writes less (docs/architecture/lifecycle/elastic-memory.md#sleep); returns what it
   // keeps plugged, null for an imp that does not grow.
   const shrinkForSleep = async (imp: LockedImp, paths: ImpPaths): Promise<number | null> => {
     if (imp.maxMemoryMib <= imp.memoryMib) {

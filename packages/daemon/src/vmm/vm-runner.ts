@@ -53,7 +53,7 @@ export interface VmPlan {
   readonly memoryMib: number;
 
   // above memoryMib, the guest gets a virtio-mem region to grow into
-  // (docs/architecture/memory.md)
+  // (docs/architecture/lifecycle/elastic-memory.md)
   readonly maxMemoryMib: number;
   readonly dns: readonly string[];
 
@@ -114,7 +114,7 @@ export interface VmRunner {
   readonly startVm: (plan: VmPlan) => Promise<StartedVm>;
 
   // pause, snapshot to new files in `target`, kill, rename them into place
-  // (docs/architecture/sleep-and-wake.md#sleep); a failed snapshot keeps the VM
+  // (docs/architecture/lifecycle/sleep-and-wake.md#sleep); a failed snapshot keeps the VM
   readonly sleepVm: (
     pid: number,
     paths: ImpPaths,
@@ -166,14 +166,14 @@ export interface VmRunner {
   readonly finishWake: (paths: ImpPaths) => Promise<FinishedWake>;
 
   // a boot template: a cold boot parked for a claim, snapshotted and killed
-  // (docs/architecture/boot-templates.md#make)
+  // (docs/architecture/lifecycle/boot-templates.md#build)
   readonly buildTemplateVm: (plan: TemplateBuildPlan) => Promise<void>;
 
   // a start from a template, in place of startVm; throws, with the process
-  // gone, when any step fails (docs/architecture/boot-templates.md#claim)
+  // gone, when any step fails (docs/architecture/lifecycle/boot-templates.md#restore)
   readonly loadTemplateVm: (plan: TemplateRestorePlan) => Promise<StartedVm>;
 
-  // an elastic guest's memory (docs/architecture/memory.md); throws when the
+  // an elastic guest's memory (docs/architecture/lifecycle/elastic-memory.md); throws when the
   // VM or its balloon statistics do not answer
   readonly readGuestMemory: (paths: ImpPaths) => Promise<GuestMemory>;
 
@@ -183,7 +183,7 @@ export interface VmRunner {
 
 // The kernel cmdline: the system drive (vdb) is the initial root and the agent
 // PID 1; imp.* parameters configure the guest
-// (docs/architecture/agent.md#two-drives).
+// (docs/architecture/guest/agent.md#two-drives-and-a-kernel).
 export function buildBootArgs(plan: Readonly<VmPlan>): string {
   return [
     ...BASE_BOOT_ARGS,
