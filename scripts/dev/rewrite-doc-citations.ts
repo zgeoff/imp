@@ -153,11 +153,12 @@ function listCodeFiles(): string[] {
 // the file's text with each citation rewritten, and the file:line of each one
 function buildRewrite(file: string, text: string): { text: string; rewritten: string[] } {
   const rewritten: string[] = [];
+  let result = '';
+  let last = 0;
 
-  const result = text.replaceAll(CITATION, (...args) => {
-    const offset = args.at(-3) as number;
-    const groups = args.at(-1) as Record<string, string | undefined>;
-    const site = `${file}:${String(countLines(text, offset))}`;
+  for (const match of text.matchAll(CITATION)) {
+    const groups = match.groups ?? {};
+    const site = `${file}:${String(countLines(text, match.index))}`;
 
     const key =
       groups['anchor'] === undefined
@@ -172,8 +173,11 @@ function buildRewrite(file: string, text: string): { text: string; rewritten: st
 
     rewritten.push(site);
 
-    return renderCitation(target, groups['wrap']);
-  });
+    result += text.slice(last, match.index) + renderCitation(target, groups['wrap']);
+    last = match.index + match[0].length;
+  }
+
+  result += text.slice(last);
 
   return { text: result, rewritten };
 }

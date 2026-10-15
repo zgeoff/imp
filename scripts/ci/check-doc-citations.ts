@@ -138,7 +138,8 @@ function updateFence(open: string, marker: string, rest: string): string {
     return marker;
   }
 
-  const isClose = marker[0] === open[0] && marker.length >= open.length && rest.trim() === '';
+  const isClose =
+    marker.startsWith(open.charAt(0)) && marker.length >= open.length && rest.trim() === '';
 
   return isClose ? '' : open;
 }
