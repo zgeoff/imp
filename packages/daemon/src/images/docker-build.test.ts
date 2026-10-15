@@ -40,6 +40,26 @@ test('#readBuiltImageId reads the image ID past the trace messages', async () =>
   expect(id).toBe(`sha256:${'c'.repeat(64)}`);
 });
 
+test('#readBuiltImageId passes each trace it can decode to onTrace, and goes on past one it cannot', async () => {
+  const traces: unknown[] = [];
+
+  await readBuiltImageId(
+    [
+      { id: 'moby.buildkit.trace', aux: 'CgQ=' },
+      { id: 'moby.buildkit.trace', aux: { not: 'base64' } },
+      { id: 'moby.buildkit.trace', aux: 'GgoKBHNoYTEiAmhp' },
+      { id: 'moby.image.id', aux: { ID: `sha256:${'c'.repeat(64)}` } },
+    ],
+    (trace) => {
+      traces.push(trace);
+    },
+  );
+
+  expect(traces).toStrictEqual([
+    { vertexes: [], logs: [{ vertex: 'sha1', msg: new TextEncoder().encode('hi') }] },
+  ]);
+});
+
 test('#readBuiltImageId fails the client build with the last 4000 characters of its error', () => {
   const long = `${'x'.repeat(5000)}exit code: 1`;
 
@@ -113,6 +133,62 @@ test('#runDockerBuild returns the image ID the engine built', async () => {
   });
 
   expect(building).resolves.toBe(`sha256:${'c'.repeat(64)}`);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('#runDockerBuild sends the lines and the step of the engine trace to its output', async () => {
+  const ctx = await setupTest();
+
+  const tarPath = join(ctx.dir, 'context.tar');
+  const lines: string[] = [];
+  const steps: string[] = [];
+
+  await Bun.write(tarPath, 'the context');
+
+  // two trace messages a Docker 29.8 engine sent: a RUN step's start, then
+  // its output
+  ctx.engine.setAnswer(
+    () =>
+      new Response(
+        [
+          {
+            id: 'moby.buildkit.trace',
+            aux: 'CtQBCkdzaGEyNTY6MzhiZGNiOWVjNzI1YjA5MDFiNmU5ZWRlOWUxNmYxYzI2MDFiMmY4NTNjMWM3NzQ5MGQ0YTM2OWFlNjI5NDY4OBJHc2hhMjU2OjE5OGIxOTk0NWRhNGY3NWQ4Y2U1YTViZDhkYTIxZjJjMDFlYTljNzBhM2U2MGQzMmFkNWE5NzExMTFlMGE1MGUaM1syLzNdIFJVTiBlY2hvIGNvbXBpbGluZyB3aWRnZXQgJiYgZWNobyBzZWNvbmQgbGluZSoLCJDrwNYGEMawpnw=',
+          },
+          {
+            id: 'moby.buildkit.trace',
+            aux: 'GngKR3NoYTI1NjozOGJkY2I5ZWM3MjViMDkwMWI2ZTllZGU5ZTE2ZjFjMjYwMWIyZjg1M2MxYzc3NDkwZDRhMzY5YWU2Mjk0Njg4EgwIkOvA1gYQ0uirpQIYASIdY29tcGlsaW5nIHdpZGdldApzZWNvbmQgbGluZQo=',
+          },
+          { id: 'moby.image.id', aux: { ID: `sha256:${'c'.repeat(64)}` } },
+        ]
+          .map((message) => `${JSON.stringify(message)}\n`)
+          .join(''),
+      ),
+  );
+
+  await runDockerBuild({
+    dockerHost: ctx.engine.dockerHost,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: undefined,
+    signal: new AbortController().signal,
+    output: {
+      emitLog: (line) => {
+        lines.push(line);
+      },
+      setStep: (step) => {
+        steps.push(step);
+      },
+    },
+  });
+
+  expect(lines).toStrictEqual([
+    '#1 [2/3] RUN echo compiling widget && echo second line',
+    '#1 compiling widget',
+    '#1 second line',
+  ]);
+
+  expect(steps).toStrictEqual(['[2/3] RUN echo compiling widget && echo second line']);
   expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 

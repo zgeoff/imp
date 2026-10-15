@@ -22,18 +22,20 @@ export async function runImageAdd(
   return readImageOp(events, label);
 }
 
-// images.build from a directory on the impd host, as runImageAdd
+// images.build from a directory on the impd host, as runImageAdd, with the
+// build's output too; `quiet` shows nothing of its progress
 export async function runOnHostBuild(
   client: Pick<ImpClient, 'images' | 'system'>,
-  input: BuildInput,
+  input: Omit<BuildInput, 'logs'>,
+  quiet = false,
 ): Promise<Image> {
   if (!(await hasImageOpStream(client))) {
     return client.images.build(input);
   }
 
-  const events = await client.images.buildStream(input);
+  const events = await client.images.buildStream({ ...input, logs: !quiet });
 
-  return readImageOp(events, 'imp image build');
+  return readImageOp(events, 'imp image build', quiet);
 }
 
 // An impd from before the streams answers only when the work ends, so a
@@ -47,6 +49,7 @@ async function hasImageOpStream(client: Pick<ImpClient, 'system'>): Promise<bool
 async function readImageOp(
   events: Readonly<AsyncIterable<ImageOpEvent>>,
   label: string,
+  quiet = false,
 ): Promise<Image> {
   const status = createBuildStatus(
     {
@@ -56,6 +59,7 @@ async function readImageOp(
       },
     },
     label,
+    quiet,
   );
 
   try {
@@ -64,7 +68,11 @@ async function readImageOp(
         return event.image;
       }
 
-      status.show(event);
+      if (event.type === 'log') {
+        status.printLog(event.text);
+      } else if (event.type === 'progress') {
+        status.show(event);
+      }
     }
   } finally {
     status.finish();

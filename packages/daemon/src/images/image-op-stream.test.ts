@@ -13,12 +13,12 @@ test('it sends progress at once and at each phase, then the image', async () => 
   const image = buildMockImage();
 
   const events = runImageOp(
-    async (_signal, setPhase) => {
+    async (_signal, report) => {
       await phaseReached.promise;
 
       clock.now = 4000;
 
-      setPhase('unpack');
+      report.setPhase('unpack');
 
       return done.promise;
     },
@@ -192,8 +192,8 @@ test('it stops the keepalive timer of a wait the next phase ends', async () => {
   const keepalive = buildStubRepeat();
 
   const events = runImageOp(
-    (_signal, setPhase) => {
-      phases.push(setPhase);
+    (_signal, report) => {
+      phases.push(report.setPhase);
 
       return Promise.withResolvers<Image>().promise;
     },
@@ -226,4 +226,138 @@ test('it stops the keepalive timer of a wait the next phase ends', async () => {
   await next;
 
   expect(keepalive.countRunning(10_000)).toBe(0);
+});
+
+test('it sends the build output as log events in order, before the image', async () => {
+  const image = buildMockImage();
+
+  const events = await Array.fromAsync(
+    runImageOp(
+      (_signal, report) => {
+        report.output.emitLog('#4 [2/3] RUN make all');
+        report.output.emitLog('#4 cc -o widget main.c');
+
+        return Promise.resolve(image);
+      },
+      {
+        firstPhase: 'build',
+        signal: new AbortController().signal,
+        keepaliveMs: 10_000,
+        now: () => 0,
+        record: () => {},
+        logs: true,
+      },
+    ),
+  );
+
+  expect(events).toStrictEqual([
+    { type: 'progress', phase: 'build', elapsedMs: 0 },
+    { type: 'log', text: '#4 [2/3] RUN make all' },
+    { type: 'log', text: '#4 cc -o widget main.c' },
+    { type: 'image', image },
+  ]);
+});
+
+test('it sends progress with the step the build reached while it runs', async () => {
+  const done = Promise.withResolvers<Image>();
+  const reports: ((step: string) => void)[] = [];
+
+  const events = runImageOp(
+    (_signal, report) => {
+      reports.push(report.output.setStep);
+
+      return done.promise;
+    },
+    {
+      firstPhase: 'build',
+      signal: new AbortController().signal,
+      keepaliveMs: 10_000,
+      now: () => 0,
+      record: () => {},
+    },
+  );
+
+  await events.next();
+
+  const next = events.next();
+
+  const setStep = await waitFor(() => {
+    invariant(reports[0]);
+
+    return reports[0];
+  });
+
+  setStep('[3/3] RUN make install');
+
+  const second = await next;
+
+  done.resolve(buildMockImage());
+
+  expect(second.value).toStrictEqual({
+    type: 'progress',
+    phase: 'build',
+    elapsedMs: 0,
+    step: '[3/3] RUN make install',
+  });
+});
+
+test('it holds at most 1 MiB of build output for a client that has not read, and counts what it dropped', async () => {
+  const image = buildMockImage();
+
+  const events = await Array.fromAsync(
+    runImageOp(
+      (_signal, report) => {
+        for (let line = 0; line < 4096; line += 1) {
+          report.output.emitLog('x'.repeat(8000));
+        }
+
+        return Promise.resolve(image);
+      },
+      {
+        firstPhase: 'build',
+        signal: new AbortController().signal,
+        keepaliveMs: 10_000,
+        now: () => 0,
+        record: () => {},
+        logs: true,
+      },
+    ),
+  );
+
+  const kept = events.filter((event) => event.type === 'log' && event.text.startsWith('x'));
+
+  expect(kept).toHaveLength(Math.floor(1024 ** 2 / 8000));
+
+  expect(events.at(-2)).toStrictEqual({
+    type: 'log',
+    text: `imp: ${String(4096 - kept.length)} lines of build output dropped: the client read them more slowly than the build wrote them`,
+  });
+
+  expect(events.at(-1)).toStrictEqual({ type: 'image', image });
+});
+
+test('it sends no log events to a client that did not ask for them', async () => {
+  const image = buildMockImage();
+
+  const events = await Array.fromAsync(
+    runImageOp(
+      (_signal, report) => {
+        report.output.emitLog('#4 cc -o widget main.c');
+
+        return Promise.resolve(image);
+      },
+      {
+        firstPhase: 'build',
+        signal: new AbortController().signal,
+        keepaliveMs: 10_000,
+        now: () => 0,
+        record: () => {},
+      },
+    ),
+  );
+
+  expect(events).toStrictEqual([
+    { type: 'progress', phase: 'build', elapsedMs: 0 },
+    { type: 'image', image },
+  ]);
 });

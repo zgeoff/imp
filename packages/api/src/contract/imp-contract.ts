@@ -13,6 +13,7 @@ import { EgressPolicySchema } from '../schemas/egress-schema';
 import { ImpEventSchema } from '../schemas/event-schema';
 import { ExposeInputSchema, ExposeResultSchema } from '../schemas/exposure-schema';
 import { FileContentSchema, FilePathSchema } from '../schemas/file-schema';
+import { ImageBuildRunSchema } from '../schemas/image-build-run-schema';
 import { ImageRefSchema } from '../schemas/image-ref-schema';
 import { ImageSchema } from '../schemas/image-schema';
 import { ForkResultSchema, ImpSchema } from '../schemas/imp-schema';
@@ -123,6 +124,10 @@ const ImageBuildInputSchema = z.object({
   contextDir: z.string().startsWith('/'),
   name: NameSchema,
   dockerfile: DockerfilePathSchema.optional(),
+
+  // buildStream sends the build's output as log events; an impd from
+  // before them drops it unread
+  logs: z.boolean().optional(),
 });
 
 // imps.create's input, which the MCP tool imp_create picks its fields from
@@ -400,6 +405,10 @@ export const impContract = {
     // `features.imageOpStream` has them
     addStream: base.input(ImageAddInputSchema).output(eventIterator(ImageOpEventSchema)),
     buildStream: base.input(ImageBuildInputSchema).output(eventIterator(ImageOpEventSchema)),
+
+    // the builds impd runs now, uploads and on-host builds alike; an impd
+    // with `features.imageBuilds` has it
+    builds: base.output(z.array(ImageBuildRunSchema)),
 
     delete: base.input(NameInputSchema).output(EmptySchema),
   },

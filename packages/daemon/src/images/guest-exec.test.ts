@@ -31,6 +31,21 @@ test('it runs a step as root and gives its exit code, stdout and stderr', async 
   expect(result).toStrictEqual({ exitCode: 3, stdout: 'out\n', stderr: 'err\n' });
 });
 
+test('it hands each stderr chunk to onStderr and keeps its tail too', async () => {
+  const guest = buildStubGuest(() => ({ stderr: '#5 [2/3] RUN make all\n', code: 1 }));
+  const chunks: string[] = [];
+
+  const result = await createGuestExec(guest.open)(['docker', 'build', '-'], {
+    signal: new AbortController().signal,
+    onStderr: (chunk) => {
+      chunks.push(new TextDecoder().decode(chunk));
+    },
+  });
+
+  expect(chunks).toStrictEqual(['#5 [2/3] RUN make all\n']);
+  expect(result.stderr).toBe('#5 [2/3] RUN make all\n');
+});
+
 test('it sends a file to the step as its stdin', async () => {
   const ctx = await setupTest();
 

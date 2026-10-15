@@ -76,6 +76,9 @@ const SystemFeaturesSchema = z.object({
   // images.addStream and images.buildStream
   imageOpStream: z.boolean().optional(),
 
+  // images.builds; build streams carry the step and the build's output
+  imageBuilds: z.boolean().optional(),
+
   // an `/exec` start takes `require`, which an older impd drops unread
   execRequire: z.boolean().optional(),
 

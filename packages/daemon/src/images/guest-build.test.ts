@@ -618,6 +618,41 @@ test('#runGuestBuild sends the context to the build as its stdin', async () => {
   expect(stdin.promise).resolves.toBe('the context');
 });
 
+test('#runGuestBuild sends each line of the plain progress and its step to the output', async () => {
+  const ctx = await setupTest();
+
+  const lines: string[] = [];
+  const steps: string[] = [];
+
+  const guest = buildStubGuest(() => ({
+    stderr: '#4 [2/2] RUN make all\n#4 0.301 cc -o widget main.c\n#4 DONE 0.5s\n',
+  }));
+
+  writeFileSync(join(ctx.dir, 'context.tar'), 'the context');
+
+  await runGuestBuild(createGuestExec(guest.open), {
+    tarPath: join(ctx.dir, 'context.tar'),
+    dockerfile: 'Dockerfile',
+    signal: new AbortController().signal,
+    output: {
+      emitLog: (line) => {
+        lines.push(line);
+      },
+      setStep: (step) => {
+        steps.push(step);
+      },
+    },
+  });
+
+  expect(lines).toStrictEqual([
+    '#4 [2/2] RUN make all',
+    '#4 0.301 cc -o widget main.c',
+    '#4 DONE 0.5s',
+  ]);
+
+  expect(steps).toStrictEqual(['[2/2] RUN make all']);
+});
+
 test('#runGuestBuild builds with the pinned frontend, the builder tag and the Dockerfile', async () => {
   const ctx = await setupTest();
 

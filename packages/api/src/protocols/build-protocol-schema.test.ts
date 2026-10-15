@@ -30,7 +30,7 @@ test('it gives an event-iterator procedure the schema of each event', () => {
   const procedure = buildProtocolSchema().procedures['images.addStream'];
 
   expect(procedure?.stream).toBe(true);
-  expect(procedure?.output['oneOf']).toBeArrayOfSize(2);
+  expect(procedure?.output['oneOf']).toBeArrayOfSize(3);
 });
 
 test('it marks a procedure with a single answer as no stream', () => {

@@ -4,6 +4,8 @@ import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import type { StartTimer } from '../process/clock';
 import { startRealTimer } from '../process/start-real-timer';
 import { countTreeBytes } from '../storage/count-tree-bytes';
+import type { BuildOutput } from './create-build-steps';
+import { createPlainLines } from './create-plain-lines';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
@@ -28,6 +30,9 @@ export interface GuestBuildOptions {
   // the Dockerfile's path inside the context
   readonly dockerfile: string;
   readonly signal: AbortSignal;
+
+  // hears each line of the build's plain progress, and its steps
+  readonly output?: BuildOutput | undefined;
 }
 
 // The build, on the builder's engine, its context on stdin. A failed build's
@@ -36,6 +41,8 @@ export async function runGuestBuild(
   exec: GuestExec,
   options: Readonly<GuestBuildOptions>,
 ): Promise<void> {
+  const lines = options.output === undefined ? null : createPlainLines(options.output);
+
   const result = await exec(
     [
       'docker',
@@ -49,8 +56,14 @@ export async function runGuestBuild(
       options.dockerfile,
       '-',
     ],
-    { stdinPath: options.tarPath, signal: options.signal },
+    {
+      stdinPath: options.tarPath,
+      signal: options.signal,
+      ...(lines !== null && { onStderr: lines.readChunk }),
+    },
   );
+
+  lines?.flush();
 
   if (result.exitCode !== 0) {
     const log = `${result.stdout}${result.stderr}`.trim().slice(-LOG_MAX_CHARS);

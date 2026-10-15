@@ -25,7 +25,7 @@ const REMOVE_RETRY_MS = 30_000;
 export interface Builders {
   readonly withBuilder: <T>(
     signal: AbortSignal,
-    run: (exec: GuestExec) => Promise<T>,
+    run: (exec: GuestExec, name: string) => Promise<T>,
   ) => Promise<T>;
 
   // the builders a stopped impd left behind
@@ -176,7 +176,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
         deps.log(`impd: image build: builder ${name} ready in ${String(readyMs)}ms`);
 
-        return await run(exec);
+        return await run(exec, name);
       } finally {
         // a builder that survives is logged and retried; a build it served
         // still stands, its image written

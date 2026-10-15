@@ -2,9 +2,10 @@ import { isAbsolute } from 'node:path';
 import type { Image } from '@imp/api';
 import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
-import { formatImages, formatOutput } from '../format-output';
+import { formatImageBuilds, formatImages, formatOutput } from '../format-output';
 import { runImageBuild } from '../image/run-image-build';
 import { runImageAdd, runOnHostBuild } from '../image/run-image-op';
+import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
@@ -43,6 +44,11 @@ const buildCommand = defineCommand({
       type: 'boolean',
       description: 'the directory is an absolute path on the impd host: nothing is uploaded',
     },
+    quiet: {
+      type: 'boolean',
+      alias: 'q',
+      description: 'print no progress and no build output, only the result or the error',
+    },
     json: jsonArg,
   },
   run: (context) =>
@@ -52,6 +58,7 @@ const buildCommand = defineCommand({
         name: context.args.name,
         dockerfile: context.args.file,
         onHost: context.args['on-host'] === true,
+        quiet: context.args.quiet === true,
       });
 
       console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
@@ -63,6 +70,7 @@ interface BuildArgs {
   readonly name: string;
   readonly dockerfile: string | undefined;
   readonly onHost: boolean;
+  readonly quiet: boolean;
 }
 
 function buildImage(client: ImpClient, args: Readonly<BuildArgs>): Promise<Image> {
@@ -76,12 +84,32 @@ function buildImage(client: ImpClient, args: Readonly<BuildArgs>): Promise<Image
     throw new UsageError(`--on-host takes an absolute path on the impd host, not ${args.dir}`);
   }
 
-  return runOnHostBuild(client, {
-    contextDir: args.dir,
-    name: args.name,
-    ...(args.dockerfile !== undefined && { dockerfile: args.dockerfile }),
-  });
+  return runOnHostBuild(
+    client,
+    {
+      contextDir: args.dir,
+      name: args.name,
+      ...(args.dockerfile !== undefined && { dockerfile: args.dockerfile }),
+    },
+    args.quiet,
+  );
 }
+
+// the builds impd runs now, from any client or shell
+const buildsCommand = defineCommand({
+  meta: { name: 'builds', description: 'List the image builds running now' },
+  args: { json: jsonArg },
+  run: (context) =>
+    runAction(context.host, async (client) => {
+      await requireFeature(client, 'imageBuilds', 'answer images.builds with not found');
+
+      const builds = await client.images.builds();
+
+      console.log(
+        formatOutput(builds, context.args.json, (all) => formatImageBuilds(all, Date.now())),
+      );
+    }),
+});
 
 const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List images' },
@@ -105,7 +133,13 @@ const rmCommand = defineCommand({
 
 export const imageCommand = defineCommand({
   meta: { name: 'image', description: 'Manage images' },
-  subCommands: { add: addCommand, build: buildCommand, ls: lsCommand, rm: rmCommand },
+  subCommands: {
+    add: addCommand,
+    build: buildCommand,
+    builds: buildsCommand,
+    ls: lsCommand,
+    rm: rmCommand,
+  },
 });
 
 // `imp template`: the images API with an imp as the source

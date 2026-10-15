@@ -1,5 +1,9 @@
 import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import type { BuildOutput } from './create-build-steps';
+import { decodeBuildTrace } from './decode-build-trace';
+import type { BuildTrace } from './decode-build-trace';
+import { makeTraceLines } from './make-trace-lines';
 import { readRefusalError } from './run-docker';
 
 // the tail of a failed build's message the client gets
@@ -19,6 +23,9 @@ export interface DockerBuildOptions {
 
   // aborts the request, which ends the build on the engine
   readonly signal: AbortSignal;
+
+  // hears the build's output and steps as the engine reports them
+  readonly output?: BuildOutput | undefined;
 }
 
 // The build itself failed: the Dockerfile, its context or its size. The
@@ -27,8 +34,8 @@ export class DockerBuildError extends Error {
   override readonly name = 'DockerBuildError';
 }
 
-// the messages of POST /build's JSON stream that impd reads; the rest
-// (BuildKit's trace, as protobuf in base64) passes by
+// the messages of POST /build's JSON stream that impd reads: BuildKit's
+// trace is protobuf in base64, under `aux`
 const BuildMessageSchema = z.object({
   id: z.string().optional(),
   aux: z.unknown().optional(),
@@ -86,8 +93,10 @@ async function* readJsonLines(body: ReadableStream<Uint8Array>): AsyncGenerator 
 
 // The image ID from a build's message stream. An error message fails the
 // build: the engine answers 200 and reports a failed build in the stream.
+// `onTrace` hears each trace message BuildKit sends as the build runs.
 export async function readBuiltImageId(
   messages: Readonly<AsyncIterable<unknown> | Iterable<unknown>>,
+  onTrace?: (trace: BuildTrace) => void,
 ): Promise<string> {
   let imageId: string | null = null;
 
@@ -102,6 +111,14 @@ export async function readBuiltImageId(
     if (message.id === 'moby.image.id') {
       imageId = ImageIdSchema.parse(message.aux).ID;
     }
+
+    if (message.id === 'moby.buildkit.trace' && onTrace !== undefined) {
+      const trace = findBuildTrace(message.aux);
+
+      if (trace !== null) {
+        onTrace(trace);
+      }
+    }
   }
 
   if (imageId === null) {
@@ -109,6 +126,20 @@ export async function readBuiltImageId(
   }
 
   return imageId;
+}
+
+// A trace message's progress, or null for one impd cannot read: the build
+// goes on without it
+function findBuildTrace(aux: unknown): BuildTrace | null {
+  if (typeof aux !== 'string') {
+    return null;
+  }
+
+  try {
+    return decodeBuildTrace(Buffer.from(aux, 'base64'));
+  } catch {
+    return null;
+  }
 }
 
 // The engine's answer before any build ran: a refusal by imp-docker-proxy
@@ -187,5 +218,8 @@ export async function runDockerBuild(options: Readonly<DockerBuildOptions>): Pro
     throw await readRefusal(response);
   }
 
-  return readBuiltImageId(readJsonLines(response.body));
+  const output = options.output;
+  const onTrace = output === undefined ? undefined : makeTraceLines(output);
+
+  return readBuiltImageId(readJsonLines(response.body), onTrace);
 }

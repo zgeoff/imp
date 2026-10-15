@@ -14,9 +14,10 @@ import { ORPCError } from '@orpc/client';
 export async function readBuildAnswer(
   response: Response,
   onProgress: ((progress: ImageBuildProgress) => void) | undefined,
+  onLog?: (line: string) => void,
 ): Promise<Image> {
   if (response.ok && isStream(response)) {
-    return readBuildEvents(response, onProgress);
+    return readBuildEvents(response, onProgress, onLog);
   }
 
   const body: unknown = await response.json().catch(() => null);
@@ -53,6 +54,7 @@ function isStream(response: Response): boolean {
 async function readBuildEvents(
   response: Response,
   onProgress: ((progress: ImageBuildProgress) => void) | undefined,
+  onLog: ((line: string) => void) | undefined,
 ): Promise<Image> {
   for await (const line of readLines(response)) {
     const parsed = ImageBuildEventSchema.safeParse(parseJson(line));
@@ -71,7 +73,11 @@ async function readBuildEvents(
       throw new ORPCError(event.code, { message: event.message });
     }
 
-    onProgress?.(event);
+    if (event.type === 'log') {
+      onLog?.(event.text);
+    } else {
+      onProgress?.(event);
+    }
   }
 
   throw new ORPCError('INTERNAL_SERVER_ERROR', {

@@ -36,6 +36,7 @@ import {
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildMockCaller } from '../test-utils/build-mock-caller';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubTracedBuild } from '../test-utils/build-stub-traced-build';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -447,6 +448,104 @@ test('it streams progress lines while the build runs, then the image', async () 
 
   expect(events[0]).toMatchObject({ type: 'progress', phase: 'upload' });
   expect(events.at(-1)).toMatchObject({ type: 'image', image: { name: 'web' } });
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+test('it streams the step and output of a running build, and lists it in images.builds until it ends', async () => {
+  const ctx = await setupTest();
+
+  await mkdir(join(ctx.dataDir, 'context'));
+  await writeFile(join(ctx.dataDir, 'context', 'Dockerfile'), 'FROM scratch\n');
+  await mkdir(join(ctx.dataDir, 'tree'));
+  await writeFile(join(ctx.dataDir, 'tree', 'hello'), 'hi');
+
+  const exportTar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'tree'), '-c', 'hello']).stdout;
+
+  const docker = createStubDockerCli({
+    dir: ctx.dataDir,
+    images: [
+      { refs: [DOCKERFILE_FRONTEND], inspects: [{ Id: `sha256:${'f'.repeat(64)}` }] },
+      {
+        refs: ['imp/web:latest'],
+        inspects: [{ Id: `sha256:${'e'.repeat(64)}`, Config: {}, Size: 2 }],
+      },
+    ],
+    create: { id: 'c'.repeat(64) },
+    exportTar,
+  });
+
+  updateEnv('PATH', docker.path);
+
+  // the engine reports a RUN step and its output, then holds the build
+  const gate = Promise.withResolvers<void>();
+
+  ctx.engine.setAnswer(
+    buildStubTracedBuild({ imageId: `sha256:${'e'.repeat(64)}`, hold: gate.promise }),
+  );
+
+  const route = createBuildContextRoute({
+    config: { dataDir: ctx.dataDir, buildContextMaxBytes: 1024 ** 2 },
+    images: ctx.impd.images,
+    diskBudget: ctx.impd.diskBudget,
+    audit: createApiAudit({ db: ctx.db, now: Date.now, log: () => {} }),
+    now: Date.now,
+    keepaliveMs: 10_000,
+  });
+
+  const tar = Bun.spawnSync(['tar', '-C', join(ctx.dataDir, 'context'), '-c', 'Dockerfile']).stdout;
+
+  const before = new Date();
+
+  const response = await route.handle(
+    new Request(`http://impd.test${IMAGE_BUILD_PATH}?name=web`, {
+      method: 'POST',
+      headers: { accept: IMAGE_BUILD_STREAM_TYPE },
+      body: tar,
+    }),
+    buildMockCaller(),
+    toApiImage,
+  );
+
+  const running = await waitFor(async () => {
+    const [build] = await ctx.client.images.builds();
+
+    invariant(build?.step);
+
+    return build;
+  });
+
+  gate.resolve();
+
+  const text = await response.text();
+  const after = await ctx.client.images.builds();
+
+  const events = text
+    .trim()
+    .split('\n')
+    .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
+
+  expect(running).toStrictEqual({
+    name: 'web',
+    source: 'upload',
+    startedAt: expect.toBeBetween(before, new Date()),
+    phase: 'build',
+    step: '[2/3] RUN echo compiling widget && echo second line',
+    builder: null,
+  });
+
+  expect(events).toIncludeAllMembers([
+    { type: 'log', text: '#1 [2/3] RUN echo compiling widget && echo second line' },
+    { type: 'log', text: '#1 compiling widget' },
+    { type: 'log', text: '#1 second line' },
+    {
+      type: 'progress',
+      phase: 'build',
+      elapsedMs: expect.any(Number) as unknown,
+      step: '[2/3] RUN echo compiling widget && echo second line',
+    },
+  ]);
+
+  expect(after).toStrictEqual([]);
   expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 

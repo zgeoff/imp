@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import type { ImageBuildEvent } from '@imp/api';
-import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
+import { IMAGE_BUILD_STREAM_TYPE, ImageBuildEventSchema } from '@imp/api';
 import { invariant } from '@imp/test-utils/invariant';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
@@ -39,10 +39,10 @@ test('#createBuildEventStream sends progress as soon as the build moves to anoth
 
   const response = createBuildEventStream(
     new AbortController().signal,
-    (_signal, setPhase) => {
+    (_signal, report) => {
       clock.now = 2500;
 
-      setPhase('build');
+      report.setPhase('build');
 
       return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
     },
@@ -53,6 +53,60 @@ test('#createBuildEventStream sends progress as soon as the build moves to anoth
 
   expect(text.split('\n')[1]).toBe(
     JSON.stringify({ type: 'progress', phase: 'build', elapsedMs: 2500 }),
+  );
+});
+
+test('#createBuildEventStream sends progress with the step as soon as a step starts', async () => {
+  const clock = { now: 0 };
+
+  const response = createBuildEventStream(
+    new AbortController().signal,
+    (_signal, report) => {
+      report.setPhase('build');
+
+      clock.now = 4000;
+
+      report.output.setStep('[2/3] RUN make all');
+
+      return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
+    },
+    { keepaliveMs: 10_000, now: () => clock.now },
+  );
+
+  const text = await response.text();
+
+  expect(text.split('\n')[2]).toBe(
+    JSON.stringify({
+      type: 'progress',
+      phase: 'build',
+      elapsedMs: 4000,
+      step: '[2/3] RUN make all',
+    }),
+  );
+});
+
+test('#createBuildEventStream sends each line of the build output as a log event, in order', async () => {
+  const response = createBuildEventStream(
+    new AbortController().signal,
+    (_signal, report) => {
+      report.output.emitLog('#5 [2/3] RUN make all');
+      report.output.emitLog('#5 cc -o widget main.c');
+
+      return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
+    },
+    { keepaliveMs: 10_000, now: () => 0 },
+  );
+
+  const text = await response.text();
+
+  expect(text).toBe(
+    [
+      JSON.stringify({ type: 'progress', phase: 'upload', elapsedMs: 0 }),
+      JSON.stringify({ type: 'log', text: '#5 [2/3] RUN make all' }),
+      JSON.stringify({ type: 'log', text: '#5 cc -o widget main.c' }),
+      JSON.stringify({ type: 'error', code: 'BAD_REQUEST', message: 'no' }),
+      '',
+    ].join('\n'),
   );
 });
 
@@ -201,4 +255,38 @@ test('#createBuildEventStream sends nothing more and stops its keepalive once a 
   invariant(tick);
 
   expect(tick).not.toThrow();
+});
+
+test('#createBuildEventStream holds at most 1 MiB of build output for a client that has not read, and counts what it dropped', async () => {
+  const response = createBuildEventStream(
+    new AbortController().signal,
+    (_signal, report) => {
+      for (let line = 0; line < 4096; line += 1) {
+        report.output.emitLog('x'.repeat(8000));
+      }
+
+      return Promise.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
+    },
+    { keepaliveMs: 10_000, now: () => 0 },
+  );
+
+  const text = await response.text();
+
+  const events = text
+    .trim()
+    .split('\n')
+    .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
+
+  const kept = events.filter((event) => event.type === 'log' && event.text.startsWith('x'));
+  const marker = events.at(-2);
+
+  expect(Buffer.byteLength(text)).toBeLessThan(1024 ** 2 + 16_384);
+  expect(kept.length).toBeGreaterThan(0);
+
+  expect(marker).toStrictEqual({
+    type: 'log',
+    text: `imp: ${String(4096 - kept.length)} lines of build output dropped: the client read them more slowly than the build wrote them`,
+  });
+
+  expect(events.at(-1)).toStrictEqual({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
 });

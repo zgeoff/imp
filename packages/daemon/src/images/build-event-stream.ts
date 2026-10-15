@@ -1,5 +1,7 @@
 import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
 import type { ImageBuildEvent, ImageBuildPhase } from '@imp/api';
+import type { BuildOutput } from './create-build-steps';
+import { BUILD_LOG_QUEUE_MAX_BYTES, createLogBudget } from './create-log-budget';
 
 // A progress line this often keeps a client's fetch reading: Bun's gives up
 // after 360 s with no byte, undici's after 300 s (its headersTimeout before
@@ -25,15 +27,19 @@ export interface BuildEventStreamDeps {
   readonly repeat?: Repeat;
 }
 
-// The build's answer, at once: progress lines, then the event `run` ends
-// with (it never throws). Its signal aborts when the client goes, whether
-// the request says so or the stream is cancelled.
+// what a build tells its stream as it runs: each phase as it starts, and
+// the lines and steps of its output
+export interface BuildReport {
+  readonly setPhase: (phase: ImageBuildPhase) => void;
+  readonly output: BuildOutput;
+}
+
+// The build's answer, at once: progress lines, at each phase and step too, a
+// log line for each line of output, then the event `run` ends with (it never
+// throws). Its signal aborts when the client goes or cancels the stream.
 export function createBuildEventStream(
   clientSignal: AbortSignal,
-  run: (
-    signal: AbortSignal,
-    setPhase: (phase: ImageBuildPhase) => void,
-  ) => Promise<ImageBuildEvent>,
+  run: (signal: AbortSignal, report: BuildReport) => Promise<ImageBuildEvent>,
   deps: Readonly<BuildEventStreamDeps>,
 ): Response {
   const cancelled = new AbortController();
@@ -45,8 +51,14 @@ export function createBuildEventStream(
   const startedAt = deps.now();
   const repeat = deps.repeat ?? runOnInterval;
 
-  const state: { phase: ImageBuildPhase; open: boolean; stopKeepalive: () => void } = {
+  const state: {
+    phase: ImageBuildPhase;
+    step: string | null;
+    open: boolean;
+    stopKeepalive: () => void;
+  } = {
     phase: 'upload',
+    step: null,
     open: true,
     stopKeepalive: () => {},
   };
@@ -57,67 +69,98 @@ export function createBuildEventStream(
     state.stopKeepalive();
   };
 
-  const body = new ReadableStream<Uint8Array>({
-    start: (controller) => {
-      // a client gone mid-write closes the stream under us: then nothing
-      // more is sent, and the build stops through the signal
-      const send = (event: ImageBuildEvent): void => {
-        if (!state.open) {
-          return;
-        }
-
-        try {
-          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-        } catch {
-          stop();
-        }
-      };
-
-      const sendProgress = (): void => {
-        send({ type: 'progress', phase: state.phase, elapsedMs: deps.now() - startedAt });
-      };
-
-      // Bun sends the headers with the first chunk
-      sendProgress();
-
-      state.stopKeepalive = repeat(deps.keepaliveMs, sendProgress);
-
-      // nobody reads the progress of a build that stops for its client
-      signal.addEventListener('abort', () => {
-        state.stopKeepalive();
-      });
-
-      const setPhase = (phase: ImageBuildPhase): void => {
-        state.phase = phase;
-
-        sendProgress();
-      };
-
-      const sendOutcome = async (): Promise<void> => {
-        const outcome = await run(signal, setPhase);
-
-        send(outcome);
-
-        if (state.open) {
-          stop();
-
-          // a client that went as the build ended may have closed it already
-          try {
-            controller.close();
-          } catch {
-            // nothing is left to send
+  const body = new ReadableStream<Uint8Array>(
+    {
+      start: (controller) => {
+        // a client gone mid-write closes the stream under us: then nothing
+        // more is sent, and the build stops through the signal
+        const send = (event: ImageBuildEvent): void => {
+          if (!state.open) {
+            return;
           }
-        }
-      };
 
-      void sendOutcome();
-    },
-    cancel: () => {
-      stop();
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          } catch {
+            stop();
+          }
+        };
 
-      cancelled.abort();
+        const sendProgress = (): void => {
+          send({
+            type: 'progress',
+            phase: state.phase,
+            elapsedMs: deps.now() - startedAt,
+            ...(state.step !== null && { step: state.step }),
+          });
+        };
+
+        const logs = createLogBudget();
+
+        // Bun sends the headers with the first chunk
+        sendProgress();
+
+        state.stopKeepalive = repeat(deps.keepaliveMs, sendProgress);
+
+        // nobody reads the progress of a build that stops for its client
+        signal.addEventListener('abort', () => {
+          state.stopKeepalive();
+        });
+
+        const report: BuildReport = {
+          setPhase: (phase) => {
+            state.phase = phase;
+
+            sendProgress();
+          },
+          output: {
+            // the stream's queue holds what the client has not read yet
+            emitLog: (line) => {
+              const hasRoom = (controller.desiredSize ?? 0) > 0;
+
+              for (const text of logs.admit(line, hasRoom)) {
+                send({ type: 'log', text });
+              }
+            },
+            setStep: (step) => {
+              state.step = step;
+
+              sendProgress();
+            },
+          },
+        };
+
+        const sendOutcome = async (): Promise<void> => {
+          const outcome = await run(signal, report);
+
+          for (const text of logs.drain()) {
+            send({ type: 'log', text });
+          }
+
+          send(outcome);
+
+          if (state.open) {
+            stop();
+
+            // a client that went as the build ended may have closed it already
+            try {
+              controller.close();
+            } catch {
+              // nothing is left to send
+            }
+          }
+        };
+
+        void sendOutcome();
+      },
+      cancel: () => {
+        stop();
+
+        cancelled.abort();
+      },
     },
-  });
+    new ByteLengthQueuingStrategy({ highWaterMark: BUILD_LOG_QUEUE_MAX_BYTES }),
+  );
 
   return new Response(body, { headers: { 'content-type': IMAGE_BUILD_STREAM_TYPE } });
 }
