@@ -76,6 +76,45 @@ test('it numbers a repeated heading as GitHub does', async () => {
   ]);
 });
 
+test('it suffixes a heading past every anchor an earlier heading took', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.root, 'docs/page.md'), '# Page\n\n## Notes\n\n## Notes\n\n## Notes-1\n');
+
+  await Bun.write(
+    join(ctx.root, 'src/a.ts'),
+    '// docs/page.md#notes docs/page.md#notes-1 docs/page.md#notes-1-1\n',
+  );
+
+  expect(checkDocCitations(ctx.root, ['src/a.ts'])).toStrictEqual([]);
+});
+
+test('it reads a Unicode anchor as written and URL-escaped', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.root, 'docs/page.md'), '# Page\n\n## Café\n');
+
+  await Bun.write(
+    join(ctx.root, 'src/a.ts'),
+    '// docs/page.md#café, docs/page.md#caf%C3%A9 and docs/page.md#cafe\n',
+  );
+
+  expect(checkDocCitations(ctx.root, ['src/a.ts'])).toStrictEqual([
+    { file: 'src/a.ts', line: 1, message: 'docs/page.md has no heading #cafe' },
+  ]);
+});
+
+test('it reports an anchor whose URL escape is no UTF-8', async () => {
+  const ctx = await setupTest();
+
+  await Bun.write(join(ctx.root, 'docs/page.md'), '# Page\n');
+  await Bun.write(join(ctx.root, 'src/a.ts'), '// docs/page.md#caf%C3\n');
+
+  expect(checkDocCitations(ctx.root, ['src/a.ts'])).toStrictEqual([
+    { file: 'src/a.ts', line: 1, message: 'docs/page.md is cited with a malformed anchor #caf%C3' },
+  ]);
+});
+
 test('it takes no heading from a code fence or front matter', async () => {
   const ctx = await setupTest();
 

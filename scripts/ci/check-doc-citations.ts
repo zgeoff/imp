@@ -10,12 +10,13 @@ export interface Problem {
   readonly message: string;
 }
 
-// `docs/guides/tokens.md#scopes` or `docs/reference`, not a docs/ folder of another path
-const DOC_PATH = /(?<![\w/.-])docs(?:\/[\w.-]+)+(?:#[\w-]+)?/gu;
+// `docs/guides/tokens.md#scopes` or `docs/reference`, not a docs/ folder of another path; an
+// anchor keeps its letters in any script and its URL escapes (`#café`, `#caf%C3%A9`)
+const DOC_PATH = /(?<![\w/.-])docs(?:\/[\w.-]+)+(?:#[\p{L}\p{M}\p{N}_%-]+)?/gu;
 
 // this repo's docs by URL, on any ref, one with a slash in it too: https://github.com/zgeoff/impz/blob/main/docs/…
 const BLOB_URL =
-  /github\.com\/zgeoff\/impz\/(?:blob|tree)\/\S*?\/(?<ref>docs(?:\/[\w.-]+)+(?:#[\w-]+)?)/gu;
+  /github\.com\/zgeoff\/impz\/(?:blob|tree)\/\S*?\/(?<ref>docs(?:\/[\w.-]+)+(?:#[\p{L}\p{M}\p{N}_%-]+)?)/gu;
 
 // `files` are paths relative to `root`, the repository root that every citation starts from
 export function checkDocCitations(root: string, files: readonly string[]): Problem[] {
@@ -71,11 +72,17 @@ function checkFile(file: string, text: string, repo: Repo): Problem[] {
 
 // a sentence's full stop is no part of the path
 function checkCitation(ref: string, repo: Repo): string | null {
-  const [rawPath = '', anchor] = ref.split('#');
+  const [rawPath = '', rawAnchor] = ref.split('#');
   const path = rawPath.replace(/\.+$/u, '');
 
   if (!repo.exists(path)) {
     return `${path} does not exist`;
+  }
+
+  const anchor = rawAnchor === undefined ? undefined : decodeAnchor(rawAnchor);
+
+  if (anchor === null) {
+    return `${path} is cited with a malformed anchor #${rawAnchor ?? ''}`;
   }
 
   const anchors = anchor !== undefined && path.endsWith('.md') ? repo.readAnchors(path) : null;
@@ -87,10 +94,20 @@ function checkCitation(ref: string, repo: Repo): string | null {
   return null;
 }
 
+// an anchor with its URL escapes decoded, or null for an escape that is no UTF-8
+function decodeAnchor(anchor: string): string | null {
+  try {
+    return decodeURIComponent(anchor);
+  } catch {
+    return null;
+  }
+}
+
 // GitHub's anchors of a page: ATX and setext headings outside code fences and front matter,
 // numbered on repeat, plus explicit id and name attributes
 function collectAnchors(markdown: string): Set<string> {
   const anchors = new Set<string>();
+  const headingAnchors = new Set<string>();
   const seen = new Map<string, number>();
 
   const lines = markdown.split('\n');
@@ -120,12 +137,10 @@ function collectAnchors(markdown: string): Set<string> {
     const title = findHeading(line, previous);
 
     if (title !== null) {
-      const slug = buildSlug(title);
-      const count = seen.get(slug) ?? 0;
-      const anchor = count === 0 ? slug : `${slug}-${String(count)}`;
+      const anchor = pickHeadingAnchor(buildSlug(title), headingAnchors, seen);
 
+      headingAnchors.add(anchor);
       anchors.add(anchor);
-      seen.set(slug, count + 1);
     }
 
     for (const match of line.matchAll(/\b(?:id|name)\s*=\s*"(?<id>[^"]+)"/gu)) {
@@ -136,6 +151,27 @@ function collectAnchors(markdown: string): Set<string> {
   }
 
   return anchors;
+}
+
+// GitHub's suffix for a repeated slug, as github-slugger picks it: the slug's next number until
+// the result is no heading's anchor yet, so `Notes`, `Notes`, `Notes-1` get `notes`, `notes-1`
+// and `notes-1-1`
+function pickHeadingAnchor(
+  slug: string,
+  taken: ReadonlySet<string>,
+  seen: Map<string, number>,
+): string {
+  let anchor = slug;
+
+  while (taken.has(anchor)) {
+    const count = (seen.get(slug) ?? 0) + 1;
+
+    seen.set(slug, count);
+
+    anchor = `${slug}-${String(count)}`;
+  }
+
+  return anchor;
 }
 
 // GitHub never renders an HTML comment, so a heading inside one has no anchor: the line without
