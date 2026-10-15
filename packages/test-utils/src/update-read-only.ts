@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 
 // Makes a tree read-only for this user, root too (chattr +i; root writes past
 // any mode); returns the undo, which `stack` also runs while the tree exists.
-export function updateReadOnly(stack: DisposableStack, path: string): () => void {
+export function updateReadOnly(stack: Readonly<DisposableStack>, path: string): () => void {
   const isRoot = process.getuid?.() === 0;
   const lock = isRoot ? ['chattr', '-R', '+i', path] : ['chmod', '-R', 'a-w', path];
   const unlock = isRoot ? ['chattr', '-R', '-i', path] : ['chmod', '-R', 'u+w', path];

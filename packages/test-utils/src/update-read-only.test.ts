@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { canUpdateReadOnly } from './can-update-read-only';
 import { updateReadOnly } from './update-read-only';
 
 function setupTest() {
@@ -20,7 +21,7 @@ function setupTest() {
   return { stack, dir };
 }
 
-test('it refuses a new file anywhere in the tree', () => {
+test.skipIf(!canUpdateReadOnly())('it refuses a new file anywhere in the tree', () => {
   const ctx = setupTest();
 
   mkdirSync(join(ctx.dir, 'tree', 'inner'), { recursive: true });
@@ -31,7 +32,7 @@ test('it refuses a new file anywhere in the tree', () => {
   }).toThrow(expect.objectContaining({ code: expect.toBeOneOf(['EACCES', 'EPERM']) }));
 });
 
-test('it keeps the files in the tree readable', () => {
+test.skipIf(!canUpdateReadOnly())('it keeps the files in the tree readable', () => {
   const ctx = setupTest();
 
   mkdirSync(join(ctx.dir, 'tree'));
@@ -41,7 +42,7 @@ test('it keeps the files in the tree readable', () => {
   expect(readFileSync(join(ctx.dir, 'tree', 'kept'), 'utf8')).toBe('kept\n');
 });
 
-test('it makes the tree writable again on restore', () => {
+test.skipIf(!canUpdateReadOnly())('it makes the tree writable again on restore', () => {
   const ctx = setupTest();
 
   mkdirSync(join(ctx.dir, 'tree'));
@@ -54,41 +55,47 @@ test('it makes the tree writable again on restore', () => {
   expect(readFileSync(join(ctx.dir, 'tree', 'new'), 'utf8')).toBe('x');
 });
 
-test('it makes the tree writable again when the stack is released', () => {
-  const ctx = setupTest();
+test.skipIf(!canUpdateReadOnly())(
+  'it makes the tree writable again when the stack is released',
+  () => {
+    const ctx = setupTest();
 
-  mkdirSync(join(ctx.dir, 'tree'));
+    mkdirSync(join(ctx.dir, 'tree'));
 
-  const stack = new DisposableStack();
+    const stack = new DisposableStack();
 
-  // released by the test's own stack too, before the directory goes, should
-  // the test fail first
-  ctx.stack.defer(() => {
+    // released by the test's own stack too, before the directory goes, should
+    // the test fail first
+    ctx.stack.defer(() => {
+      stack.dispose();
+    });
+
+    updateReadOnly(stack, join(ctx.dir, 'tree'));
+
     stack.dispose();
-  });
 
-  updateReadOnly(stack, join(ctx.dir, 'tree'));
+    writeFileSync(join(ctx.dir, 'tree', 'new'), 'x');
 
-  stack.dispose();
+    expect(readFileSync(join(ctx.dir, 'tree', 'new'), 'utf8')).toBe('x');
+  },
+);
 
-  writeFileSync(join(ctx.dir, 'tree', 'new'), 'x');
+test.skipIf(!canUpdateReadOnly())(
+  'it passes over a tree removed before the stack is released',
+  () => {
+    const ctx = setupTest();
 
-  expect(readFileSync(join(ctx.dir, 'tree', 'new'), 'utf8')).toBe('x');
-});
+    mkdirSync(join(ctx.dir, 'tree'));
 
-test('it passes over a tree removed before the stack is released', () => {
-  const ctx = setupTest();
+    const stack = new DisposableStack();
 
-  mkdirSync(join(ctx.dir, 'tree'));
+    const restore = updateReadOnly(stack, join(ctx.dir, 'tree'));
 
-  const stack = new DisposableStack();
+    restore();
+    rmSync(join(ctx.dir, 'tree'), { recursive: true });
 
-  const restore = updateReadOnly(stack, join(ctx.dir, 'tree'));
-
-  restore();
-  rmSync(join(ctx.dir, 'tree'), { recursive: true });
-
-  expect(() => {
-    stack.dispose();
-  }).not.toThrow();
-});
+    expect(() => {
+      stack.dispose();
+    }).not.toThrow();
+  },
+);

@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { canUpdateReadOnly } from '@impz/test-utils/can-update-read-only';
 import { updateReadOnly } from '@impz/test-utils/update-read-only';
 import { updateLegacyConfig } from './update-legacy-config';
 
@@ -77,50 +78,53 @@ test('it never moves over a file impz has already', () => {
   expect(warn).not.toHaveBeenCalled();
 });
 
-test('it finishes a move that failed after it made the directory, once the old one is writable again', () => {
-  const ctx = setupTest();
+test.skipIf(!canUpdateReadOnly())(
+  'it finishes a move that failed after it made the directory, once the old one is writable again',
+  () => {
+    const ctx = setupTest();
 
-  mkdirSync(join(ctx.dir, 'imp'));
-  writeFileSync(join(ctx.dir, 'imp', 'config.json'), '{"current":null,"hosts":{}}\n');
-  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+    mkdirSync(join(ctx.dir, 'imp'));
+    writeFileSync(join(ctx.dir, 'imp', 'config.json'), '{"current":null,"hosts":{}}\n');
+    writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
 
-  const restore = updateReadOnly(ctx.stack, join(ctx.dir, 'imp'));
+    const restore = updateReadOnly(ctx.stack, join(ctx.dir, 'imp'));
 
-  const failure: unknown = (() => {
-    try {
-      updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
-    } catch (error) {
-      return error;
-    }
+    const failure: unknown = (() => {
+      try {
+        updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
+      } catch (error) {
+        return error;
+      }
 
-    return null;
-  })();
+      return null;
+    })();
 
-  const leftBehind = readdirSync(join(ctx.dir, 'impz'));
+    const leftBehind = readdirSync(join(ctx.dir, 'impz'));
 
-  restore();
+    restore();
 
-  const warn = mock<(line: string) => void>();
+    const warn = mock<(line: string) => void>();
 
-  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+    updateLegacyConfig(join(ctx.dir, 'impz'), warn);
 
-  expect(failure).toMatchObject({ code: expect.toBeOneOf(['EACCES', 'EPERM']) });
-  expect(leftBehind).toStrictEqual([]);
+    expect(failure).toMatchObject({ code: expect.toBeOneOf(['EACCES', 'EPERM']) });
+    expect(leftBehind).toStrictEqual([]);
 
-  expect(readFileSync(join(ctx.dir, 'impz', 'config.json'), 'utf8')).toBe(
-    '{"current":null,"hosts":{}}\n',
-  );
+    expect(readFileSync(join(ctx.dir, 'impz', 'config.json'), 'utf8')).toBe(
+      '{"current":null,"hosts":{}}\n',
+    );
 
-  expect(readFileSync(join(ctx.dir, 'impz', 'token'), 'utf8')).toBe('file-token\n');
-  expect(existsSync(join(ctx.dir, 'imp'))).toBeFalse();
+    expect(readFileSync(join(ctx.dir, 'impz', 'token'), 'utf8')).toBe('file-token\n');
+    expect(existsSync(join(ctx.dir, 'imp'))).toBeFalse();
 
-  expect(warn.mock.calls).toStrictEqual([
-    [
-      `impz: moved ${join(ctx.dir, 'imp', 'config.json')} to ${join(ctx.dir, 'impz', 'config.json')}`,
-    ],
-    [`impz: moved ${join(ctx.dir, 'imp', 'token')} to ${join(ctx.dir, 'impz', 'token')}`],
-  ]);
-});
+    expect(warn.mock.calls).toStrictEqual([
+      [
+        `impz: moved ${join(ctx.dir, 'imp', 'config.json')} to ${join(ctx.dir, 'impz', 'config.json')}`,
+      ],
+      [`impz: moved ${join(ctx.dir, 'imp', 'token')} to ${join(ctx.dir, 'impz', 'token')}`],
+    ]);
+  },
+);
 
 test('it moves the file a part-way move left behind, beside the one it moved', () => {
   const ctx = setupTest();

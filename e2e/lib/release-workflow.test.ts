@@ -672,7 +672,7 @@ test('it writes the formula of a tag from before the rename to imp.rb, the file 
 
   const gitEnv = { ...createGitFreeEnv(process.env), HOME: ctx.dir };
 
-  const runGit = (...args: string[]) =>
+  const runGit = (...args: readonly string[]) =>
     Bun.spawnSync(['git', ...args], { env: gitEnv }).stdout.toString();
 
   // the tap as it is: a formula for each name, imp's from before the rename
@@ -763,7 +763,7 @@ test('it writes the formula of a tag after the rename to impz.rb with the genera
 
   const gitEnv = { ...createGitFreeEnv(process.env), HOME: ctx.dir };
 
-  const runGit = (...args: string[]) =>
+  const runGit = (...args: readonly string[]) =>
     Bun.spawnSync(['git', ...args], { env: gitEnv }).stdout.toString();
 
   // the tap as it is: a formula for each name, imp's from before the rename

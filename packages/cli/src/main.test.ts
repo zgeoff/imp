@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { canUpdateReadOnly } from '@impz/test-utils/can-update-read-only';
 import { updateReadOnly } from '@impz/test-utils/update-read-only';
 import { runCli } from './test-utils/start-cli';
 
@@ -22,7 +23,7 @@ function setupTest() {
   return { home, stack };
 }
 
-test.each([[['--version']], [['--help']], [['completion', 'bash']]])(
+test.skipIf(!canUpdateReadOnly()).each([[['--version']], [['--help']], [['completion', 'bash']]])(
   'it runs %p beside a config from before the rename to impz under a read-only home',
   async (args) => {
     const ctx = setupTest();
