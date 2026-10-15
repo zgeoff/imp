@@ -26,8 +26,9 @@ export function updateLegacyConfig(
 ): void {
   const legacyDir = join(dirname(dir), 'imp');
 
+  // impz's own file first, so a complete config never needs the old path
   const files = CONFIG_FILES.filter(
-    (name) => isPresent(join(legacyDir, name)) && !isPresent(join(dir, name)),
+    (name) => !isPresent(join(dir, name)) && checkLegacyFile(join(legacyDir, name), warn),
   );
 
   if (files.length === 0) {
@@ -95,6 +96,23 @@ function planLinkTarget(target: string, legacyDir: string, dir: string): string 
   const file = isMoved ? join(dir, basename(absolute)) : absolute;
 
   return relative(dir, file);
+}
+
+// whether an old file is there to move; a path that cannot be looked up is
+// noted and left, so it never stops a call that reads impz's own config
+function checkLegacyFile(path: string, warn: (line: string) => void): boolean {
+  try {
+    return isPresent(path);
+  } catch (error) {
+    // an `imp` that is a file, not a directory, holds no old config
+    if (error instanceof Error && 'code' in error && error.code === 'ENOTDIR') {
+      return false;
+    }
+
+    warn(`impz: cannot look for ${path} to move it: ${String(error)}`);
+
+    return false;
+  }
 }
 
 // lstat, so a symlink counts even when its target is gone

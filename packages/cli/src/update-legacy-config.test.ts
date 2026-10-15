@@ -61,6 +61,58 @@ test('it moves the saved hosts and the token file from the old directory', () =>
   ]);
 });
 
+test('it never looks up the old path when impz has both files', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+  writeFileSync(join(ctx.dir, 'impz', 'token'), 'file-token\n');
+
+  // a link to itself, so any lookup under the old path fails with ELOOP
+  symlinkSync('imp', join(ctx.dir, 'imp'));
+
+  const warn = mock<(line: string) => void>();
+
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+
+  expect(warn).not.toHaveBeenCalled();
+});
+
+test('it notes an old path it cannot look up and leaves the config impz has', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+
+  // a link to itself, so any lookup under the old path fails with ELOOP
+  symlinkSync('imp', join(ctx.dir, 'imp'));
+
+  const warn = mock<(line: string) => void>();
+
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+
+  const prefix = `impz: cannot look for ${join(ctx.dir, 'imp', 'token')} to move it: `;
+
+  expect(warn.mock.calls).toStrictEqual([
+    [expect.toSatisfy((line: string) => line.startsWith(prefix) && line.includes('ELOOP'))],
+  ]);
+
+  expect(readdirSync(join(ctx.dir, 'impz'))).toStrictEqual(['config.json']);
+});
+
+test('it reads an old path that is a file as holding no config', () => {
+  const ctx = setupTest();
+
+  writeFileSync(join(ctx.dir, 'imp'), 'another tool\n');
+
+  const warn = mock<(line: string) => void>();
+
+  updateLegacyConfig(join(ctx.dir, 'impz'), warn);
+
+  expect(warn).not.toHaveBeenCalled();
+  expect(readdirSync(ctx.dir)).toStrictEqual(['imp']);
+});
+
 test('it never moves over a file impz has already', () => {
   const ctx = setupTest();
 
