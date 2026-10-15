@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,10 +10,6 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
-import { createImage } from '../db/images';
-import { findImpByName } from '../db/imps';
-import { openDatabase } from '../db/open-database';
-import { listGrantNames, listGrantedRules } from '../db/secrets';
 import {
   buildImagePaths,
   buildSystemDrivePath,
@@ -25,6 +20,10 @@ import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { createImage } from './images';
+import { findImpByName } from './imps';
+import { openDatabase } from './open-database';
+import { listGrantNames, listGrantedRules } from './secrets';
 
 // Grants made, revoked, copied and changed at the same time: each race ends
 // as one serial order would, and no imp ever holds two credentials for one

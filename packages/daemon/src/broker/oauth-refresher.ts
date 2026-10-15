@@ -37,7 +37,7 @@ type RefreshOutcome =
   | { readonly kind: 'gone' }
   | { readonly kind: 'unreadable' };
 
-interface OAuthRefresher {
+export interface OAuthRefresher {
   // Refreshes now and answers after it ends. A refresh already running for
   // the secret is the one answered; there is never a second request.
   // `force` skips the backoff and the needs_login stop.
