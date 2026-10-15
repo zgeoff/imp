@@ -756,7 +756,7 @@ impd's app on a loopback port.
 
 The broker takes `beforeGrantWrite` (through `createImpd`'s `broker` deps), which runs between a
 grant call's access check and its transaction, as `afterRuleRead` runs between a request's rule read
-and its value read; `build-app-grants.test.ts` and `build-app-token-update.test.ts` act there.
+and its value read; `auth/check-grantable.test.ts` and `build-token-routes.test.ts` act there.
 
 impd's API listens with `buildApiListenOptions(config, idleTimeoutS)` (`api-listen-options.ts`),
 whose idle timeout defaults to Elysia's 30 seconds. `mcp/mcp-endpoint.test.ts` listens with 1

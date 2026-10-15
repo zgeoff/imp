@@ -1,7 +1,6 @@
-import { EVENT_VERSION, SYSTEM_FEATURES, hasScope, impContract, isImpAllowed } from '@imp/api';
-import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
+import { EVENT_VERSION, hasScope, impContract, isImpAllowed } from '@imp/api';
+import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope } from '@imp/api';
 import { implement } from '@orpc/server';
-import packageJson from '../package.json' with { type: 'json' };
 import { buildBuilderError, buildForbiddenError } from './api-errors';
 import { readImpName } from './audit/api-audit';
 import type { ApiAudit } from './audit/api-audit';
@@ -14,7 +13,7 @@ import {
   isRefusalAudited,
 } from './auth/access-policy';
 import { readChangedImps } from './auth/builder-calls';
-import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
+import { formatCaller, isCallerAllowed } from './auth/caller';
 import type { Caller } from './auth/caller';
 import {
   isLeaseVisible,
@@ -27,13 +26,13 @@ import type { TokenStore } from './auth/token-store';
 import { buildBackupsOffError } from './backup/backup-service';
 import type { BackupService } from './backup/backup-service';
 import type { Broker } from './broker/broker-service';
+import { buildSystemRoutes } from './build-system-routes';
+import { buildTokenRoutes } from './build-token-routes';
 import type { CheckpointService } from './checkpoints/checkpoint-service';
 import type { Config } from './config';
 import { listApiCalls } from './db/api-audit';
-import { writeDatabaseCopy } from './db/database-copy';
 import type { ImageRecord } from './db/images';
-import { findImpByName, listImps } from './db/imps';
-import type { ImpRecord } from './db/imps';
+import { findImpByName } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
 import { findSecret } from './db/secrets';
 import type { EgressService } from './egress/egress-service';
@@ -43,14 +42,12 @@ import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
 import type { DnsTokenStatus } from './https/dns/dns-token';
 import { createExposureService } from './https/exposure-service';
-import type { RecordsStatus } from './https/https-service';
 import type { PublicRecordsLink } from './https/public-records-link';
 import type { Repeat } from './images/build-event-stream';
 import { runImageOp } from './images/image-op-stream';
 import type { ImageOpStreamOptions } from './images/image-op-stream';
 import type { ImageService } from './images/image-service';
 import type { TemplateService } from './images/template-service';
-import { countBootStatuses } from './imps/boot-status';
 import { readPresentedLeases } from './imps/imp-presenter';
 import type { ImpService } from './imps/imp-service';
 import type { MoveService } from './moves/move-service';
@@ -62,7 +59,6 @@ import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
 import type { SystemFileInfo } from './storage/system-file-info';
 import type { TailnetNamesStatus } from './tailnet-names/tailnet-names';
-import { readKsmHostStats } from './vmm/ksm';
 import type { KsmHostStats } from './vmm/ksm';
 
 // audit rows `audit.list` gives when the caller names no limit
@@ -130,7 +126,7 @@ interface ImageOpCall {
 // what each call gets from build-app: who made it, and a signal that aborts
 // when what it authenticated with ends (a logout, a removed token); null
 // for nothing that can end
-export interface RpcContext {
+interface RpcContext {
   readonly caller: Caller;
   readonly ends: AbortSignal | null;
 }
@@ -147,86 +143,7 @@ export function buildRouter(deps: RouterDeps) {
     updateRecords: deps.publicRecords.update,
   });
 
-  // read at each grant or revoke, never cached: the secret by a name can be
-  // another one than a token was given
-  const readGeneration = async (name: string): Promise<string | null> => {
-    const secret = await findSecret(deps.db, name);
-
-    return secret?.generation ?? null;
-  };
-
-  // every call is checked against its access rule (auth/access-policy.ts);
-  // every call that changes something, refused or not, leaves an audit row
-  // after its answer
-  const os = implement(impContract)
-    .$context<RpcContext>()
-    .use(async (options, input) => {
-      const procedure = options.path.join('.');
-      const caller = options.context.caller;
-
-      const requireAccess = async (): Promise<void> => {
-        const access = findAccess(procedure);
-
-        const refusal = await checkAccess(access, caller, input, readGeneration);
-
-        if (refusal !== null) {
-          throw buildForbiddenError(refusal.message, refusal.reason);
-        }
-
-        for (const name of readChangedImps(procedure, access, input)) {
-          const imp = await findImpByName(deps.db, name);
-
-          if (imp?.kind === 'builder') {
-            throw buildBuilderError(name);
-          }
-        }
-      };
-
-      // what a handler resolved for the audit row, such as an add's pull
-      const auditDetail: AuditDetail = { value: null };
-      const startedAt = deps.now();
-
-      const buildCall = (output: unknown) => ({
-        procedure,
-        actor: caller,
-        impName: readImpName(procedure, input, output),
-        startedAt,
-        detail: auditDetail.value,
-      });
-
-      if (!isAuditedProcedure(procedure)) {
-        try {
-          await requireAccess();
-        } catch (error) {
-          if (isRefusalAudited(procedure)) {
-            deps.audit.record(buildCall(null), error);
-          }
-
-          throw toCallerError(error, caller);
-        }
-
-        try {
-          return await options.next({ context: { auditDetail } });
-        } catch (error) {
-          throw toCallerError(error, caller);
-        }
-      }
-
-      try {
-        await requireAccess();
-
-        const result = await options.next({ context: { auditDetail } });
-
-        deps.audit.record(buildCall(result.output), null);
-
-        return result;
-      } catch (error) {
-        deps.audit.record(buildCall(null), error);
-
-        // a refusal names only the leases and imps the caller may see
-        throw toCallerError(error, caller);
-      }
-    });
+  const os = buildImplementer(deps);
 
   // the caller's imps as its event stream opens
   const readSnapshot = async (caller: Readonly<Caller>): Promise<ImpEvent[]> => {
@@ -855,36 +772,7 @@ export function buildRouter(deps: RouterDeps) {
         });
       }),
     },
-    system: {
-      info: os.system.info.handler(() => readSystemInfo(deps)),
-      gc: os.system.gc.handler((context) =>
-        deps.gc.runGc({
-          isDryRun: context.input.dryRun ?? false,
-          isOrphans: context.input.orphans ?? false,
-          isSecretFiles: context.input.secretFiles ?? false,
-          isRemoveSecretFiles: context.input.removeSecretFiles ?? false,
-        }),
-      ),
-      copyDatabase: os.system.copyDatabase.handler(async (context) => {
-        const copy = await writeDatabaseCopy(
-          deps.db,
-          deps.diskBudget,
-          deps.config.dataDir,
-          context.input.name ?? buildCopyName(deps.now()),
-          deps.now,
-        );
-
-        // in the contract's order, which a restore script's output follows
-        return {
-          path: copy.path,
-          sizeBytes: copy.sizeBytes,
-          lastMigration: copy.lastMigration,
-          impVersion: packageJson.version,
-          createdAt: copy.createdAt,
-          integrity: copy.integrity,
-        };
-      }),
-    },
+    system: buildSystemRoutes(os, deps),
     oauth: {
       clients: {
         list: os.oauth.clients.list.handler(() => deps.oauth.listClients()),
@@ -924,167 +812,95 @@ export function buildRouter(deps: RouterDeps) {
         }),
       },
     },
-    tokens: {
-      list: os.tokens.list.handler(() => deps.tokens.list()),
-      create: os.tokens.create.handler((context) =>
-        deps.tokens.create({
-          name: context.input.name,
-          scope: context.input.scope,
-          imps: context.input.imps ?? null,
-          sshKeys: context.input.sshKeys ?? [],
-          grantable: context.input.grantable ?? [],
-          ...(context.input.imageRefPrefix !== undefined && {
-            imageRefPrefix: context.input.imageRefPrefix,
-          }),
-        }),
-      ),
-
-      // a secret taken off the list ends its grants on the token's imps, so
-      // the broker drops what no grant covers any more
-      update: os.tokens.update.handler(async (context) => {
-        const updated = await deps.tokens.update(context.input.name, {
-          ...(context.input.grantable !== undefined && { grantable: context.input.grantable }),
-          ...(context.input.imageRefPrefix !== undefined && {
-            imageRefPrefix: context.input.imageRefPrefix,
-          }),
-        });
-
-        if (updated.droppedGrants > 0) {
-          await deps.broker.applyGrants();
-        }
-
-        return updated.token;
-      }),
-      delete: os.tokens.delete.handler(async (context) => {
-        await deps.tokens.remove(context.input.name);
-
-        return {};
-      }),
-      addKey: os.tokens.addKey.handler((context) =>
-        deps.tokens.addKey(context.input.name, context.input.key),
-      ),
-      removeKey: os.tokens.removeKey.handler(async (context) => {
-        await deps.tokens.removeKey(context.input.name, context.input.fingerprint);
-
-        return {};
-      }),
-      whoami: os.tokens.whoami.handler((context) => toIdentity(context.context.caller)),
-    },
+    tokens: buildTokenRoutes(os, deps),
   });
 }
 
-// imp-20261004-061233: a name's form, in UTC, to the second
-function buildCopyName(now: number): string {
-  const stamp = new Date(now).toISOString().slice(0, 19).replaceAll(/[-:]/g, '').replace('T', '-');
+// the implementer every procedure is built on, which a topic's routes take
+// (build-system-routes.ts, build-token-routes.ts)
+export type RpcImplementer = ReturnType<typeof buildImplementer>;
 
-  return `imp-${stamp}`;
-}
+function buildImplementer(deps: RouterDeps) {
+  // read at each grant or revoke, never cached: the secret by a name can be
+  // another one than a token was given
+  const readGeneration = async (name: string): Promise<string | null> => {
+    const secret = await findSecret(deps.db, name);
 
-// RAM used is measured (what awake Firecrackers own); committed is the memory
-// the awake imps were given
-// (docs/architecture/sleep-and-wake.md#the-ram-governor).
-async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
-  const [imps, usage, tailscale, storage, defaultImage] = await Promise.all([
-    listImps(deps.db),
-    deps.governor.readUsage(),
-    deps.readTailscale(),
-    deps.diskBudget.readStatus(),
-    deps.images.findDefaultImage(),
-  ]);
-
-  const running = imps.filter((imp) => imp.state === 'running');
-  const sleeping = imps.filter((imp) => imp.state === 'sleeping');
-
-  return {
-    version: packageJson.version,
-    ramBudgetMib: deps.config.ramBudgetMib,
-    ramUsedMib: usage.usedMib,
-    ramReservedMib: usage.reservedMib,
-    ramCommittedMib: running.reduce((sum, imp) => sum + imp.maxMemoryMib, 0),
-    ramSleepingMib: sleeping.reduce((sum, imp) => sum + imp.memoryMib, 0),
-    awakeCount: running.length,
-    impCount: imps.length,
-    sessionCount: imps.reduce((sum, imp) => sum + (deps.imps.countSessions(imp) ?? 0), 0),
-    bootStatus: countBootStatuses(imps, deps.imps.readBootStatus),
-    firecrackerVersion: deps.firecrackerVersion,
-    guestKernel: deps.systemFiles.guestKernel,
-    systemDrive: deps.systemFiles.systemDrive,
-    storage: {
-      backend: deps.storage.kind,
-      ...storage,
-      impDiskBytes: imps.reduce((sum, imp) => sum + imp.diskBytes, 0),
-    },
-    tailscale: {
-      enabled: deps.config.tailscaleEnabled,
-      state: tailscale.state,
-      hostname: tailscale.hostname,
-      ip: tailscale.ip,
-      names: deps.readTailnetNames?.() ?? null,
-    },
-    cpu: deps.imps.readCpuHost(),
-    rebootReason: deps.imps.readRebootReason(),
-    defaults: { memoryMib: deps.config.defaultMemoryMib, image: defaultImage?.name ?? null },
-    egress: { isEnforced: deps.egress.isEnforced() },
-    ksm: readKsmInfo(deps, running, usage.headroomMib),
-    public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
-    https: await readHttpsInfo(deps),
-    features: SYSTEM_FEATURES,
+    return secret?.generation ?? null;
   };
-}
 
-function readPublicInfo(
-  config: Config,
-  imps: readonly ImpRecord[],
-  records: RecordsStatus | null,
-): SystemInfo['public'] {
-  const ip = config.https?.public?.ip;
+  // every call is checked against its access rule (auth/access-policy.ts);
+  // every call that changes something, refused or not, leaves an audit row
+  // after its answer
+  return implement(impContract)
+    .$context<RpcContext>()
+    .use(async (options, input) => {
+      const procedure = options.path.join('.');
+      const caller = options.context.caller;
 
-  if (ip === undefined) {
-    return null;
-  }
+      const requireAccess = async (): Promise<void> => {
+        const access = findAccess(procedure);
 
-  return {
-    ip,
-    imps: imps.filter((imp) => imp.publicAuth !== null).length,
-    records:
-      records === null
-        ? null
-        : { isOk: records.isOk, error: records.error, at: new Date(records.at) },
-  };
-}
+        const refusal = await checkAccess(access, caller, input, readGeneration);
 
-async function readHttpsInfo(deps: RouterDeps): Promise<SystemInfo['https']> {
-  const domain = deps.config.https?.domain;
+        if (refusal !== null) {
+          throw buildForbiddenError(refusal.message, refusal.reason);
+        }
 
-  if (domain === undefined) {
-    return null;
-  }
+        for (const name of readChangedImps(procedure, access, input)) {
+          const imp = await findImpByName(deps.db, name);
 
-  const token = deps.checkDnsToken === null ? null : await deps.checkDnsToken();
+          if (imp?.kind === 'builder') {
+            throw buildBuilderError(name);
+          }
+        }
+      };
 
-  return {
-    domain,
-    dnsToken:
-      token === null ? null : { isOk: token.isOk, error: token.error, at: new Date(token.at) },
-  };
-}
+      // what a handler resolved for the audit row, such as an add's pull
+      const auditDetail: AuditDetail = { value: null };
+      const startedAt = deps.now();
 
-function readKsmInfo(
-  deps: RouterDeps,
-  running: readonly ImpRecord[],
-  headroomMib: number,
-): SystemInfo['ksm'] {
-  const stats = deps.config.ksm === null ? null : (deps.readKsmHostStats ?? readKsmHostStats)();
+      const buildCall = (output: unknown) => ({
+        procedure,
+        actor: caller,
+        impName: readImpName(procedure, input, output),
+        startedAt,
+        detail: auditDetail.value,
+      });
 
-  if (stats === null) {
-    return null;
-  }
+      if (!isAuditedProcedure(procedure)) {
+        try {
+          await requireAccess();
+        } catch (error) {
+          if (isRefusalAudited(procedure)) {
+            deps.audit.record(buildCall(null), error);
+          }
 
-  return {
-    ...stats,
-    headroomMib,
-    unmergeable: running.filter((imp) => deps.imps.isUnmergeable(imp.id)).length,
-  };
+          throw toCallerError(error, caller);
+        }
+
+        try {
+          return await options.next({ context: { auditDetail } });
+        } catch (error) {
+          throw toCallerError(error, caller);
+        }
+      }
+
+      try {
+        await requireAccess();
+
+        const result = await options.next({ context: { auditDetail } });
+
+        deps.audit.record(buildCall(result.output), null);
+
+        return result;
+      } catch (error) {
+        deps.audit.record(buildCall(null), error);
+
+        // a refusal names only the leases and imps the caller may see
+        throw toCallerError(error, caller);
+      }
+    });
 }
 
 export function toApiImage(image: ImageRecord): Image {

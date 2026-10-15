@@ -1,4 +1,3 @@
-// oxlint-disable zgeoff/test-beside-module -- has no module of its own; GEO-434 moves it beside the module it tests
 import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,19 +8,23 @@ import { readImpEnv } from '@imp/test-utils/read-imp-env';
 import { updateEnv } from '@imp/test-utils/update-env';
 import { waitFor } from '@imp/test-utils/wait-for';
 import { createImpClient } from '@zgeoff/imp-client';
-import { loadConfig } from './config';
-import { createImpd } from './create-impd';
-import { createImage } from './db/images';
-import { listLeases, writeLease } from './db/leases';
-import { openDatabase } from './db/open-database';
-import { buildImagePaths, buildSystemDrivePath, buildSystemDrivesDir } from './storage/data-layout';
-import { createXfsBackend } from './storage/xfs-backend';
-import { buildMockLeaseRecord } from './test-utils/build-mock-lease-record';
-import { buildMockNewImage } from './test-utils/build-mock-new-image';
-import { buildQueryGate } from './test-utils/build-query-gate';
-import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from './test-utils/build-stub-vmm';
-import { findFreePorts } from './test-utils/find-free-ports';
+import { loadConfig } from '../config';
+import { createImpd } from '../create-impd';
+import { createImage } from '../db/images';
+import { listLeases, writeLease } from '../db/leases';
+import { openDatabase } from '../db/open-database';
+import {
+  buildImagePaths,
+  buildSystemDrivePath,
+  buildSystemDrivesDir,
+} from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
+import { buildMockLeaseRecord } from '../test-utils/build-mock-lease-record';
+import { buildMockNewImage } from '../test-utils/build-mock-new-image';
+import { buildQueryGate } from '../test-utils/build-query-gate';
+import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { findFreePorts } from '../test-utils/find-free-ports';
 
 // impd's real app on stub VMs, on a clock the test steps, with every event
 // it emits and a root client that reaches the app in process
