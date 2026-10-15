@@ -2,10 +2,11 @@
 
 ## [2.0.3](https://github.com/zgeoff/impz/compare/v2.0.2...v2.0.3) (2026-10-15)
 
-
 ### Bug Fixes
 
-* **geo-992:** point code citations at the split docs and check them ([#404](https://github.com/zgeoff/impz/issues/404)) ([021349d](https://github.com/zgeoff/impz/commit/021349d5fc36d26875ae19e04e3b6cf309f5c032))
+- **geo-992:** point code citations at the split docs and check them
+  ([#404](https://github.com/zgeoff/impz/issues/404))
+  ([021349d](https://github.com/zgeoff/impz/commit/021349d5fc36d26875ae19e04e3b6cf309f5c032))
 
 ## [2.0.2](https://github.com/zgeoff/impz/compare/v2.0.1...v2.0.2) (2026-10-15)
 
