@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseDuCount } from './image-writer';
+import { parseDuCount } from './create-image-writer';
 
 test('#parseDuCount reads the count du prints before its path', () => {
   expect(parseDuCount('4096\t/data/root\n')).toBe(4096);

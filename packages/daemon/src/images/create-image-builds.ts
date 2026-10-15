@@ -24,6 +24,8 @@ import type { Builders } from './builder-imps';
 import { createBuildRuns } from './create-build-runs';
 import type { BuildRuns } from './create-build-runs';
 import type { BuildOutput } from './create-build-steps';
+import { requireClientImageName } from './create-image-writer';
+import type { ImageWriter } from './create-image-writer';
 import { DockerBuildError, runDockerBuild } from './docker-build';
 import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
 import type { ExternalImage } from './dockerfile-check';
@@ -31,8 +33,6 @@ import { DockerfileError } from './dockerfile-error';
 import { runGuestBuild } from './guest-build';
 import { formatPinFailure, formatPlatform, pickRepoDigest, readImageStore } from './image-pin';
 import type { ImageStore, Pin, PinInspect } from './image-pin';
-import { requireClientImageName } from './image-writer';
-import type { ImageWriter } from './image-writer';
 import { runDocker } from './run-docker';
 import { writeContextTar } from './write-context-tar';
 

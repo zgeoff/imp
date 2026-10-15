@@ -33,7 +33,7 @@ import { buildTreeTar } from '../test-utils/build-tree-tar';
 import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { createStubImageMkfs } from '../test-utils/create-stub-image-mkfs';
 import { startDiskSampler } from '../test-utils/start-disk-sampler';
-import { normalizeDockerfilePath } from './image-builds';
+import { normalizeDockerfilePath } from './create-image-builds';
 import { createImageService } from './image-service';
 
 async function setupTest() {

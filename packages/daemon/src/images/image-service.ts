@@ -8,11 +8,11 @@ import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
 import type { Builders } from './builder-imps';
-import { FALLBACK_DEFAULT_IMAGE, createImageAdds } from './image-adds';
-import type { ImageAdds } from './image-adds';
-import { createImageBuilds } from './image-builds';
-import type { ImageBuilds } from './image-builds';
-import { createImageWriter } from './image-writer';
+import { FALLBACK_DEFAULT_IMAGE, createImageAdds } from './create-image-adds';
+import type { ImageAdds } from './create-image-adds';
+import { createImageBuilds } from './create-image-builds';
+import type { ImageBuilds } from './create-image-builds';
+import { createImageWriter } from './create-image-writer';
 
 export type ImageService = ImageAdds &
   ImageBuilds & {

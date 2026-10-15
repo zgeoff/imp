@@ -31,20 +31,6 @@ interface WarmSendDeps {
   readonly readTapMac?: (tap: string) => string | null;
 }
 
-// a sleeping imp's snapshot record, which a warm send carries
-export function requireSnapshotMeta(
-  deps: Pick<WarmSendDeps, 'storage'>,
-  imp: ImpRecord,
-): SnapshotMeta {
-  const meta = readSnapshotMeta(deps.storage.resolveImpPaths(imp.id));
-
-  if (meta === null) {
-    throw new Error(`${imp.name} has no memory snapshot to move`);
-  }
-
-  return meta;
-}
-
 // A sleeping imp moves warm only to a target that can load its memory;
 // else the refusal names each fact that differs
 export async function checkWarmMove(
@@ -92,6 +78,20 @@ export async function checkWarmMove(
   }
 
   return move;
+}
+
+// a sleeping imp's snapshot record, which a warm send carries
+export function requireSnapshotMeta(
+  deps: Pick<WarmSendDeps, 'storage'>,
+  imp: ImpRecord,
+): SnapshotMeta {
+  const meta = readSnapshotMeta(deps.storage.resolveImpPaths(imp.id));
+
+  if (meta === null) {
+    throw new Error(`${imp.name} has no memory snapshot to move`);
+  }
+
+  return meta;
 }
 
 // a warm send's memory snapshot, and whether the target needs its drive

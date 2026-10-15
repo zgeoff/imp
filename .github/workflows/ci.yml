@@ -104,7 +104,7 @@ jobs:
           sudo mount -o loop "$fs.img" "$fs"
           trap 'sudo umount "$fs" && rm -f "$fs.img" && rmdir "$fs"' EXIT
           sudo chown "$(id -u):$(id -g)" "$fs"
-          IMP_TEST_SMALL_FS="$fs" bun test packages/daemon/src/images/image-builds.test.ts -t 'small filesystem'
+          IMP_TEST_SMALL_FS="$fs" bun test packages/daemon/src/images/create-image-builds.test.ts -t 'small filesystem'
 
       # impd's port of the Dockerfile parser against the Go parser it ports,
       # at the commit behind the pinned frontend (scripts/dockerfile-difftest)

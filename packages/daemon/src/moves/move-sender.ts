@@ -19,6 +19,9 @@ import { encodeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImagePaths } from '../storage/data-layout';
 import type { MoveMode, StorageBackend } from '../storage/storage-backend';
+import { buildMovedLeases, requireLeasesKept } from './build-moved-leases';
+import { buildWarmHeader, checkWarmMove, requireSnapshotMeta } from './check-warm-move';
+import type { WarmParts } from './check-warm-move';
 import {
   MOVE_FRAMES,
   countDataBytes,
@@ -35,15 +38,12 @@ import {
   MoveOfferReplySchema,
 } from './move-header';
 import type { MoveHeader } from './move-header';
-import { buildMovedLeases, requireLeasesKept } from './move-leases';
 import { sendInParts } from './move-parts';
 import { ReceiptSchema, buildTicketHeader, parseTicket, readReceipt } from './move-tickets';
 import type { ReadonlyReceiptBody, ReceiptBody } from './move-tickets';
 import { OfferRefusalError } from './offer-refusal-error';
 import { readPeerUrlAddress } from './peer-address';
 import type { PeerRanges } from './peer-address';
-import { buildWarmHeader, checkWarmMove, requireSnapshotMeta } from './warm-move';
-import type { WarmParts } from './warm-move';
 
 export interface MoveSender {
   readonly prepare: (name: string, options: PrepareOptions) => Promise<MovePlan>;

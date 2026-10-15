@@ -43,6 +43,8 @@ import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
+import { writeReceivedLeases } from './build-moved-leases';
+import { requireOwnDrivePath, requireWarmMove, writeWarmFiles } from './check-warm-move';
 import {
   FileEndSchema,
   MOVE_FRAMES,
@@ -61,7 +63,6 @@ import {
   MoveOfferSchema,
 } from './move-header';
 import type { MoveHeader } from './move-header';
-import { writeReceivedLeases } from './move-leases';
 import { PART_WAIT_MS, createPartPipe } from './move-parts';
 import type { PartPipe } from './move-parts';
 import { MoveRequestError } from './move-request-error';
@@ -75,7 +76,6 @@ import {
 import type { ParsedTicket, ReceiptBody } from './move-tickets';
 import type { PeerRanges } from './peer-address';
 import { findWarmMismatches } from './warm-facts';
-import { requireOwnDrivePath, requireWarmMove, writeWarmFiles } from './warm-move';
 
 // a stream must start this soon after its ticket; the commit is good this
 // long after the receipt (docs/architecture/moves.md#tickets)

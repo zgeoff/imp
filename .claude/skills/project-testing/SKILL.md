@@ -33,7 +33,7 @@ the rules for writing tests live in the testing skill.
 Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
 tests need `jq`, and `release-please-config.test.ts` runs `git`.
 
-The build disk hold's `<file>` is `packages/daemon/src/images/image-builds.test.ts`; its
+The build disk hold's `<file>` is `packages/daemon/src/images/create-image-builds.test.ts`; its
 small-filesystem tests skip unless `IMP_TEST_SMALL_FS` names a directory. Each trial measures the
 filesystem with `packages/daemon/src/test-utils/start-disk-sampler.ts`, which removes its filler
 file when the test ends.

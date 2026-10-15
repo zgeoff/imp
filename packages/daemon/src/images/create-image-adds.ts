@@ -11,10 +11,10 @@ import { readErrorMessage } from '../read-error-message';
 import { createBuildEngine, toEngineRun } from './build-engine';
 import { BUILDER_IMAGE } from './builder-imps';
 import type { Builders } from './builder-imps';
+import { requireClientImageName, requireDockerImage } from './create-image-writer';
+import type { ImageWriter } from './create-image-writer';
 import { loadGuestImage } from './guest-build';
 import { deriveImageName } from './image-naming';
-import { requireClientImageName, requireDockerImage } from './image-writer';
-import type { ImageWriter } from './image-writer';
 
 export const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 const SEED_REF = 'ubuntu:24.04';

@@ -30,7 +30,7 @@ import { createStubDockerCli } from '../test-utils/create-stub-docker-cli';
 import { createStubImageMkfs } from '../test-utils/create-stub-image-mkfs';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
-import { HOST_ADD_WARNING } from './image-adds';
+import { HOST_ADD_WARNING } from './create-image-adds';
 import { createImageService } from './image-service';
 
 async function setupTest() {
