@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.5.0](https://github.com/zgeoff/imp/compare/v1.4.4...v1.5.0) (2026-10-15)
+
+### Features
+
+- **geo-862:** warn when the zfs module has the zfs_uiomove bug
+  ([#384](https://github.com/zgeoff/imp/issues/384))
+  ([a45d299](https://github.com/zgeoff/imp/commit/a45d2993e5dcd3cbd814939f17654375b6ca8b28))
+
+### Bug Fixes
+
+- **geo-899:** keep kernel oops holds when the taint flag is unreadable
+  ([#383](https://github.com/zgeoff/imp/issues/383))
+  ([d9d5957](https://github.com/zgeoff/imp/commit/d9d595728604a9a192fa4cd8282b21d89631535d))
+
 ## [1.4.4](https://github.com/zgeoff/imp/compare/v1.4.3...v1.4.4) (2026-10-14)
 
 ### Bug Fixes
