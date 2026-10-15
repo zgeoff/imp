@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { findImageByName } from '../db/images';
 import { findImpByName, updateImpExposure, updateImpMove } from '../db/imps';
 import { TEST_TOKEN, buildTestApp } from '../imps/test-imps';

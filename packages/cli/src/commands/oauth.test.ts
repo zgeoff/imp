@@ -3,16 +3,16 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { ApprovalCodeSchema } from '@imp/api';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { createImpClient } from '@zgeoff/imp-client';
+import { ApprovalCodeSchema } from '@impz/api';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import * as z from 'zod';
 import { runCli } from '../test-utils/start-cli';
 import { UsageError } from '../usage-error';
@@ -174,7 +174,7 @@ test('it refuses without a terminal or --yes before it calls impd', () => {
     ),
   ).rejects.toThrowWithMessage(
     UsageError,
-    'imp oauth approve asks before it approves, and stdin is not a terminal; pass --yes to approve without asking',
+    'impz oauth approve asks before it approves, and stdin is not a terminal; pass --yes to approve without asking',
   );
 });
 
@@ -275,7 +275,7 @@ test('it approves what it showed when the answer at a terminal is yes', async ()
   );
 
   expect(show).toHaveBeenLastCalledWith(
-    'imp: approved: conn gets exec on dev-*; press Continue on the sign-in page',
+    'impz: approved: conn gets exec on dev-*; press Continue on the sign-in page',
   );
 
   expect(ctx.calls.filter((call) => call.path === 'oauth/approvals/approve')).toStrictEqual([
@@ -330,7 +330,7 @@ test.each([
   expect(confirm).not.toHaveBeenCalled();
 
   expect(show).toHaveBeenLastCalledWith(
-    "imp: approved: conn gets exec on the token's imps; press Continue on the sign-in page",
+    "impz: approved: conn gets exec on the token's imps; press Continue on the sign-in page",
   );
 });
 
@@ -379,27 +379,27 @@ test.each([
   [
     'an http redirect URI off loopback',
     ['client', 'add', 'conn', '--redirect-uri', 'http://client.example/cb'],
-    'imp: --redirect-uri takes https URLs, or http on a loopback host, with no fragment; not http://client.example/cb',
+    'impz: --redirect-uri takes https URLs, or http on a loopback host, with no fragment; not http://client.example/cb',
   ],
   [
     'a redirect URI with a fragment',
     ['client', 'set', 'conn', '--redirect-uri', 'https://client.example/cb#x'],
-    'imp: --redirect-uri takes https URLs, or http on a loopback host, with no fragment; not https://client.example/cb#x',
+    'impz: --redirect-uri takes https URLs, or http on a loopback host, with no fragment; not https://client.example/cb#x',
   ],
   [
     'a code that is not a sign-in code',
     ['approve', 'ABCD-EFG0'],
-    'imp: ABCD-EFG0 is not a sign-in code; it looks like ABCD-EFGH',
+    'impz: ABCD-EFG0 is not a sign-in code; it looks like ABCD-EFGH',
   ],
   [
     'an unknown scope',
     ['approve', 'ABCD-EFGH', '--scope', 'admin'],
-    'imp: --scope must be one of read, exec, manage',
+    'impz: --scope must be one of read, exec, manage',
   ],
   [
     'an imp pattern with an inner star',
     ['approve', 'ABCD-EFGH', '--imps', 'd*v'],
-    'imp: --imps takes imp names, or a name prefix and a trailing *, such as dev-*; not d*v',
+    'impz: --imps takes imp names, or a name prefix and a trailing *, such as dev-*; not d*v',
   ],
 ])('it refuses %s before it calls impd', async (_case, args, message) => {
   const result = await runCli({ args: ['oauth', ...args], env: { IMP_URL: 'http://127.0.0.1:1' } });

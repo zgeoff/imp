@@ -1,5 +1,5 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { startInterval } from './start-interval';
 
 test('it runs its callback again on each interval', async () => {

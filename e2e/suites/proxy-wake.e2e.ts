@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { waitAwakePastIdle } from '../lib/awake-past-idle';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -25,7 +25,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// `imp proxy` and sleep: the journey waits out the idle timeout, so it runs
+// `impz proxy` and sleep: the journey waits out the idle timeout, so it runs
 // in the acceptance set, not in `fast` with the proxy suite.
 
 // one stack for every release, so the proxy stops before its imp goes
@@ -106,7 +106,7 @@ test('it keeps an imp awake while a proxied connection is open, wakes it on a co
 
   await waitFor('the lost notice', () => {
     if (!proxy.readStderr().includes(`${name}:9002: the connection in the imp was lost`)) {
-      throw new Error(`imp proxy said ${proxy.readStderr()}`);
+      throw new Error(`impz proxy said ${proxy.readStderr()}`);
     }
   });
 

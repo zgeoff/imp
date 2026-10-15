@@ -3,26 +3,26 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { readVmIdentity, writeVmIdentity } from '@imp/daemon/src/sleep/vm-identity';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
+import { readVmIdentity, writeVmIdentity } from '@impz/daemon/src/sleep/vm-identity';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubExecGuest } from '@imp/daemon/src/test-utils/build-stub-exec-guest';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubExecAgent } from '@imp/daemon/src/test-utils/start-stub-exec-agent';
-import { invariant } from '@imp/test-utils/invariant';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecGuest } from '@impz/daemon/src/test-utils/build-stub-exec-guest';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { startStubExecAgent } from '@impz/daemon/src/test-utils/start-stub-exec-agent';
+import { invariant } from '@impz/test-utils/invariant';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
 import { runCli } from '../test-utils/start-cli';
 
@@ -177,7 +177,7 @@ test('#login refuses a URL that is not http(s) and saves nothing', async () => {
 
   expect(login).toStrictEqual({
     stdout: '',
-    stderr: 'imp: not an http(s) URL: ftp://imp.example\n',
+    stderr: 'impz: not an http(s) URL: ftp://imp.example\n',
     code: 2,
   });
 
@@ -207,7 +207,7 @@ test('#login saves nothing when impd refuses the token', async () => {
 
   expect(login).toStrictEqual({
     stdout: '',
-    stderr: `imp: ${ctx.url} refused the token; nothing saved\n`,
+    stderr: `impz: ${ctx.url} refused the token; nothing saved\n`,
     code: 1,
   });
 
@@ -222,7 +222,7 @@ test('#login saves nothing when the token is empty', async () => {
 
   expect(login).toStrictEqual({
     stdout: '',
-    stderr: 'imp: no token given; nothing saved\n',
+    stderr: 'impz: no token given; nothing saved\n',
     code: 2,
   });
 
@@ -241,7 +241,7 @@ test('#login saves nothing when impd is out of reach', async () => {
   expect(login).toStrictEqual({
     stdout: '',
     stderr: expect.stringMatching(
-      /^imp: cannot check the token with http:\/\/127\.0\.0\.1:1: .+; nothing saved\n$/u,
+      /^impz: cannot check the token with http:\/\/127\.0\.0\.1:1: .+; nothing saved\n$/u,
     ) as unknown,
     code: 1,
   });
@@ -261,7 +261,7 @@ test('#login saves without asking impd and warns of plain http under --no-verify
   expect(login).toStrictEqual({
     stdout: 'logged in to http://imp.example:7070 as imp, now the current host\n',
     stderr:
-      'imp: warning: http://imp.example:7070 is plain http; the token crosses the network unencrypted\n',
+      'impz: warning: http://imp.example:7070 is plain http; the token crosses the network unencrypted\n',
     code: 0,
   });
 
@@ -325,7 +325,7 @@ test('#host refuses a host use of a host it has not saved', async () => {
 
   expect(used).toStrictEqual({
     stdout: '',
-    stderr: 'imp: no saved host nope (see imp host ls)\n',
+    stderr: 'impz: no saved host nope (see impz host ls)\n',
     code: 2,
   });
 
@@ -368,7 +368,7 @@ test('#--host sends the saved token over IMP_TOKEN, with a note', async () => {
 
   expect(listed).toStrictEqual({
     stdout: '[]\n',
-    stderr: 'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
+    stderr: 'impz: note: IMP_TOKEN is ignored; work uses its saved token\n',
     code: 0,
   });
 });
@@ -382,7 +382,7 @@ test('#--host names the host in a 401 for a saved token impd refuses', async () 
 
   expect(listed).toStrictEqual({
     stdout: '',
-    stderr: `imp: unauthorized: work (${ctx.url}) refused the token; run imp login ${ctx.url} --name work\n`,
+    stderr: `impz: unauthorized: work (${ctx.url}) refused the token; run impz login ${ctx.url} --name work\n`,
     code: 1,
   });
 });
@@ -399,7 +399,7 @@ test('#--host names the host when impd refuses the saved token on exec’s socke
 
   expect(exec).toStrictEqual({
     stdout: '',
-    stderr: `imp: unauthorized: work (${ctx.url}) refused the token; run imp login ${ctx.url} --name work\n`,
+    stderr: `impz: unauthorized: work (${ctx.url}) refused the token; run impz login ${ctx.url} --name work\n`,
     code: 255,
   });
 });
@@ -441,7 +441,7 @@ test('#--host sends the saved token over IMP_TOKEN on exec’s socket', async ()
 
   expect(exec).toStrictEqual({
     stdout: 'ran\n',
-    stderr: 'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
+    stderr: 'impz: note: IMP_TOKEN is ignored; work uses its saved token\n',
     code: 0,
   });
 });
@@ -452,7 +452,7 @@ test('#--host refuses a flag without a saved host name', async () => {
 
   expect(listed).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --host needs a saved host name (see imp host ls)\n',
+    stderr: 'impz: --host needs a saved host name (see impz host ls)\n',
     code: 2,
   });
 });
@@ -488,7 +488,7 @@ test('#exec prints one line, not a stack, when it cannot read config.json', asyn
 
   expect(exec).toStrictEqual({
     stdout: '',
-    stderr: expect.stringMatching(/^imp: [^\n]*EISDIR[^\n]*\n$/u) as unknown,
+    stderr: expect.stringMatching(/^impz: [^\n]*EISDIR[^\n]*\n$/u) as unknown,
     code: 255,
   });
 });

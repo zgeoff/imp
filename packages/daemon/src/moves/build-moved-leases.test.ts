@@ -1,9 +1,9 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
-import type { ImpEvent } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import type { ImpEvent } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { findImpByName, updateImpActivity, updateImpExposure } from '../db/imps';
 import { listLeases, writeLease } from '../db/leases';
 import { createIdleLoop } from '../idle/idle-loop';

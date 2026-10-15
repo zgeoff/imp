@@ -9,7 +9,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImageIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// What `imp image build` and `imp image add` refuse (docs/guides/images.md),
+// What `impz image build` and `impz image add` refuse (docs/guides/images.md),
 // before a build or in its builder; none of them leaves an image.
 
 async function setupTest() {

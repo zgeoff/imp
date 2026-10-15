@@ -225,7 +225,7 @@ test('it answers the imp-host container with what each of its fields sets', () =
     [
       'bash',
       '-c',
-      'docker exec imp-host imp info; docker exec imp-host imp info --json; docker port imp-host; ' +
+      'docker exec imp-host impz info; docker exec imp-host impz info --json; docker port imp-host; ' +
         'docker exec imp-host findmnt -n -r -o SOURCE,FSTYPE --mountpoint /var/lib/imp; ' +
         'docker exec imp-host ip -6 route show default; docker logs imp-host',
     ],

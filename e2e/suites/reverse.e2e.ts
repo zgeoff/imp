@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { createServer } from 'node:net';
 import { dirname } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { waitAwakePastIdle } from '../lib/awake-past-idle';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -21,7 +21,7 @@ import { SSH_HOST, setupSshClient, startLocalSshAgent, startSsh } from '../lib/s
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// Reverse forwards (docs/guides/reverse-forwards.md), by `imp proxy
+// Reverse forwards (docs/guides/reverse-forwards.md), by `impz proxy
 // --reverse` and `ssh -R`. This machine's ssh-agent is the unix socket
 // service, and `ssh-add -l` in the imp, as the image user, its client.
 
@@ -164,7 +164,7 @@ test('it listens again at the same path once the imp wakes, without waking it', 
 
   await waitFor('the CLI to see the forward end', () => {
     if (!reverse.readStderr().includes('listening again once')) {
-      throw new Error(`imp proxy said ${reverse.readStderr()}`);
+      throw new Error(`impz proxy said ${reverse.readStderr()}`);
     }
   });
 
@@ -183,7 +183,7 @@ test('it listens again at the same path once the imp wakes, without waking it', 
     if (
       !reverse.readStderr().includes(`forwarding ${name}:${socket} -> ${ctx.laptop.socket} again`)
     ) {
-      throw new Error(`imp proxy said ${reverse.readStderr()}`);
+      throw new Error(`impz proxy said ${reverse.readStderr()}`);
     }
   });
 

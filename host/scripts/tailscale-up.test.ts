@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
 import { createStubTailscale } from '../../scripts/test-utils/create-stub-tailscale';
 

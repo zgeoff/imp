@@ -8,9 +8,9 @@ import {
   SERVICE_NAME_PATTERN,
   SESSION_NAME_PATTERN,
   TAR_TOTAL_RECORD,
-} from '@imp/api';
-import { listAgentFixtures } from '@imp/test-utils/list-agent-fixtures';
-import { readAgentFixture } from '@imp/test-utils/read-agent-fixture';
+} from '@impz/api';
+import { listAgentFixtures } from '@impz/test-utils/list-agent-fixtures';
+import { readAgentFixture } from '@impz/test-utils/read-agent-fixture';
 import { collectJsonKeyPaths } from '../test-utils/collect-json-key-paths';
 import { collectMessageKeyPaths } from '../test-utils/collect-message-key-paths';
 import { AGENT_ERROR_CODES } from './agent-error-codes';

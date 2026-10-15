@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
 )
 
 // The account files. Variables so tests can point them at fixtures.

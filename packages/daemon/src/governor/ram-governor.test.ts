@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { ImpEvent } from '@imp/api';
+import type { ImpEvent } from '@impz/api';
 import { createEventBus } from '../events/event-bus';
 import { buildStubGovernedHost } from '../test-utils/build-stub-governed-host';
 import { ENFORCE_INTERVAL_MS, createRamGovernor } from './ram-governor';

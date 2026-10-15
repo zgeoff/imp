@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runShellcheck } from '@imp/test-utils/run-shellcheck';
+import { runShellcheck } from '@impz/test-utils/run-shellcheck';
 import { WRITE_SCRIPT } from './write-script';
 
 // The write script runs under this host's /bin/sh, as a guest's runs it; the

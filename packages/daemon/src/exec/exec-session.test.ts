@@ -5,8 +5,8 @@ import {
   EXEC_STDIN_WINDOW_BYTES,
   EXEC_STDOUT_WINDOW_BYTES,
   encodeExecFrame,
-} from '@imp/api';
-import { waitFor } from '@imp/test-utils/wait-for';
+} from '@impz/api';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import { buildMockSessionOutput } from '../test-utils/build-mock-session-output';

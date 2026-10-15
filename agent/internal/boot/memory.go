@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/cmdline"
-	"github.com/zgeoff/imp/agent/internal/inner"
+	"github.com/zgeoff/impz/agent/internal/cmdline"
+	"github.com/zgeoff/impz/agent/internal/inner"
 )
 
 const (

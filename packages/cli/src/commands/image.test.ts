@@ -3,27 +3,27 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { DOCKERFILE_FRONTEND } from '@imp/daemon/src/docker-proxy/dockerfile-frontend';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
+import { DOCKERFILE_FRONTEND } from '@impz/daemon/src/docker-proxy/dockerfile-frontend';
 import {
   buildImagePaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubTracedBuild } from '@imp/daemon/src/test-utils/build-stub-traced-build';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { createStubDockerCli } from '@imp/daemon/src/test-utils/create-stub-docker-cli';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubDockerEngine } from '@imp/daemon/src/test-utils/start-stub-docker-engine';
-import { invariant } from '@imp/test-utils/invariant';
-import { updateEnv } from '@imp/test-utils/update-env';
-import { waitFor } from '@imp/test-utils/wait-for';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubTracedBuild } from '@impz/daemon/src/test-utils/build-stub-traced-build';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { createStubDockerCli } from '@impz/daemon/src/test-utils/create-stub-docker-cli';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { startStubDockerEngine } from '@impz/daemon/src/test-utils/start-stub-docker-engine';
+import { invariant } from '@impz/test-utils/invariant';
+import { updateEnv } from '@impz/test-utils/update-env';
+import { waitFor } from '@impz/test-utils/wait-for';
 import * as z from 'zod';
 import { runCli } from '../test-utils/start-cli';
 
@@ -195,15 +195,15 @@ test('#imageCommand prints progress lines and the step output of a build whose s
   expect(result.code).toBe(0);
 
   expect(result.stderr.split('\n')).toIncludeAllMembers([
-    expect.stringMatching(/^imp image build: uploading, 0m\d\ds$/v),
-    expect.stringMatching(/^imp image build: building, 0m\d\ds$/v),
+    expect.stringMatching(/^impz image build: uploading, 0m\d\ds$/v),
+    expect.stringMatching(/^impz image build: building, 0m\d\ds$/v),
     expect.stringMatching(
-      /^imp image build: building, 0m\d\ds, \[2\/3\] RUN echo compiling widget && echo second line$/v,
+      /^impz image build: building, 0m\d\ds, \[2\/3\] RUN echo compiling widget && echo second line$/v,
     ),
     '#1 [2/3] RUN echo compiling widget && echo second line',
     '#1 compiling widget',
     '#1 second line',
-    expect.stringMatching(/^imp image build: unpacking, 0m\d\ds, \[2\/3\] RUN echo compiling/v),
+    expect.stringMatching(/^impz image build: unpacking, 0m\d\ds, \[2\/3\] RUN echo compiling/v),
   ]);
 
   expect(result.stdout).toStartWith('NAME');
@@ -383,7 +383,7 @@ test('#imageCommand refuses a relative path for --on-host, which names no direct
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --on-host takes an absolute path on the impd host, not images/base\n',
+    stderr: 'impz: --on-host takes an absolute path on the impd host, not images/base\n',
     code: 2,
   });
 });
@@ -402,7 +402,7 @@ test('#imageCommand refuses a build context without a Dockerfile before any uplo
 
   expect(received).toStrictEqual({
     stdout: '',
-    stderr: expect.stringMatching(/^imp: there is no Dockerfile in /u) as unknown,
+    stderr: expect.stringMatching(/^impz: there is no Dockerfile in /u) as unknown,
     code: 2,
   });
 });
@@ -424,7 +424,7 @@ test('#templateCommand refuses to remove a docker image as a template', async ()
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: ubuntu is a docker image, not a template: use imp image rm\n',
+    stderr: 'impz: ubuntu is a docker image, not a template: use impz image rm\n',
     code: 2,
   });
 });

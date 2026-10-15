@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { create } from '@bufbuild/protobuf';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import * as z from 'zod';
 import { ServicesListSchema } from '../agent-client/agent-protocol';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
@@ -333,7 +333,7 @@ test('it refuses a warm move naming each fact the target lacks, and leaves the i
       'IMP_DATA_DIR differs',
       'the CPU flags differ',
       'IMP_BROKER_PORT differs',
-      'imp move --stop moves it cold',
+      'impz move --stop moves it cold',
     ]),
   });
 

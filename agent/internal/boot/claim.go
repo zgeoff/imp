@@ -12,9 +12,9 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/cmdline"
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/server"
+	"github.com/zgeoff/impz/agent/internal/cmdline"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/server"
 )
 
 // claimRequestTimeout bounds how long a connection may take to send its

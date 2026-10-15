@@ -17,7 +17,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// `imp new --disk` and `imp disk resize` on one imp, through each state a
+// `impz new --disk` and `impz disk resize` on one imp, through each state a
 // resize can find it in.
 
 async function setupTest() {
@@ -101,7 +101,7 @@ test('it grows a disk past its image at the first boot, at once while running, o
     exitCode: 1,
     stdout: '',
     stderr:
-      'imp: BAD_REQUEST: a disk of 65536 MiB is smaller than the disk now; a disk only grows (133120 MiB)\n',
+      'impz: BAD_REQUEST: a disk of 65536 MiB is smaller than the disk now; a disk only grows (133120 MiB)\n',
   });
 
   await runImp('stop', name);

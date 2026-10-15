@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCommandLinks } from '@imp/test-utils/create-command-links';
+import { createCommandLinks } from '@impz/test-utils/create-command-links';
 import * as z from 'zod';
 import { buildStubBlockDevices } from '../scripts/test-utils/build-stub-block-devices';
 import { buildStubBootstrapDocker } from '../scripts/test-utils/build-stub-bootstrap-docker';

@@ -73,7 +73,7 @@ test('it lets two owners lease one imp, each seeing and releasing only its own',
   expect(left.map((lease) => lease.owner.display)).toStrictEqual([ownerB]);
 });
 
-test('it refuses a sleep or stop of a leased imp with LEASED, and imp sleep forces it and ends the lease', async () => {
+test('it refuses a sleep or stop of a leased imp with LEASED, and impz sleep forces it and ends the lease', async () => {
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}leased`;

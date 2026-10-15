@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import * as z from 'zod';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -138,7 +138,7 @@ test('it keeps forwards, reverse forwards and the service port working through a
   const stdout = startTextCapture(proxy.stdout);
   const stderr = startTextCapture(proxy.stderr);
 
-  const forwards = await waitFor('imp proxy to listen', () => {
+  const forwards = await waitFor('impz proxy to listen', () => {
     const parsed = parseProxyForwards(stdout.read());
 
     if (
@@ -146,7 +146,7 @@ test('it keeps forwards, reverse forwards and the service port working through a
       parsed.guestPort === undefined ||
       parsed.socketPath === undefined
     ) {
-      throw new Error(`imp proxy printed ${stdout.read()}${stderr.read()}`);
+      throw new Error(`impz proxy printed ${stdout.read()}${stderr.read()}`);
     }
 
     return parsed;
@@ -181,7 +181,7 @@ test('it keeps forwards, reverse forwards and the service port working through a
     const path = findSocketListenAgain(stderr.read());
 
     if (path === undefined) {
-      throw new Error(`imp proxy said ${stderr.read()}`);
+      throw new Error(`impz proxy said ${stderr.read()}`);
     }
 
     return path;

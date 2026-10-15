@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { createTestDatabase } from '../test-utils/create-test-database';
 import { readSession, readSessionCookies } from './session-cookie';
 import { createSessionRoutes } from './session-routes';

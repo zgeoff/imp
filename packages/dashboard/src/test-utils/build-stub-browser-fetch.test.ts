@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildStubBrowserFetch } from './build-stub-browser-fetch';
 
 test('it marks a request to the page origin as same-origin', async () => {

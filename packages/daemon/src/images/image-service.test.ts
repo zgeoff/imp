@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { loadConfig } from '../config';
 import { createImage } from '../db/images';
 import { openDatabase } from '../db/open-database';

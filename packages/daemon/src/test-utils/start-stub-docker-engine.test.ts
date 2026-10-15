@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { z } from 'zod';
 import { PinInspectSchema } from '../images/image-pin';
 import { startStubDockerEngine } from './start-stub-docker-engine';
@@ -279,7 +279,7 @@ test.each([
   ['busybox:latest', 'docker.io/library/busybox'],
   ['library/busybox:1.37', 'docker.io/library/busybox:1.37'],
   ['index.docker.io/library/busybox:1.37', 'busybox:1.37'],
-  ['zgeoff/imp:1', 'docker.io/zgeoff/imp:1'],
+  ['zgeoff/impz:1', 'docker.io/zgeoff/impz:1'],
 ])('it finds an image added as %s when asked for %s', async (added, asked) => {
   const ctx = await setupTest();
 
@@ -295,9 +295,9 @@ test.each([
 test('it keeps an image of another registry apart from docker.io', async () => {
   const ctx = await setupTest();
 
-  await ctx.engine.addImage('ghcr.io/zgeoff/imp:1');
+  await ctx.engine.addImage('ghcr.io/zgeoff/impz:1');
 
-  const response = await fetch('http://docker/v1.55/images/zgeoff/imp:1/json', {
+  const response = await fetch('http://docker/v1.55/images/zgeoff/impz:1/json', {
     unix: ctx.engine.socket,
   });
 
@@ -306,8 +306,8 @@ test('it keeps an image of another registry apart from docker.io', async () => {
 
 test.each([
   ['docker.io/library/busybox:1.37', ['busybox:1.37']],
-  ['docker.io/zgeoff/imp:1', ['zgeoff/imp:1']],
-  ['ghcr.io/zgeoff/imp:1', ['ghcr.io/zgeoff/imp:1']],
+  ['docker.io/zgeoff/impz:1', ['zgeoff/impz:1']],
+  ['ghcr.io/zgeoff/impz:1', ['ghcr.io/zgeoff/impz:1']],
   ['localhost:5000/imp:1', ['localhost:5000/imp:1']],
 ])('it shows %s in RepoTags as %j', async (ref, repoTags) => {
   const ctx = await setupTest();

@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { PIN_INSPECT_FORMAT } from '../images/image-pin';
 import { runCommand } from '../process/run-command';
 import { createStubDockerCli } from './create-stub-docker-cli';

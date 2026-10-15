@@ -15,8 +15,8 @@ import (
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
 
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/reaper"
 )
 
 var testReaper = reaper.New()

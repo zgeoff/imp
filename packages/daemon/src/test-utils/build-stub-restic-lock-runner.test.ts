@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { parseBackupSummary, parseSnapshots } from '../backup/restic';
 import { buildStubResticLockRunner } from './build-stub-restic-lock-runner';
 

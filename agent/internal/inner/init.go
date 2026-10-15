@@ -13,9 +13,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/files"
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/files"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/reaper"
 )
 
 // Layout of the guest the inner init sets up. The agent's own world is the

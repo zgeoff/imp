@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
-import { server } from '@imp/test-utils/mock-server';
+import { invariant } from '@impz/test-utils/invariant';
+import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
 import { buildStubTailscaleApi } from '../test-utils/build-stub-tailscale-api';
 import { createServicesApi } from './services-api';

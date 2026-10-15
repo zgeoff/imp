@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import type { ImpEvent } from '@imp/api';
+import type { ImpEvent } from '@impz/api';
 import type { ApiAudit } from '../audit/api-audit';
 import { createEventBus } from '../events/event-bus';
 import { buildStubAgentExecStream } from '../test-utils/build-stub-agent-exec-stream';

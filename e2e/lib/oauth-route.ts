@@ -37,7 +37,7 @@ export interface ApprovalPage {
 // the sign-in page's approval code and form fields, '' for each it lacks
 export function parseApprovalPage(page: string): ApprovalPage {
   return {
-    code: /imp oauth approve (?<code>[A-Z0-9\-]+)/v.exec(page)?.groups?.['code'] ?? '',
+    code: /impz oauth approve (?<code>[A-Z0-9\-]+)/v.exec(page)?.groups?.['code'] ?? '',
     id: /name="id" value="(?<id>[^"]+)"/v.exec(page)?.groups?.['id'] ?? '',
     signature: /name="signature" value="(?<sig>[^"]+)"/v.exec(page)?.groups?.['sig'] ?? '',
   };

@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { listAuditCalls } from '../lib/audit';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -40,7 +40,7 @@ test('it prints a made read token once, lists it without its secret, and lets it
 
   await waitForExec(dev);
 
-  // `imp token new` prints the secret alone on stdout
+  // `impz token new` prints the secret alone on stdout
   const made = await runImp('token', 'new', reader, '--scope', 'read');
 
   registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, reader));
@@ -173,7 +173,7 @@ test('it lets an exec token limited to dev-* run in its imp and not touch anothe
     exitCode: 1,
     stdout: '',
     stderr:
-      'imp: unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>\n',
+      'impz: unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run impz login <url>\n',
   });
 });
 

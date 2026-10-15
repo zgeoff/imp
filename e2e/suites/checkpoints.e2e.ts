@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { checkLimit } from '../lib/check-limit';
 import { hasCheckpointStorage, hasImpDir, writeCrossFiles } from '../lib/checkpoint-storage';
 import { config } from '../lib/config';
@@ -20,7 +20,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { writeMetric } from '../lib/write-metric';
 
-// `imp checkpoint`, `imp restore` and `imp fork` on the instance's storage
+// `impz checkpoint`, `impz restore` and `impz fork` on the instance's storage
 // backend: a reflink on XFS, a snapshot on ZFS. Each test boots its own
 // source imp and takes its own checkpoints.
 
@@ -216,7 +216,7 @@ test('it lists checkpoints newest first, refuses a label taken, and deletes one 
   expect(duplicate).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: 'imp: CONFLICT: checkpoint cp1 already exists\n',
+    stderr: 'impz: CONFLICT: checkpoint cp1 already exists\n',
   });
 
   invariant(cp1);
@@ -235,7 +235,7 @@ test('it lists checkpoints newest first, refuses a label taken, and deletes one 
   expect(restore).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: 'imp: NOT_FOUND: checkpoint cp1 not found\n',
+    stderr: 'impz: NOT_FOUND: checkpoint cp1 not found\n',
   });
 });
 

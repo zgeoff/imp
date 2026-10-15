@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { EXEC_CHANNELS, encodeExecFrame } from '@imp/api';
+import { EXEC_CHANNELS, encodeExecFrame } from '@impz/api';
 import { buildStubExecPeer } from './build-stub-exec-peer';
 import type { StubExecHandler } from './build-stub-exec-peer';
 

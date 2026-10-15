@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
-import { ApprovalCodeSchema } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
+import { ApprovalCodeSchema } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
 import { createRevocations } from '../auth/revocations';
 import { ROOT_TOKEN_ID, loadTokenStore } from '../auth/token-store';
 import { createSecret } from '../db/secrets';
@@ -686,7 +686,7 @@ test.each([
   }).toThrow(
     expect.objectContaining({
       code: 'FORBIDDEN',
-      message: 'only a named token approves a sign-in; make one with imp token new and use it',
+      message: 'only a named token approves a sign-in; make one with impz token new and use it',
     }),
   );
 });

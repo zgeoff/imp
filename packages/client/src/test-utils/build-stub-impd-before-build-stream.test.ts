@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
+import { IMAGE_BUILD_STREAM_TYPE } from '@impz/api';
 import { buildStubImpdBeforeBuildStream } from './build-stub-impd-before-build-stream';
 
 test('it sends an image build on without its Accept header', async () => {

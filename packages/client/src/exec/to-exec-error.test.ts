@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { EXEC_CLOSE_RESTARTING } from '@imp/api';
+import { EXEC_CLOSE_RESTARTING } from '@impz/api';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
 import { InvalidStateError } from './invalid-state-error';

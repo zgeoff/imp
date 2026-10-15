@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, requireImp, runImp } from '../lib/imp-cli';
@@ -11,7 +11,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// `imp proxy` to an imp whose agent impd records as too old to dial.
+// `impz proxy` to an imp whose agent impd records as too old to dial.
 
 // one stack for every release, so the agent version comes back and the
 // proxy stops before the imp goes
@@ -71,7 +71,7 @@ test('it reports AGENT_OUTDATED and closes the connection when the imp’s agent
   });
 
   await waitFor('the AGENT_OUTDATED notice', () => {
-    expect(proxy.readStderr()).toContain(`imp: ${name}:8080: AGENT_OUTDATED: `);
+    expect(proxy.readStderr()).toContain(`impz: ${name}:8080: AGENT_OUTDATED: `);
   });
 
   await held.closed;

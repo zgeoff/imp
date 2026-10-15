@@ -3,7 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { createStubDockerBin } from '../../packages/client/src/test-utils/create-stub-docker-bin';
 import { startStubDockerEngine } from '../../packages/client/src/test-utils/start-stub-docker-engine';
 import { loadConfig } from '../../packages/daemon/src/config';

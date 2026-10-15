@@ -2,10 +2,10 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDialStream } from '@imp/daemon/src/agent-client/dial-stream';
-import { openAccept, openListener } from '@imp/daemon/src/agent-client/listener-stream';
-import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
-import { invariant } from '@imp/test-utils/invariant';
+import { openDialStream } from '@impz/daemon/src/agent-client/dial-stream';
+import { openAccept, openListener } from '@impz/daemon/src/agent-client/listener-stream';
+import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildStubListenAgent } from './build-stub-listen-agent';
 
 // a socket path in a temp dir, as impd's agent client reaches the stub there

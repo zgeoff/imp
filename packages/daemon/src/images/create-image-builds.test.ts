@@ -10,9 +10,9 @@ import {
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
-import { updateEnv } from '@imp/test-utils/update-env';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@impz/test-utils/invariant';
+import { updateEnv } from '@impz/test-utils/update-env';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { loadConfig } from '../config';
 import { createImage, findImageByName, listImages } from '../db/images';
 import { openDatabase } from '../db/open-database';

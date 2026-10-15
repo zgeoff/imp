@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { FRAME_TYPES, encodeFrame, encodeJsonFrame } from '../agent-client/frame-codec';
 import type { AgentFrame } from '../agent-client/frame-codec';
 import { startStubAgent } from './start-stub-agent';

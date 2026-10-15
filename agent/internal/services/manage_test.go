@@ -14,8 +14,8 @@ import (
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/proto"
 )
 
 // newManagedSupervisor is a supervisor with its own services.d.

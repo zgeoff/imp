@@ -6,9 +6,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/cgroup"
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/cgroup"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proto"
 )
 
 // groupPoll is how often a stopping group is checked for members.

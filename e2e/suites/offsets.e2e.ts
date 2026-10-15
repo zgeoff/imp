@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { config } from '../lib/config';
 import { openSessionSocket, requireOutput, requireSessionError } from '../lib/exec-socket';
 import { resolveImageName } from '../lib/fixtures';

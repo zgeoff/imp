@@ -2,9 +2,9 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
-import { ORPCError } from '@zgeoff/imp-client';
+import { ORPCError } from '@impz/client';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { listSavedTargets, runOnHosts } from './fan-out';
 import { writeHostConfig } from './host-store';
 import { buildMockSavedTarget } from './test-utils/build-mock-saved-target';
@@ -72,7 +72,7 @@ test('#runOnHosts gives each host its own answer or error, and a silent one the 
     {
       host: 'old',
       error:
-        'unauthorized: old (http://old:7070) refused the token; run imp login http://old:7070 --name old',
+        'unauthorized: old (http://old:7070) refused the token; run impz login http://old:7070 --name old',
     },
   ]);
 });
@@ -175,6 +175,6 @@ test('#listSavedTargets rejects a config with no saved hosts', () => {
 
   expect(() => listSavedTargets(ctx.env)).toThrowWithMessage(
     UsageError,
-    'no saved hosts (see imp login)',
+    'no saved hosts (see impz login)',
   );
 });

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
 import { listApiCalls } from '../db/api-audit';
 import { createTestDatabase } from '../test-utils/create-test-database';

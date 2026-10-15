@@ -1,6 +1,6 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
 import { createConnection } from 'node:net';
-import type { EgressMode } from '@imp/api';
+import type { EgressMode } from '@impz/api';
 import type { NewAuditEntry } from '../db/broker-audit';
 import type { BrokerPeer } from '../db/secrets';
 import { parseSubnet } from '../net/addressing';

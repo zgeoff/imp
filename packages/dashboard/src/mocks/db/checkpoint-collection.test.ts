@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { Checkpoint } from '@imp/api';
+import type { Checkpoint } from '@impz/api';
 import { checkpointCollection } from './checkpoint-collection';
 
 test('it creates a default checkpoint without a label', async () => {

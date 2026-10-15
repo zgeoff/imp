@@ -11,9 +11,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/reaper"
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // ErrDown is the error for a spawn or signal when the container is gone.

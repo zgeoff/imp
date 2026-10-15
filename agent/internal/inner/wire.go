@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proc"
 )
 
 // Command is the agent's argument for the inner init.

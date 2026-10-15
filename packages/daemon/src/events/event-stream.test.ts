@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { ImpEvent } from '@imp/api';
+import type { ImpEvent } from '@impz/api';
 import { buildMockGovernorDecision } from '../test-utils/build-mock-governor-decision';
 import { buildStubClock } from '../test-utils/build-stub-clock';
 import { createEventBus } from './event-bus';

@@ -10,12 +10,12 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"gotest.tools/v3/assert"
 
-	"github.com/zgeoff/imp/agent/internal/cmdline"
-	"github.com/zgeoff/imp/agent/internal/fsroot"
-	"github.com/zgeoff/imp/agent/internal/imagecfg"
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/services"
-	"github.com/zgeoff/imp/agent/internal/tartool"
+	"github.com/zgeoff/impz/agent/internal/cmdline"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/imagecfg"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/services"
+	"github.com/zgeoff/impz/agent/internal/tartool"
 )
 
 // testdata/host is impd's side, kept by hand: impd's tests check that it

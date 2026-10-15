@@ -1,4 +1,4 @@
-module github.com/zgeoff/imp/scripts/dockerfile-difftest
+module github.com/zgeoff/impz/scripts/dockerfile-difftest
 
 go 1.25.6
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import type { Imp } from '@imp/api';
+import type { Imp } from '@impz/api';
 import { impCollection } from './imp-collection';
 
 test('it creates a default imp', async () => {

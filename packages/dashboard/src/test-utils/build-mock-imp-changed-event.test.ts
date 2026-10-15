@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { EVENT_VERSION } from '@imp/api';
+import { EVENT_VERSION } from '@impz/api';
 import { buildMockImpChangedEvent } from './build-mock-imp-changed-event';
 
 test('it builds a default imp changed event', () => {

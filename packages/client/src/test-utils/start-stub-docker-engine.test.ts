@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runChildTests } from '@imp/test-utils/run-child-tests';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { runChildTests } from '@impz/test-utils/run-child-tests';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { startStubDockerEngine } from './start-stub-docker-engine';
 
 // a directory for the engine's socket

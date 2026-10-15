@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { ExecError } from '@zgeoff/imp-client';
+import { ExecError } from '@impz/client';
 import { buildStubExecHandle } from '../../test-utils/build-stub-exec-handle';
 import { createConsoleSource, toTerminalConnection } from './create-console-source';
 

@@ -1,5 +1,5 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { createStubUndiciWebSocket } from './create-stub-undici-web-socket';
 
 test('it fires error and no close listener for a refused upgrade', async () => {

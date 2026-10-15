@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/proto"
 	"golang.org/x/sys/unix"
 )
 

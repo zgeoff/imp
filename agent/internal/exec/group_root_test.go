@@ -19,11 +19,11 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/poll"
 
-	"github.com/zgeoff/imp/agent/internal/cgroup"
-	"github.com/zgeoff/imp/agent/internal/imagecfg"
-	"github.com/zgeoff/imp/agent/internal/launch"
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/cgroup"
+	"github.com/zgeoff/impz/agent/internal/imagecfg"
+	"github.com/zgeoff/impz/agent/internal/launch"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proto"
 )
 
 // A stopped command's child that left the process group with setsid and

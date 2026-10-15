@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import * as dnsPacket from 'dns-packet';
 import { buildMockDnsQuery } from '../test-utils/build-mock-dns-query';
 import { buildStubClock } from '../test-utils/build-stub-clock';

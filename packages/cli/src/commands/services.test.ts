@@ -3,28 +3,28 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { RequestSchema } from '@imp/daemon/src/agent-client/agent-protocol';
-import { encodeAgentMessage } from '@imp/daemon/src/agent-client/encode-agent-message';
-import { sendServicesAdd } from '@imp/daemon/src/agent-client/service-requests';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { createImpClient } from '@impz/client';
+import { RequestSchema } from '@impz/daemon/src/agent-client/agent-protocol';
+import { encodeAgentMessage } from '@impz/daemon/src/agent-client/encode-agent-message';
+import { sendServicesAdd } from '@impz/daemon/src/agent-client/service-requests';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubServiceAgent } from '@imp/daemon/src/test-utils/start-stub-service-agent';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { startStubServiceAgent } from '@impz/daemon/src/test-utils/start-stub-service-agent';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { runCli } from '../test-utils/start-cli';
 import { UsageError } from '../usage-error';
 import { buildServiceDef, createLogPrinter, formatLogEvent } from './services';
@@ -377,7 +377,7 @@ test('#serviceCommand sets no HTTP port when the guest refuses the add', async (
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: CONFLICT: service web already exists\n',
+    stderr: 'impz: CONFLICT: service web already exists\n',
     code: 1,
   });
 
@@ -412,7 +412,7 @@ test('#serviceCommand says the service runs and how to set the port when an exec
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: service web was added and runs, but the HTTP port was not set: setting the HTTP port needs a token with manage. Run `imp set box --http-port 8081` to set it.\n',
+      'impz: service web was added and runs, but the HTTP port was not set: setting the HTTP port needs a token with manage. Run `impz set box --http-port 8081` to set it.\n',
     code: 1,
   });
 
@@ -436,7 +436,7 @@ test('#serviceCommand refuses a bad --http-port before it calls impd', async () 
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --http-port must be a port from 1 to 65535\n',
+    stderr: 'impz: --http-port must be a port from 1 to 65535\n',
     code: 2,
   });
 });
@@ -467,7 +467,7 @@ test('#logsCommand refuses a line count that is not a number before it calls imp
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --lines must be a whole number from 0 to 100000\n',
+    stderr: 'impz: --lines must be a whole number from 0 to 100000\n',
     code: 2,
   });
 });

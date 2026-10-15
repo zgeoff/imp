@@ -3,7 +3,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { sql } from 'kysely';
 import { createDiskBudget } from '../storage/disk-budget';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
@@ -263,7 +263,7 @@ test('#writeConsistentCopy writes a copy of an older schema that migrates forwar
 
   const restored = join(ctx.dataDir, 'restored.sqlite');
 
-  // an older impd's database, as `imp db copy` of that impd wrote it
+  // an older impd's database, as `impz db copy` of that impd wrote it
   const older = createUnmigratedDatabase(join(ctx.dataDir, 'older.sqlite'));
 
   await runMigrationsTo(older, '020_add_grantable_secrets');

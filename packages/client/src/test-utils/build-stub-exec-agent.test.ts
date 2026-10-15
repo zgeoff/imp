@@ -6,9 +6,9 @@ import {
   openAttachStream,
   openExecStream,
   openTapStream,
-} from '@imp/daemon/src/agent-client/exec-stream';
-import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
-import { waitFor } from '@imp/test-utils/wait-for';
+} from '@impz/daemon/src/agent-client/exec-stream';
+import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
+import { waitFor } from '@impz/test-utils/wait-for';
 import {
   STUB_BOOT_ID,
   STUB_FLOOD_BYTES,

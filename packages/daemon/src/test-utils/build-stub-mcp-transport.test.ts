@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildStubMcpTransport } from './build-stub-mcp-transport';
 
 test('it answers each request with an open event stream', async () => {

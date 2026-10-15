@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { STUB_EPOCH_S, StubZfsCrashError, buildStubZfs } from './build-stub-zfs';
 
 test('#buildStubZfs starts with the root dataset mounted on the root dir', () => {

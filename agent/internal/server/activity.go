@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/proto"
 )
 
 func (s *Server) activity() (*proto.Activity, error) {

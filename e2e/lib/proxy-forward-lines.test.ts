@@ -26,7 +26,7 @@ test('#parseProxyForwards reads nothing before the proxy printed its forwards', 
 
 test('#findSocketListenAgain reads the socket a reverse forward listens on again', () => {
   const stderr =
-    'imp: the reverse forward lost its listener\nforwarding e2e-in-a:/run/imp/forward/5000-2.sock -> localhost:5000 again\n';
+    'impz: the reverse forward lost its listener\nforwarding e2e-in-a:/run/imp/forward/5000-2.sock -> localhost:5000 again\n';
 
   expect(findSocketListenAgain(stderr)).toBe('/run/imp/forward/5000-2.sock');
 });

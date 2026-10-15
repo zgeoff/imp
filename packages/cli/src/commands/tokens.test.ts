@@ -2,16 +2,16 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { buildSystemDrivePath, buildSystemDrivesDir } from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@imp/test-utils/invariant';
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
+import { buildSystemDrivePath, buildSystemDrivesDir } from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@impz/test-utils/invariant';
 import { runCli } from '../test-utils/start-cli';
 import { startStubInfoFaultImpd } from '../test-utils/start-stub-info-fault-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
@@ -152,7 +152,7 @@ test('it refuses a scope a token cannot have', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --scope must be one of read, exec, manage\n',
+    stderr: 'impz: --scope must be one of read, exec, manage\n',
     code: 2,
   });
 });
@@ -166,7 +166,7 @@ test('it refuses an imp pattern that is not an imp name', async () => {
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: --imps takes imp names with * for any run of characters, such as dev-*; not Dev*\n',
+      'impz: --imps takes imp names with * for any run of characters, such as dev-*; not Dev*\n',
     code: 2,
   });
 });
@@ -187,7 +187,7 @@ test('it refuses a private key where a .pub file belongs', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: `imp: ${privateKey} is a private key; give its .pub file\n`,
+    stderr: `impz: ${privateKey} is a private key; give its .pub file\n`,
     code: 2,
   });
 });
@@ -206,7 +206,7 @@ test('it refuses a .pub file that holds no key', async () => {
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
-  expect(result).toStrictEqual({ stdout: '', stderr: `imp: ${empty} holds no key\n`, code: 2 });
+  expect(result).toStrictEqual({ stdout: '', stderr: `impz: ${empty} holds no key\n`, code: 2 });
 });
 
 test('it refuses an --ssh-key file that is missing', async () => {
@@ -223,7 +223,7 @@ test('it refuses an --ssh-key file that is missing', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: `imp: cannot read ${missing}: ENOENT: no such file or directory, open '${missing}'\n`,
+    stderr: `impz: cannot read ${missing}: ENOENT: no such file or directory, open '${missing}'\n`,
     code: 2,
   });
 });
@@ -232,11 +232,11 @@ test('it refuses an --ssh-key file that is missing', async () => {
 test.each([
   [
     ['token', 'new', 'agent', '--scope', 'manage', '--grantable', 'gh'],
-    'imp: --grantable needs --scope manage and --imps\n',
+    'impz: --grantable needs --scope manage and --imps\n',
   ],
   [
     ['token', 'new', 'agent', '--scope', 'exec', '--imps', 'agent-*', '--grantable', 'gh'],
-    'imp: --grantable needs --scope manage and --imps\n',
+    'impz: --grantable needs --scope manage and --imps\n',
   ],
   [
     [
@@ -250,23 +250,23 @@ test.each([
       '--grantable',
       'Not A Name',
     ],
-    'imp: --grantable takes secret names, such as gh,npm; not Not A Name\n',
+    'impz: --grantable takes secret names, such as gh,npm; not Not A Name\n',
   ],
   [
     ['token', 'new', 'agent', '--scope', 'manage', '--imps', '', '--grantable', 'gh'],
-    'imp: --imps takes imp names with * for any run of characters, such as dev-*; not \n',
+    'impz: --imps takes imp names with * for any run of characters, such as dev-*; not \n',
   ],
   [
     ['token', 'new', 'agent', '--scope', 'manage', '--imps', ' , ', '--grantable', 'gh'],
-    'imp: --imps takes imp names with * for any run of characters, such as dev-*; not  , \n',
+    'impz: --imps takes imp names with * for any run of characters, such as dev-*; not  , \n',
   ],
   [
     ['token', 'set', 'agent', '--grantable', 'Not A Name'],
-    'imp: --grantable takes secret names, such as gh,npm; not Not A Name\n',
+    'impz: --grantable takes secret names, such as gh,npm; not Not A Name\n',
   ],
   [
     ['token', 'new', 'nixie', '--scope', 'manage', '--image-ref-prefix', 'ghcr.io/zgeoff/nixie-'],
-    'imp: --image-ref-prefix needs --scope manage and --imps\n',
+    'impz: --image-ref-prefix needs --scope manage and --imps\n',
   ],
   [
     [
@@ -280,9 +280,9 @@ test.each([
       '--image-ref-prefix',
       'zgeoff/nixie-',
     ],
-    'imp: --image-ref-prefix takes a registry host and the start of a path, such as ghcr.io/org/app-; not zgeoff/nixie-\n',
+    'impz: --image-ref-prefix takes a registry host and the start of a path, such as ghcr.io/org/app-; not zgeoff/nixie-\n',
   ],
-  [['token', 'set', 'agent'], 'imp: give --grantable, --image-ref-prefix or both\n'],
+  [['token', 'set', 'agent'], 'impz: give --grantable, --image-ref-prefix or both\n'],
 ])('it refuses %p before any call to impd', async (args, stderr) => {
   const result = await runCli({
     args,
@@ -334,7 +334,7 @@ test.each([
 
     expect(result).toStrictEqual({
       stdout: '',
-      stderr: `imp: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
+      stderr: `impz: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
       code: 1,
     });
 
@@ -371,7 +371,7 @@ test('it creates no token when the feature check’s connection drops', async ()
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()\n',
+      'impz: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()\n',
     code: 1,
   });
 
@@ -395,7 +395,7 @@ test('it creates a grantable token on an impd with the feature', async () => {
 
   expect(received).toStrictEqual({
     stdout: expect.stringMatching(/^imp_\S+\n$/u) as unknown,
-    stderr: 'imp: token agent made; impd shows its secret only this once\n',
+    stderr: 'impz: token agent made; impd shows its secret only this once\n',
     code: 0,
   });
 
@@ -551,5 +551,5 @@ test('it names a token it cannot find on token key ls', async () => {
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
-  expect(result).toStrictEqual({ stdout: '', stderr: 'imp: no token named ci\n', code: 2 });
+  expect(result).toStrictEqual({ stdout: '', stderr: 'impz: no token named ci\n', code: 2 });
 });

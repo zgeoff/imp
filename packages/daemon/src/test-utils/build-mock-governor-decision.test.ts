@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { EVENT_VERSION, ImpEventSchema } from '@imp/api';
+import { EVENT_VERSION, ImpEventSchema } from '@impz/api';
 import { buildMockGovernorDecision } from './build-mock-governor-decision';
 
 test('it builds a default governor decision', () => {

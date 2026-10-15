@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildStubRegistryDocker } from '../../scripts/test-utils/build-stub-registry-docker';
 import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
 import { parseReleaseWorkflow } from '../../scripts/test-utils/parse-release-workflow';
@@ -112,7 +112,7 @@ test('it pushes a tag the registry does not have', () => {
       BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
       PUSH_TAG: '1.2.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -145,7 +145,7 @@ test('it pushes a missing tag of a tree that keeps its check script in host/', (
       BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
       PUSH_TAG: '1.2.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -185,7 +185,7 @@ test('it leaves an attested existing tag alone, with a notice', () => {
       BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
       PUSH_TAG: '1.2.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -197,7 +197,7 @@ test('it leaves an attested existing tag alone, with a notice', () => {
   );
 
   expect(readFileSync(gh.calls, 'utf8')).toInclude(
-    `gh attestation verify oci://ghcr.io/zgeoff/imp-base@${digest} --repo zgeoff/imp\n`,
+    `gh attestation verify oci://ghcr.io/zgeoff/imp-base@${digest} --repo zgeoff/impz\n`,
   );
 });
 
@@ -232,7 +232,7 @@ test('it fails the job on an existing tag without an attestation, and plans noth
       BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
       PUSH_TAG: '1.2.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -273,7 +273,7 @@ test('it fails the job on an existing tag whose digest is not a sha256', () => {
       BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
       PUSH_TAG: '1.2.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -313,7 +313,7 @@ test.each([
       BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
       PUSH_TAG: '1.2.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -344,7 +344,7 @@ test('it skips a release from before imp-base without asking the registry', () =
       BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
       PUSH_TAG: '1.2.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -468,7 +468,7 @@ test('it leaves latest on the newer release when the older run holds the lock af
           PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
           IMAGE: 'ghcr.io/zgeoff/imp-host',
           GITHUB_OUTPUT: ctx.outputs,
-          GITHUB_REPOSITORY: 'zgeoff/imp',
+          GITHUB_REPOSITORY: 'zgeoff/impz',
         },
       }).exitCode,
   );
@@ -477,9 +477,9 @@ test('it leaves latest on the newer release when the older run holds the lock af
 
   expect(readFileSync(gh.calls, 'utf8')).toBe(
     [
-      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'gh release view --repo zgeoff/impz --json tagName --jq .tagName',
       'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.4',
-      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'gh release view --repo zgeoff/impz --json tagName --jq .tagName',
       '',
     ].join('\n'),
   );
@@ -510,7 +510,7 @@ test('it leaves latest on the newer release when the older run holds the lock fi
           PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
           IMAGE: 'ghcr.io/zgeoff/imp-host',
           GITHUB_OUTPUT: ctx.outputs,
-          GITHUB_REPOSITORY: 'zgeoff/imp',
+          GITHUB_REPOSITORY: 'zgeoff/impz',
         },
       }).exitCode,
   );
@@ -519,8 +519,8 @@ test('it leaves latest on the newer release when the older run holds the lock fi
 
   expect(readFileSync(gh.calls, 'utf8')).toBe(
     [
-      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
-      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'gh release view --repo zgeoff/impz --json tagName --jq .tagName',
+      'gh release view --repo zgeoff/impz --json tagName --jq .tagName',
       'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.4',
       '',
     ].join('\n'),
@@ -541,7 +541,7 @@ test('it moves latest forward when the older run holds the lock before the newer
     PATH: `${gh.bin}:${process.env['PATH'] ?? ''}`,
     IMAGE: 'ghcr.io/zgeoff/imp-host',
     GITHUB_OUTPUT: ctx.outputs,
-    GITHUB_REPOSITORY: 'zgeoff/imp',
+    GITHUB_REPOSITORY: 'zgeoff/impz',
   };
 
   createStubBin(ctx.dir, 'docker', 'exit 0');
@@ -563,9 +563,9 @@ test('it moves latest forward when the older run holds the lock before the newer
 
   expect(readFileSync(gh.calls, 'utf8')).toBe(
     [
-      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'gh release view --repo zgeoff/impz --json tagName --jq .tagName',
       'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.3',
-      'gh release view --repo zgeoff/imp --json tagName --jq .tagName',
+      'gh release view --repo zgeoff/impz --json tagName --jq .tagName',
       'docker buildx imagetools create -t ghcr.io/zgeoff/imp-host:latest ghcr.io/zgeoff/imp-host:1.0.4',
       '',
     ].join('\n'),
@@ -591,7 +591,7 @@ test('it tells the formula and npm that a release behind the newest is not the n
       TAG: 'v1.0.3',
       VERSION: '1.0.3',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -622,7 +622,7 @@ test('it tells the formula and npm that the newest release is the newest', () =>
       TAG: 'v1.0.4',
       VERSION: '1.0.4',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
@@ -649,13 +649,13 @@ test('it fails the job, moving nothing, when the newest release cannot be read',
       TAG: 'v1.0.4',
       VERSION: '1.0.4',
       GITHUB_OUTPUT: ctx.outputs,
-      GITHUB_REPOSITORY: 'zgeoff/imp',
+      GITHUB_REPOSITORY: 'zgeoff/impz',
     },
   });
 
   expect(result.exitCode).toBe(1);
 
   expect(readFileSync(gh.calls, 'utf8')).toBe(
-    'gh release view --repo zgeoff/imp --json tagName --jq .tagName\n',
+    'gh release view --repo zgeoff/impz --json tagName --jq .tagName\n',
   );
 });

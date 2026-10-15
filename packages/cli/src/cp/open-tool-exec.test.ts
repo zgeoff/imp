@@ -3,35 +3,35 @@ import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { EXEC_MAX_STDIN_FRAME_BYTES, EXEC_STDIN_WINDOW_BYTES } from '@imp/api';
+import { EXEC_MAX_STDIN_FRAME_BYTES, EXEC_STDIN_WINDOW_BYTES } from '@impz/api';
+import { createImpClient } from '@impz/client';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
   encodeFrame,
   encodeJsonFrame,
-} from '@imp/daemon/src/agent-client/frame-codec';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { readVmIdentity, writeVmIdentity } from '@imp/daemon/src/sleep/vm-identity';
+} from '@impz/daemon/src/agent-client/frame-codec';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
+import { readVmIdentity, writeVmIdentity } from '@impz/daemon/src/sleep/vm-identity';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubExecReplies } from '@imp/daemon/src/test-utils/build-stub-exec-replies';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { startStubAgent } from '@imp/daemon/src/test-utils/start-stub-agent';
-import { listLocalEntries, writeLocalEntries } from '@imp/local-tar';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubExecReplies } from '@impz/daemon/src/test-utils/build-stub-exec-replies';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
+import { listLocalEntries, writeLocalEntries } from '@impz/local-tar';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import tar from 'tar-stream';
 import { buildStubExecPeer } from '../test-utils/build-stub-exec-peer';
 import { openToolExec } from './open-tool-exec';
@@ -170,7 +170,7 @@ test('it sends an archive whole through impd to the imp’s tool and returns its
 
   invariant(identity);
 
-  // an agent with imp cp
+  // an agent with impz cp
   writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
   const archive = tar.extract();
@@ -256,7 +256,7 @@ test('it rejects with impd’s code and message when impd refuses the exec', asy
 
   await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  // the stub VMM records an agent from before imp cp
+  // the stub VMM records an agent from before impz cp
   const opening = openToolExec({
     config: ctx.config,
     name: 'box',
@@ -362,7 +362,7 @@ test('it acks a tool’s stdout to impd so a download past the window completes'
 
   invariant(identity);
 
-  // an agent with imp cp
+  // an agent with impz cp
   writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
   // three 512 KiB frames: past impd's 1 MiB window, so the exit reaches the
@@ -452,7 +452,7 @@ test('it rejects with impd’s message when the imp’s agent drops the exec aft
 
   invariant(identity);
 
-  // an agent with imp cp
+  // an agent with impz cp
   writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
   await startStubAgent(paths.vsockSocket, (socket, _request, frames) => {

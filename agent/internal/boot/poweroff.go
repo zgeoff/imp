@@ -8,8 +8,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/inner"
-	"github.com/zgeoff/imp/agent/internal/services"
+	"github.com/zgeoff/impz/agent/internal/inner"
+	"github.com/zgeoff/impz/agent/internal/services"
 )
 
 const killGrace = 3 * time.Second

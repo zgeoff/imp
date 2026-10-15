@@ -11,7 +11,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { runChecked, runCommand } from '../../process/run-command';
 import type { CommandRunner } from '../../process/run-command';
 import { createZfsTestDataset } from '../../test-utils/create-zfs-test-dataset';
@@ -874,7 +874,7 @@ test.skipIf(readZfsTestPool() === null)(
 );
 
 // A database lost with the pool kept: a new impd keeps every disk, image and
-// checkpoint, and only `imp gc --orphans` retires them, for the reclaim to free
+// checkpoint, and only `impz gc --orphans` retires them, for the reclaim to free
 test.skipIf(readZfsTestPool() === null)(
   'it keeps every dataset at a start after a lost database',
   async () => {

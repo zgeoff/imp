@@ -8,7 +8,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/zgeoff/imp/agent/internal/cmdline"
+	"github.com/zgeoff/impz/agent/internal/cmdline"
 )
 
 const mib = 1 << 20

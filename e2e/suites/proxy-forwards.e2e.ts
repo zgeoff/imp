@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, runImp, runShellInImp } from '../lib/imp-cli';
@@ -9,7 +9,7 @@ import { registerRemoval } from '../lib/register-removal';
 import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 
-// `imp proxy`: local ports to ports in an imp, over impd's /tunnel. Each
+// `impz proxy`: local ports to ports in an imp, over impd's /tunnel. Each
 // test boots its own imp; the cases that wait out the idle timeout are in
 // proxy-wake.
 

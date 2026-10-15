@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import type { ImageBuildEvent } from '@imp/api';
-import { IMAGE_BUILD_STREAM_TYPE, ImageBuildEventSchema } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
-import { waitFor } from '@imp/test-utils/wait-for';
+import type { ImageBuildEvent } from '@impz/api';
+import { IMAGE_BUILD_STREAM_TYPE, ImageBuildEventSchema } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
 import { createBuildEventStream, runOnInterval } from './build-event-stream';
 

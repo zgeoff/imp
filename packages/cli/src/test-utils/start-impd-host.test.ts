@@ -1,10 +1,10 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { stat } from 'node:fs/promises';
-import { createImage } from '@imp/daemon/src/db/images';
-import { buildImagePaths } from '@imp/daemon/src/storage/data-layout';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { invariant } from '@imp/test-utils/invariant';
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
+import { createImage } from '@impz/daemon/src/db/images';
+import { buildImagePaths } from '@impz/daemon/src/storage/data-layout';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { invariant } from '@impz/test-utils/invariant';
 import { startImpdHost } from './start-impd-host';
 
 // the stack the host's releases go into, disposed when the test ends

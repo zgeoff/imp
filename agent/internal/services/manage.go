@@ -12,8 +12,8 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	gproto "google.golang.org/protobuf/proto"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
-	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/proto"
 )
 
 // NameRule is the rule for a service added through the API: the name is a

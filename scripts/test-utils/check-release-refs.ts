@@ -1,6 +1,6 @@
 // the image, and a file of a release tag, such as docs/guides/install.md's bootstrap.sh URL
 const RELEASE_REF =
-  /ghcr\.io\/zgeoff\/imp-host:(?<tag>[\w.\-]+)|zgeoff\/imp\/v(?<source>[\w.\-]+)\//gv;
+  /ghcr\.io\/zgeoff\/imp-host:(?<tag>[\w.\-]+)|zgeoff\/impz\/v(?<source>[\w.\-]+)\//gv;
 
 // a deploy file from main names main's code, not a release's
 const MAIN_URL = 'raw.githubusercontent.com/zgeoff/impz/main/deploy/';

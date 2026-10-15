@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ImpContract } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
+import type { ImpContract } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -594,7 +594,7 @@ test('it records each change in the API audit log, refused or made', async () =>
 
   await expect(caller.tokens.update({ name: 'agent', grantable: [] })).toReject();
 
-  // what `imp audit --kind api` reads
+  // what `impz audit --kind api` reads
   const calls = await ctx.client.audit.calls({});
 
   expect(

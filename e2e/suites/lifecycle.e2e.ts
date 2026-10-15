@@ -35,7 +35,7 @@ async function setupTest() {
   return { prefix: readSuitePrefix('lifecycle'), stack, client };
 }
 
-test('it boots the default image on imp new and answers the first exec within the limit', async () => {
+test('it boots the default image on impz new and answers the first exec within the limit', async () => {
   const ctx = await setupTest();
 
   const name = `${ctx.prefix}a`;
@@ -50,7 +50,7 @@ test('it boots the default image on imp new and answers the first exec within th
   const ms = Date.now() - started;
 
   writeMetric('newPlusExecMs', ms);
-  checkLimit('imp new + first exec', ms, config.maxNewMs);
+  checkLimit('impz new + first exec', ms, config.maxNewMs);
 
   const row = await requireImp(name);
   const urls = await readImpUrls(name);

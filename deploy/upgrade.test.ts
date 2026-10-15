@@ -216,7 +216,7 @@ test('it refuses a rollback past the socket proxy before anything changes', () =
   );
 
   expect(calls).not.toInclude('systemctl');
-  expect(calls).not.toInclude('imp sleep');
+  expect(calls).not.toInclude('impz sleep');
 });
 
 test("it starts imp-host alone, with a NOTE, under a compose file that gives imp-host the host's socket", () => {
@@ -369,7 +369,7 @@ test('it refuses a rollback past the unprivileged host before anything changes',
   );
 
   expect(calls).not.toInclude('systemctl');
-  expect(calls).not.toInclude('imp sleep');
+  expect(calls).not.toInclude('impz sleep');
 });
 
 test('it keeps the compose file, and says it still runs privileged, on an upgrade to the unprivileged host', () => {
@@ -473,7 +473,7 @@ test('it stops before any imp sleeps when the image cannot give its unit', () =>
 
   expect(existsSync(join(ctx.dir, 'imp-host.seccomp.json'))).toBeFalse();
   expect(readdirSync(ctx.dir).filter((file) => file.endsWith('.new'))).toBeEmpty();
-  expect(calls).not.toInclude('imp ls');
+  expect(calls).not.toInclude('impz ls');
   expect(calls).not.toInclude('systemctl');
 });
 
@@ -738,7 +738,7 @@ test('it refuses an image from the environment that the units would not run, bef
   );
 
   expect(readdirSync(ctx.dir).filter((file) => file.endsWith('.new'))).toBeEmpty();
-  expect(calls).not.toInclude('imp ls');
+  expect(calls).not.toInclude('impz ls');
   expect(calls).not.toInclude('systemctl');
 });
 
@@ -1270,7 +1270,7 @@ test('it still writes the image lines and units, without a restart, on a systemd
 
   expect(calls).toInclude('systemctl daemon-reload\n');
   expect(calls).not.toInclude('restart');
-  expect(calls).not.toInclude('imp ls');
+  expect(calls).not.toInclude('impz ls');
 });
 
 test('it still writes the compose .env, without compose up, on a compose host that runs the image already', () => {
@@ -1894,12 +1894,67 @@ test('it sleeps each awake imp before the restart', () => {
   expect(
     calls
       .split('\n')
-      .filter((call) => /^(?:docker exec imp-host imp sleep|systemctl restart) /v.test(call)),
+      .filter((call) => /^(?:docker exec imp-host impz sleep|systemctl restart) /v.test(call)),
   ).toStrictEqual([
+    'docker exec imp-host impz sleep web',
+    'docker exec imp-host impz sleep db',
+    'systemctl restart imp-docker-proxy',
+    'systemctl restart imp-host',
+  ]);
+});
+
+test('it sleeps each awake imp with imp in a host image from before the CLI was impz, and asks again after the restart', () => {
+  const ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      awakeImps: ['web', 'db'],
+      runningCLI: 'imp',
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  const calls = readFileSync(docker.calls, 'utf8');
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toInclude('upgrade: web asleep\nupgrade: db asleep\n');
+
+  expect(
+    calls.split('\n').filter((call) => /^(?:docker exec imp-host |systemctl restart )/v.test(call)),
+  ).toStrictEqual([
+    'docker exec imp-host impz --version',
+    'docker exec imp-host imp ls --json',
     'docker exec imp-host imp sleep web',
     'docker exec imp-host imp sleep db',
     'systemctl restart imp-docker-proxy',
     'systemctl restart imp-host',
+    'docker exec imp-host impz --version',
+    'docker exec imp-host imp info --json',
+    'docker exec imp-host imp ls',
   ]);
 });
 
@@ -2049,7 +2104,7 @@ test('it stops before anything restarts when it cannot rewrite the env file', ()
   expect(readFileSync(docker.calls, 'utf8')).not.toInclude('systemctl');
 });
 
-test('it warns, and still upgrades, when imp info fails', () => {
+test('it warns, and still upgrades, when impz info fails', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -2086,11 +2141,11 @@ test('it warns, and still upgrades, when imp info fails', () => {
   expect(result.exitCode).toBe(0);
 
   expect(result.stderr.toString()).toInclude(
-    'upgrade: imp info failed; see the NOTE column below\n',
+    'upgrade: impz info failed; see the NOTE column below\n',
   );
 });
 
-test('it warns, and still upgrades, when it cannot read imp info', () => {
+test('it warns, and still upgrades, when it cannot read impz info', () => {
   const ctx = setupTest();
 
   const docker = createStubBin(
@@ -2127,7 +2182,7 @@ test('it warns, and still upgrades, when it cannot read imp info', () => {
   expect(result.exitCode).toBe(0);
 
   expect(result.stderr.toString()).toInclude(
-    'upgrade: could not read imp info; see the NOTE column below\n',
+    'upgrade: could not read impz info; see the NOTE column below\n',
   );
 });
 

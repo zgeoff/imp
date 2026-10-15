@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { impContract } from '@imp/api';
+import { impContract } from '@impz/api';
 import { traverseContractProcedures } from '@orpc/server';
 import { buildMockCaller } from '../test-utils/build-mock-caller';
 import {

@@ -23,7 +23,7 @@ import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
-// `imp image build` (docs/guides/images.md): what a build keeps of its
+// `impz image build` (docs/guides/images.md): what a build keeps of its
 // context and Dockerfile, through the CLI, from a host path and as a raw
 // upload. Each test builds its own images in a context dir of its own.
 
@@ -145,7 +145,7 @@ test('it brings an uploaded context’s files, ENV and WORKDIR into the imp less
   expect(refused).toStrictEqual({
     exitCode: 1,
     stdout: '',
-    stderr: `imp: CONFLICT: image ${name} is used by 1 imp(s)\n`,
+    stderr: `impz: CONFLICT: image ${name} is used by 1 imp(s)\n`,
   });
 
   expect(kept).toContain(name);

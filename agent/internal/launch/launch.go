@@ -8,10 +8,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/zgeoff/imp/agent/internal/imagecfg"
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/pty"
+	"github.com/zgeoff/impz/agent/internal/imagecfg"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/proto"
+	"github.com/zgeoff/impz/agent/internal/pty"
 )
 
 // The pty size when the request gives none.

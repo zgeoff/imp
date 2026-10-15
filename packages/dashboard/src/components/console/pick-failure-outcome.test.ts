@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ORPCError } from '@zgeoff/imp-client';
+import { ORPCError } from '@impz/client';
 import { pickFailureOutcome } from './pick-failure-outcome';
 
 test('it sends the console to the login page when the session ended', () => {

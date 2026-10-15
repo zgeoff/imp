@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
 )
 
 // Open returns a pty master and slave. It does its own ioctls instead of

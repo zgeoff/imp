@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import type { Imp } from '@imp/api';
-import { invariant } from '@imp/test-utils/invariant';
+import type { Imp } from '@impz/api';
+import { invariant } from '@impz/test-utils/invariant';
 import { createImp, findImpByName, updateImpState } from '../db/imps';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';

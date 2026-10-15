@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/reaper"
 )
 
 // Spec describes one process to start. User, HOME and the binary resolve

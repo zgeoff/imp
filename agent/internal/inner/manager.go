@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
-	"github.com/zgeoff/imp/agent/internal/proc"
-	"github.com/zgeoff/imp/agent/internal/reaper"
-	"github.com/zgeoff/imp/agent/internal/safe"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/proc"
+	"github.com/zgeoff/impz/agent/internal/reaper"
+	"github.com/zgeoff/impz/agent/internal/safe"
 )
 
 // CgroupDir is the container's cgroup, as the agent sees it: the root of

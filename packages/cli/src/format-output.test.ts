@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
-import { buildMockApiCall } from '@imp/api/test-utils/build-mock-api-call';
-import { buildMockCheckpoint } from '@imp/api/test-utils/build-mock-checkpoint';
-import { buildMockIdentity } from '@imp/api/test-utils/build-mock-identity';
-import { buildMockImage } from '@imp/api/test-utils/build-mock-image';
-import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
-import { buildMockRefusedRequest } from '@imp/api/test-utils/build-mock-refused-request';
-import { buildMockSession } from '@imp/api/test-utils/build-mock-session';
-import { buildMockToken } from '@imp/api/test-utils/build-mock-token';
+import { buildMockApiCall } from '@impz/api/test-utils/build-mock-api-call';
+import { buildMockCheckpoint } from '@impz/api/test-utils/build-mock-checkpoint';
+import { buildMockIdentity } from '@impz/api/test-utils/build-mock-identity';
+import { buildMockImage } from '@impz/api/test-utils/build-mock-image';
+import { buildMockImp } from '@impz/api/test-utils/build-mock-imp';
+import { buildMockRefusedRequest } from '@impz/api/test-utils/build-mock-refused-request';
+import { buildMockSession } from '@impz/api/test-utils/build-mock-session';
+import { buildMockToken } from '@impz/api/test-utils/build-mock-token';
 import {
   formatApiCalls,
   formatBootStatus,
@@ -437,7 +437,7 @@ test('#formatGc lists the orphans it kept, with their size, age and snapshots', 
   expect(printed.split('\n')).toStrictEqual([
     'nothing to remove',
     '',
-    'kept 2 orphans the database does not name; `imp gc --orphans` retires them:',
+    'kept 2 orphans the database does not name; `impz gc --orphans` retires them:',
     'KIND   ID    LOCATION                  SIZE   CREATED                   SNAPSHOTS',
     'imp    a     tank/imp/disks/a          3 MiB  2026-10-03T00:00:00.000Z  cp-1,cp-2',
     'image  9f2c  /var/lib/imp/images/9f2c  0 MiB  -                         -',
@@ -464,7 +464,7 @@ test('#formatGc shows how many files each directory of kept secret values holds'
   expect(printed.split('\n')).toStrictEqual([
     'nothing to remove',
     '',
-    'kept 1 orphans the database does not name; `imp gc --orphans` retires them:',
+    'kept 1 orphans the database does not name; `impz gc --orphans` retires them:',
     'KIND     ID                        LOCATION                                                 SIZE   CREATED                   SNAPSHOTS',
     'secrets  2026-10-04T05-30-00.000Z  /var/lib/imp/secrets/.orphaned/2026-10-04T05-30-00.000Z  0 MiB  2026-10-04T05:30:00.000Z  2 files',
   ]);

@@ -22,7 +22,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// `imp new --place` across A and B on the harness's move network
+// `impz new --place` across A and B on the harness's move network
 // (lib/move-hosts.ts), with both saved in a CLI config of the test's own.
 
 // one stack for every release, on both hosts
@@ -39,7 +39,7 @@ async function setupTest() {
   return { prefix: readSuitePrefix('moves'), stack, hosts, client, clientB };
 }
 
-test('it creates on the saved host with the most free RAM for imp new --place', async () => {
+test('it creates on the saved host with the most free RAM for impz new --place', async () => {
   const ctx = await setupTest();
 
   const seed = `${ctx.prefix}seed`;
@@ -99,12 +99,12 @@ test('it creates on the saved host with the most free RAM for imp new --place', 
   expect(result).toStrictEqual({
     exitCode: 0,
     stdout: expect.toBeString(),
-    stderr: expect.toInclude(`imp: placing on ${HOST_B}`),
+    stderr: expect.toInclude(`impz: placing on ${HOST_B}`),
   });
 
   expect(result.stderr).not.toContain('skipped');
 
-  // what `imp new --place --json` prints, in part
+  // what `impz new --place --json` prints, in part
   const printed: unknown = JSON.parse(result.stdout);
   const body = z.object({ host: z.string(), imp: z.object({ name: z.string() }) }).parse(printed);
 

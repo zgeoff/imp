@@ -111,7 +111,7 @@ test('#readHostConfig warns when others can read the file', () => {
   readHostConfig(ctx.env, warn);
 
   expect(warn).toHaveBeenCalledExactlyOnceWith(
-    `imp: warning: ${ctx.path} is readable by other users; run chmod 600 ${ctx.path}`,
+    `impz: warning: ${ctx.path} is readable by other users; run chmod 600 ${ctx.path}`,
   );
 });
 
@@ -140,7 +140,7 @@ test('#readHostConfig rejects a file that is not valid JSON', () => {
   );
 });
 
-test('#readHostConfig rejects JSON that is not an imp config', () => {
+test('#readHostConfig rejects JSON that is not an impz config', () => {
   const ctx = setupTest();
 
   mkdirSync(join(ctx.path, '..'), { recursive: true });
@@ -148,7 +148,7 @@ test('#readHostConfig rejects JSON that is not an imp config', () => {
 
   expect(() => readHostConfig(ctx.env)).toThrowWithMessage(
     UsageError,
-    new RegExp(`^${ctx.path} is not an imp config \\(`, 'u'),
+    new RegExp(`^${ctx.path} is not an impz config \\(`, 'u'),
   );
 });
 
@@ -169,7 +169,7 @@ test.each([['https://imp.example'], [''], ['-x']])(
   (name) => {
     expect(() => checkHostName(name)).toThrowWithMessage(
       UsageError,
-      `not a host name: ${name} (letters, digits, '.', '_' and '-'; a URL goes to imp login)`,
+      `not a host name: ${name} (letters, digits, '.', '_' and '-'; a URL goes to impz login)`,
     );
   },
 );

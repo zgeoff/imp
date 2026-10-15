@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { buildStubTerminalConnection } from '../../test-utils/build-stub-terminal-connection';
 import { buildStubTerminalScreen } from '../../test-utils/build-stub-terminal-screen';
 import { setupTerminalBridge } from './setup-terminal-bridge';

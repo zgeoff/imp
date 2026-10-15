@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { $ } from 'bun';
@@ -31,8 +31,8 @@ test('it installs the latest release after checking its checksum and provenance'
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -56,10 +56,10 @@ test('it installs the latest release after checking its checksum and provenance'
     exitCode: result.exitCode,
   }).toStrictEqual({
     stdout: [
-      'imp: downloading imp-linux-x64 v1.2.3',
-      'imp: provenance verified',
-      `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
-      `imp: add ${ctx.dir}/install to your PATH`,
+      'impz: downloading impz-linux-x64 v1.2.3',
+      'impz: provenance verified',
+      `impz: installed 1.2.3 to ${ctx.dir}/install/impz`,
+      `impz: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
     stderr: '',
@@ -69,16 +69,16 @@ test('it installs the latest release after checking its checksum and provenance'
   expect(releases.requests).toStrictEqual([
     '/latest',
     '/tag/v1.2.3',
-    '/download/v1.2.3/imp-linux-x64',
+    '/download/v1.2.3/impz-linux-x64',
     '/download/v1.2.3/SHA256SUMS',
   ]);
 
   expect(gh.readCalls()).toStrictEqual([
     'auth status',
-    expect.stringMatching(/^attestation verify \S+\/imp-linux-x64 -R zgeoff\/imp$/u),
+    expect.stringMatching(/^attestation verify \S+\/impz-linux-x64 -R zgeoff\/impz$/u),
   ]);
 
-  expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe(binary);
+  expect(readFileSync(join(ctx.dir, 'install', 'impz'), 'utf8')).toBe(binary);
 });
 
 test('it installs the release IMP_INSTALL_VERSION names without asking for the latest', async () => {
@@ -88,8 +88,8 @@ test('it installs the release IMP_INSTALL_VERSION names without asking for the l
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.0.0/imp-linux-x64': binary,
-      'v1.0.0/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.0.0/impz-linux-x64': binary,
+      'v1.0.0/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -109,17 +109,17 @@ test('it installs the release IMP_INSTALL_VERSION names without asking for the l
 
   expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
     stdout: [
-      'imp: downloading imp-linux-x64 v1.0.0',
-      'imp: provenance verified',
-      `imp: installed 1.0.0 to ${ctx.dir}/install/imp`,
-      `imp: add ${ctx.dir}/install to your PATH`,
+      'impz: downloading impz-linux-x64 v1.0.0',
+      'impz: provenance verified',
+      `impz: installed 1.0.0 to ${ctx.dir}/install/impz`,
+      `impz: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
     exitCode: 0,
   });
 
   expect(releases.requests).toStrictEqual([
-    '/download/v1.0.0/imp-linux-x64',
+    '/download/v1.0.0/impz-linux-x64',
     '/download/v1.0.0/SHA256SUMS',
   ]);
 });
@@ -131,8 +131,8 @@ test('it installs the release a v-prefixed IMP_INSTALL_VERSION names', async () 
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.0.0/imp-linux-x64': binary,
-      'v1.0.0/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.0.0/impz-linux-x64': binary,
+      'v1.0.0/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -152,17 +152,17 @@ test('it installs the release a v-prefixed IMP_INSTALL_VERSION names', async () 
 
   expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
     stdout: [
-      'imp: downloading imp-linux-x64 v1.0.0',
-      'imp: provenance verified',
-      `imp: installed 1.0.0 to ${ctx.dir}/install/imp`,
-      `imp: add ${ctx.dir}/install to your PATH`,
+      'impz: downloading impz-linux-x64 v1.0.0',
+      'impz: provenance verified',
+      `impz: installed 1.0.0 to ${ctx.dir}/install/impz`,
+      `impz: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
     exitCode: 0,
   });
 
   expect(releases.requests).toStrictEqual([
-    '/download/v1.0.0/imp-linux-x64',
+    '/download/v1.0.0/impz-linux-x64',
     '/download/v1.0.0/SHA256SUMS',
   ]);
 });
@@ -174,8 +174,8 @@ test('it installs without a provenance check when gh is not on PATH', async () =
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -202,9 +202,9 @@ test('it installs without a provenance check when gh is not on PATH', async () =
     exitCode: result.exitCode,
   }).toStrictEqual({
     stdout: [
-      'imp: downloading imp-linux-x64 v1.2.3',
-      `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
-      `imp: add ${ctx.dir}/install to your PATH`,
+      'impz: downloading impz-linux-x64 v1.2.3',
+      `impz: installed 1.2.3 to ${ctx.dir}/install/impz`,
+      `impz: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
     stderr: '',
@@ -219,8 +219,8 @@ test('it checks the binary with shasum when sha256sum is not on PATH', async () 
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -245,8 +245,12 @@ test('it checks the binary with shasum when sha256sum is not on PATH', async () 
     .quiet();
 
   expect(result.exitCode).toBe(0);
-  expect(shasum.readCalls()).toStrictEqual([expect.stringMatching(/^-a 256 \S+\/imp-linux-x64$/u)]);
-  expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe(binary);
+
+  expect(shasum.readCalls()).toStrictEqual([
+    expect.stringMatching(/^-a 256 \S+\/impz-linux-x64$/u),
+  ]);
+
+  expect(readFileSync(join(ctx.dir, 'install', 'impz'), 'utf8')).toBe(binary);
 });
 
 test('it leaves out the PATH hint when the install dir is already on PATH', async () => {
@@ -256,8 +260,8 @@ test('it leaves out the PATH hint when the install dir is already on PATH', asyn
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -276,13 +280,54 @@ test('it leaves out the PATH hint when the install dir is already on PATH', asyn
 
   expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
     stdout: [
-      'imp: downloading imp-linux-x64 v1.2.3',
-      'imp: provenance verified',
-      `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
+      'impz: downloading impz-linux-x64 v1.2.3',
+      'impz: provenance verified',
+      `impz: installed 1.2.3 to ${ctx.dir}/install/impz`,
       '',
     ].join('\n'),
     exitCode: 0,
   });
+});
+
+test('it names an imp binary from before the rename and leaves it in place', async () => {
+  const ctx = setupTest();
+  const binary = '#!/bin/sh\necho 1.2.3\n';
+
+  const releases = startStubGithubReleases({
+    latest: 'v1.2.3',
+    assets: {
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
+    },
+  });
+
+  createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'x86_64' });
+  createStubGhAttestation({ bin: ctx.bin, loggedIn: true, verifies: true });
+  mkdirSync(join(ctx.dir, 'install'));
+  writeFileSync(join(ctx.dir, 'install', 'imp'), '#!/bin/sh\necho 1.6.0\n');
+
+  const result = await $`sh ${join(import.meta.dir, 'install.sh')}`
+    .env({
+      PATH: `${ctx.bin}:${join(ctx.dir, 'install')}:${process.env['PATH'] ?? ''}`,
+      HOME: ctx.dir,
+      IMP_RELEASES_URL: releases.url,
+      IMP_INSTALL_DIR: join(ctx.dir, 'install'),
+    })
+    .nothrow()
+    .quiet();
+
+  expect({ stdout: result.stdout.toString(), exitCode: result.exitCode }).toStrictEqual({
+    stdout: [
+      'impz: downloading impz-linux-x64 v1.2.3',
+      'impz: provenance verified',
+      `impz: installed 1.2.3 to ${ctx.dir}/install/impz`,
+      `impz: ${ctx.dir}/install/imp is the CLI from before its rename to impz; remove it once nothing calls it`,
+      '',
+    ].join('\n'),
+    exitCode: 0,
+  });
+
+  expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe('#!/bin/sh\necho 1.6.0\n');
 });
 
 test('it installs the binary for the platform uname names', async () => {
@@ -292,8 +337,8 @@ test('it installs the binary for the platform uname names', async () => {
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-darwin-arm64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-darwin-arm64\n`,
+      'v1.2.3/impz-darwin-arm64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-darwin-arm64\n`,
     },
   });
 
@@ -311,7 +356,7 @@ test('it installs the binary for the platform uname names', async () => {
     .quiet();
 
   expect(result.exitCode).toBe(0);
-  expect(readFileSync(join(ctx.dir, 'install', 'imp'), 'utf8')).toBe(binary);
+  expect(readFileSync(join(ctx.dir, 'install', 'impz'), 'utf8')).toBe(binary);
 });
 
 test('it installs nothing when the binary does not match SHA256SUMS', async () => {
@@ -321,8 +366,8 @@ test('it installs nothing when the binary does not match SHA256SUMS', async () =
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update('other').digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update('other').digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -344,12 +389,12 @@ test('it installs nothing when the binary does not match SHA256SUMS', async () =
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
-    stderr: 'imp: imp-linux-x64 does not match SHA256SUMS for v1.2.3; nothing installed\n',
+    stdout: 'impz: downloading impz-linux-x64 v1.2.3\n',
+    stderr: 'impz: impz-linux-x64 does not match SHA256SUMS for v1.2.3; nothing installed\n',
     exitCode: 1,
   });
 
-  expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
+  expect(existsSync(join(ctx.dir, 'install', 'impz'))).toBeFalse();
 });
 
 test('it installs nothing when SHA256SUMS lists no binary for the platform', async () => {
@@ -359,8 +404,8 @@ test('it installs nothing when SHA256SUMS lists no binary for the platform', asy
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-darwin-arm64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-darwin-arm64\n`,
     },
   });
 
@@ -382,12 +427,12 @@ test('it installs nothing when SHA256SUMS lists no binary for the platform', asy
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
-    stderr: 'imp: SHA256SUMS for v1.2.3 lists no imp-linux-x64\n',
+    stdout: 'impz: downloading impz-linux-x64 v1.2.3\n',
+    stderr: 'impz: SHA256SUMS for v1.2.3 lists no impz-linux-x64\n',
     exitCode: 1,
   });
 
-  expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
+  expect(existsSync(join(ctx.dir, 'install', 'impz'))).toBeFalse();
 });
 
 test('it installs nothing when the provenance check fails', async () => {
@@ -397,8 +442,8 @@ test('it installs nothing when the provenance check fails', async () => {
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -420,13 +465,13 @@ test('it installs nothing when the provenance check fails', async () => {
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
+    stdout: 'impz: downloading impz-linux-x64 v1.2.3\n',
     stderr:
-      'imp: could not verify provenance of imp-linux-x64 from zgeoff/imp; nothing installed\n',
+      'impz: could not verify provenance of impz-linux-x64 from zgeoff/impz; nothing installed\n',
     exitCode: 1,
   });
 
-  expect(existsSync(join(ctx.dir, 'install', 'imp'))).toBeFalse();
+  expect(existsSync(join(ctx.dir, 'install', 'impz'))).toBeFalse();
 });
 
 test('it skips the provenance check when gh is not logged in', async () => {
@@ -436,8 +481,8 @@ test('it skips the provenance check when gh is not logged in', async () => {
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -461,10 +506,10 @@ test('it skips the provenance check when gh is not logged in', async () => {
     exitCode: result.exitCode,
   }).toStrictEqual({
     stdout: [
-      'imp: downloading imp-linux-x64 v1.2.3',
-      'imp: gh is not logged in; skipped the provenance check',
-      `imp: installed 1.2.3 to ${ctx.dir}/install/imp`,
-      `imp: add ${ctx.dir}/install to your PATH`,
+      'impz: downloading impz-linux-x64 v1.2.3',
+      'impz: gh is not logged in; skipped the provenance check',
+      `impz: installed 1.2.3 to ${ctx.dir}/install/impz`,
+      `impz: add ${ctx.dir}/install to your PATH`,
       '',
     ].join('\n'),
     stderr: '',
@@ -481,8 +526,8 @@ test('it fails the install when the binary does not run', async () => {
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
     assets: {
-      'v1.2.3/imp-linux-x64': binary,
-      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  imp-linux-x64\n`,
+      'v1.2.3/impz-linux-x64': binary,
+      'v1.2.3/SHA256SUMS': `${new Bun.CryptoHasher('sha256').update(binary).digest('hex')}  impz-linux-x64\n`,
     },
   });
 
@@ -504,7 +549,7 @@ test('it fails the install when the binary does not run', async () => {
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'imp: downloading imp-linux-x64 v1.2.3\nimp: provenance verified\n',
+    stdout: 'impz: downloading impz-linux-x64 v1.2.3\nimpz: provenance verified\n',
     stderr: '',
     exitCode: 1,
   });
@@ -533,7 +578,7 @@ test('it fails when the repo has no release', async () => {
     exitCode: result.exitCode,
   }).toStrictEqual({
     stdout: '',
-    stderr: `imp: no release found at ${releases.url} (got '')\n`,
+    stderr: `impz: no release found at ${releases.url} (got '')\n`,
     exitCode: 1,
   });
 });
@@ -561,7 +606,7 @@ test('it fails when the releases page does not answer', async () => {
     exitCode: result.exitCode,
   }).toStrictEqual({
     stdout: '',
-    stderr: expect.toEndWith('imp: cannot reach http://127.0.0.1:1/latest\n'),
+    stderr: expect.toEndWith('impz: cannot reach http://127.0.0.1:1/latest\n'),
     exitCode: 1,
   });
 });
@@ -592,8 +637,8 @@ test('it fails when the release has no binary to download', async () => {
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
-    stderr: expect.toEndWith('imp: cannot download imp-linux-x64 v1.2.3\n'),
+    stdout: 'impz: downloading impz-linux-x64 v1.2.3\n',
+    stderr: expect.toEndWith('impz: cannot download impz-linux-x64 v1.2.3\n'),
     exitCode: 1,
   });
 });
@@ -604,7 +649,7 @@ test('it fails when the release has no SHA256SUMS to download', async () => {
 
   const releases = startStubGithubReleases({
     latest: 'v1.2.3',
-    assets: { 'v1.2.3/imp-linux-x64': binary },
+    assets: { 'v1.2.3/impz-linux-x64': binary },
   });
 
   createStubUname({ bin: ctx.bin, system: 'Linux', machine: 'x86_64' });
@@ -625,8 +670,8 @@ test('it fails when the release has no SHA256SUMS to download', async () => {
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
   }).toStrictEqual({
-    stdout: 'imp: downloading imp-linux-x64 v1.2.3\n',
-    stderr: expect.toEndWith('imp: cannot download SHA256SUMS for v1.2.3\n'),
+    stdout: 'impz: downloading impz-linux-x64 v1.2.3\n',
+    stderr: expect.toEndWith('impz: cannot download SHA256SUMS for v1.2.3\n'),
     exitCode: 1,
   });
 });
@@ -651,7 +696,7 @@ test('it fails on a system it has no binary for', async () => {
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
-  }).toStrictEqual({ stdout: '', stderr: 'imp: no binary for FreeBSD\n', exitCode: 1 });
+  }).toStrictEqual({ stdout: '', stderr: 'impz: no binary for FreeBSD\n', exitCode: 1 });
 });
 
 test('it fails on a machine it has no binary for', async () => {
@@ -674,5 +719,5 @@ test('it fails on a machine it has no binary for', async () => {
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode,
-  }).toStrictEqual({ stdout: '', stderr: 'imp: no binary for riscv64\n', exitCode: 1 });
+  }).toStrictEqual({ stdout: '', stderr: 'impz: no binary for riscv64\n', exitCode: 1 });
 });

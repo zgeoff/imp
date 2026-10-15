@@ -270,7 +270,7 @@ impz login https://imp.example.ts.net             # asks for the token; saves th
 scripts/dev/dev.sh token | impz login http://localhost:7070 --name dev
 impz hosts                                         # the saved hosts; * marks the current one
 impz host use dev                                  # make another host current
-impz --host imp ls                                  # one call to a host other than the current
+impz --host impz ls                                  # one call to a host other than the current
 impz ls --all                                      # the imps on every saved host
 impz new web --place                               # on the saved host with the most free RAM
 impz host rm dev

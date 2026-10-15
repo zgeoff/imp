@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, runImp, runShellInImp } from '../lib/imp-cli';
@@ -18,7 +18,7 @@ import { removeImpIfPresent } from '../lib/reset-baseline';
 import { readSuitePrefix } from '../lib/suites';
 import { waitFor } from '../lib/wait-for';
 
-// `imp proxy` against impd's cap on open tunnels per imp.
+// `impz proxy` against impd's cap on open tunnels per imp.
 
 // one stack for every release, so the held connections close and the proxy
 // stops before the imp goes
@@ -95,7 +95,7 @@ test('it refuses only the connection past the tunnel cap with TUNNEL_LIMIT, and 
     const count = countMatches(proxy.readStderr(), 'TUNNEL_LIMIT');
 
     if (count === 0) {
-      throw new Error(`imp proxy printed ${proxy.readStderr()}`);
+      throw new Error(`impz proxy printed ${proxy.readStderr()}`);
     }
 
     return count;

@@ -237,14 +237,15 @@ write_compose_env() {
 }
 
 # The CLI in the running container: impz, or imp in an image from before the
-# CLI's rename, which is the old image while its imps go to sleep. Probed at
-# the first call, and again once the host restarts on the new image.
-cli=
+# CLI's rename, which is the old image while its imps go to sleep. Picked
+# before the sleeps and again once the host restarts on the new image.
+cli=impz
+pick_cli() {
+  cli=impz
+  docker exec "$container" impz --version >/dev/null 2>&1 || cli=imp
+}
+
 impz() {
-  if [ -z "$cli" ]; then
-    cli=impz
-    docker exec "$container" impz --version >/dev/null 2>&1 || cli=imp
-  fi
   docker exec "$container" "$cli" "$@"
 }
 
@@ -449,6 +450,7 @@ if [ "$old" = "$new" ]; then
   exit 0
 fi
 
+pick_cli
 # its own line: a failed `impz ls` stops the script before anything restarts
 awake=$(list_awake)
 
@@ -463,7 +465,7 @@ done
 install_new_files
 restart_host
 wait_ready
-cli=
+pick_cli
 
 if [ "$old_contract" = "$new_contract" ]; then
   if [ -n "$compose_file" ] || [ "$new_contract" != socket-proxy ]; then

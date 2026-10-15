@@ -14,8 +14,8 @@ linters:
       # a reply the peer may no longer read is best effort: the connection's
       # own read or close reports the failure
       exclude-functions:
-        - (*github.com/zgeoff/imp/agent/internal/proto.Writer).Write
-        - (*github.com/zgeoff/imp/agent/internal/proto.Writer).WriteMessage
+        - (*github.com/zgeoff/impz/agent/internal/proto.Writer).Write
+        - (*github.com/zgeoff/impz/agent/internal/proto.Writer).WriteMessage
     gosec:
       excludes:
         # errcheck checks unhandled errors
@@ -38,7 +38,7 @@ linters:
         main:
           allow:
             - $gostd
-            - github.com/zgeoff/imp/agent
+            - github.com/zgeoff/impz/agent
             - github.com/charmbracelet/x/ansi
             - github.com/mdlayher/vsock
             - github.com/pkg/sftp

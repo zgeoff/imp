@@ -3,22 +3,22 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { CLIENT_VERSION, ORPCError, createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@imp/test-utils/invariant';
-import { CLIENT_VERSION, ORPCError, createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@impz/test-utils/invariant';
 import { buildStubBackoffClock } from '../test-utils/build-stub-backoff-clock';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { printEvents } from './events';
@@ -227,16 +227,16 @@ test('it prints only the named imp’s events, and reconnects after impd’s con
 
   expect(warn.mock.calls).toStrictEqual([
     [
-      'imp: the event stream ended (The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()); reconnecting in 1000ms',
+      'impz: the event stream ended (The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()); reconnecting in 1000ms',
     ],
     [
-      'imp: the event stream ended (The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()); reconnecting in 2000ms',
+      'impz: the event stream ended (The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()); reconnecting in 2000ms',
     ],
     [
-      'imp: the event stream ended (Unable to connect. Is the computer able to access the url?); reconnecting in 4000ms',
+      'impz: the event stream ended (Unable to connect. Is the computer able to access the url?); reconnecting in 4000ms',
     ],
     [
-      'imp: the event stream ended (Unable to connect. Is the computer able to access the url?); reconnecting in 8000ms',
+      'impz: the event stream ended (Unable to connect. Is the computer able to access the url?); reconnecting in 8000ms',
     ],
   ]);
 });
@@ -358,7 +358,7 @@ test('it reconnects after impd fails the stream with a server error', async () =
   );
 
   expect(warn.mock.calls[0]).toStrictEqual([
-    'imp: the event stream ended (Internal server error); reconnecting in 1000ms',
+    'impz: the event stream ended (Internal server error); reconnecting in 1000ms',
   ]);
 });
 

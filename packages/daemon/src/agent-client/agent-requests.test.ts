@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { create } from '@bufbuild/protobuf';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { startStubAgent } from '../test-utils/start-stub-agent';
 import { openAgentConnection } from './agent-connection';
 import { ErrorDataSchema, PingSchema, SessionInfoSchema } from './agent-protocol';

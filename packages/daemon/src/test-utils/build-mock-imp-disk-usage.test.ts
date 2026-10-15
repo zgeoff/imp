@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { buildMockImpDiskUsage } from './build-mock-imp-disk-usage';
 
-test('it builds a default imp disk usage', () => {
+test('it builds a default impz disk usage', () => {
   expect(buildMockImpDiskUsage()).toStrictEqual({
     exclusiveBytes: expect.toBeNumber(),
     sharedBytes: expect.toBeNumber(),

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"github.com/zgeoff/impz/agent/internal/fsroot"
 	"golang.org/x/sys/unix"
 )
 

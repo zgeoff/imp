@@ -9,7 +9,7 @@ test('it prints the usage of sessions kill with too few arguments instead of lis
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: usage: imp sessions kill <name> <session>\n',
+    stderr: 'impz: usage: impz sessions kill <name> <session>\n',
     code: 2,
   });
 });

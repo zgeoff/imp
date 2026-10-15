@@ -18,7 +18,7 @@ test('#buildPkceChallenge gives RFC 7636 appendix B challenge', () => {
 
 test('#parseApprovalPage reads the approval code and the form fields', () => {
   const page = [
-    '<p>Run <code>imp oauth approve K7QX-29TB</code> to approve.</p>',
+    '<p>Run <code>impz oauth approve K7QX-29TB</code> to approve.</p>',
     '<form method="post">',
     '<input type="hidden" name="id" value="req_01">',
     '<input type="hidden" name="signature" value="c2lnbmVk">',

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildMockBrokerRule } from '@imp/api/test-utils/build-mock-broker-rule';
+import { buildMockBrokerRule } from '@impz/api/test-utils/build-mock-broker-rule';
 import {
   SecretRulesError,
   listPlaceholderEnv,

@@ -3,21 +3,21 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { checkDockerBuildx } from '../test-utils/run-docker-build';
 import { runImageAdd, runOnHostBuild } from './run-image-op';
@@ -162,7 +162,7 @@ test('#runImageAdd makes a template from an imp through the stream of a current 
 
   await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  const image = await runImageAdd(ctx.client, { imp: 'box', name: 'tpl' }, 'imp template create');
+  const image = await runImageAdd(ctx.client, { imp: 'box', name: 'tpl' }, 'impz template create');
 
   const received: unknown = image;
 
@@ -239,7 +239,7 @@ test('#runImageAdd adds through the call that answers at the end on an impd from
   const added = await runImageAdd(
     createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: older.fetch }),
     { imp: 'box', name: 'tpl' },
-    'imp template create',
+    'impz template create',
   );
 
   const received: unknown = added;
@@ -313,7 +313,7 @@ test('#runImageAdd rejects when impd faults by ending the stream before it answe
   const adding = runImageAdd(
     createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: faulty.fetch }),
     { imp: 'box', name: 'tpl' },
-    'imp template create',
+    'impz template create',
   );
 
   expect(adding).rejects.toThrowWithMessage(

@@ -4,24 +4,24 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
-import { createGenerationLog } from '@imp/daemon/src/session-logs/generation-log';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
+import { createGenerationLog } from '@impz/daemon/src/session-logs/generation-log';
 import {
   buildImagePaths,
   buildImpPaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@imp/test-utils/invariant';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@impz/test-utils/invariant';
 import { runCli } from '../test-utils/start-cli';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 import { UsageError } from '../usage-error';
@@ -194,7 +194,7 @@ test('it writes the newest log to stdout and the bytes the log lost to stderr', 
 
   expect(result).toStrictEqual({
     stdout: 'abcdef',
-    stderr: `imp: generation ${generation}\nimp: bytes 0 to 4 are not in the log\n`,
+    stderr: `impz: generation ${generation}\nimpz: bytes 0 to 4 are not in the log\n`,
     code: 0,
   });
 });
@@ -249,7 +249,7 @@ test('it refuses a --from that is not a whole number of bytes', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --from must be an offset, a whole number of bytes, not -1\n',
+    stderr: 'impz: --from must be an offset, a whole number of bytes, not -1\n',
     code: 2,
   });
 });
@@ -267,33 +267,33 @@ test.each([
   [
     'log with no session',
     ['sessions', 'log', 'dev'],
-    'usage: imp sessions log <name> <session> [generation] [--from <offset>]',
+    'usage: impz sessions log <name> <session> [generation] [--from <offset>]',
   ],
   [
     'log with a fourth positional',
     ['sessions', 'log', 'dev', 'main', 'c', 'd'],
-    'usage: imp sessions log <name> <session> [generation] [--from <offset>]',
+    'usage: impz sessions log <name> <session> [generation] [--from <offset>]',
   ],
-  ['logs with no name', ['sessions', 'logs'], 'usage: imp sessions logs <name> [session]'],
+  ['logs with no name', ['sessions', 'logs'], 'usage: impz sessions logs <name> [session]'],
   [
     'logs with a third positional',
     ['sessions', 'logs', 'dev', 'main', 'c'],
-    'usage: imp sessions logs <name> [session]',
+    'usage: impz sessions logs <name> [session]',
   ],
   [
     'log-rm with no name',
     ['sessions', 'log-rm'],
-    'usage: imp sessions log-rm <name> [session] [generation]',
+    'usage: impz sessions log-rm <name> [session] [generation]',
   ],
   [
     'log-rm with a fourth positional',
     ['sessions', 'log-rm', 'dev', 'main', 'c', 'd'],
-    'usage: imp sessions log-rm <name> [session] [generation]',
+    'usage: impz sessions log-rm <name> [session] [generation]',
   ],
 ])('it prints the usage for %s', async (_case, args, usage) => {
   const result = await runCli({ args, env: { IMP_URL: 'http://127.0.0.1:1' } });
 
-  expect(result).toStrictEqual({ stdout: '', stderr: `imp: ${usage}\n`, code: 2 });
+  expect(result).toStrictEqual({ stdout: '', stderr: `impz: ${usage}\n`, code: 2 });
 });
 
 test('it says the imp has no log of a session that never logged', async () => {
@@ -311,7 +311,7 @@ test('it says the imp has no log of a session that never logged', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: imp dev has no log of session main\n',
+    stderr: 'impz: imp dev has no log of session main\n',
     code: 1,
   });
 });
@@ -519,7 +519,7 @@ test('it refuses to read a log from an impd from before sessionLog, before any r
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: this impd has no session logs and would read no log; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+      'impz: this impd has no session logs and would read no log; nothing was changed. Upgrade impd, or use an older imp CLI\n',
     code: 1,
   });
 

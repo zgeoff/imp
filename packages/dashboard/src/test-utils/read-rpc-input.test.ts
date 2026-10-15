@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { createImpClient } from '@zgeoff/imp-client';
+import { createImpClient } from '@impz/client';
 import { http } from 'msw';
 import { impCollection } from '../mocks/db/imp-collection';
 import { IMPD_ORIGIN, RPC_URL } from '../mocks/handlers';

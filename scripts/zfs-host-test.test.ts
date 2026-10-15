@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { createStubBin } from './test-utils/create-stub-bin';
 import { createStubInstanceDocker } from './test-utils/create-stub-instance-docker';
 import { createStubRepoScript } from './test-utils/create-stub-repo-script';

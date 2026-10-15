@@ -438,7 +438,7 @@ test('it restores past a stale lock in the repository, and fails the check loudl
   const status = await readBackupStatus();
   const restored = await runS3(ctx.secrets, 'PUT', `/${key}`, '--data-binary', `@${packDir}/pack`);
 
-  expect(check).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toStartWith('imp: ') });
+  expect(check).toStrictEqual({ exitCode: 1, stdout: '', stderr: expect.toStartWith('impz: ') });
   expect(status.lastCheck?.error).toBeString();
   expect(restored.exitCode).toBe(0);
 });
@@ -512,7 +512,7 @@ test('it brings back a named token, its secret’s name and the grant from a bac
   expect(result).toStrictEqual({
     exitCode: 0,
     stdout: expect.toBeString(),
-    stderr: expect.toInclude(`imp: tokens restored: ${token}`),
+    stderr: expect.toInclude(`impz: tokens restored: ${token}`),
   });
 
   expect(listed).toStrictEqual({ exitCode: 0, stdout: expect.toInclude(name), stderr: '' });

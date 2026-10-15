@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { updateEnv } from '@imp/test-utils/update-env';
+import { updateEnv } from '@impz/test-utils/update-env';
 import { readZfsTestPool } from './read-zfs-test-pool';
 
 test('it reads the pool dataset and its mount dir', () => {

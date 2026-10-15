@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { rmSync } from 'node:fs';
-import { invariant } from '@imp/test-utils/invariant';
+import { invariant } from '@impz/test-utils/invariant';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { buildTestApp, createImpTest } from '../imps/test-imps';
 import { buildImpPaths } from '../storage/data-layout';

@@ -20,10 +20,10 @@ test('it renders each platform with its own URL and checksum', () => {
   writeFileSync(
     sums,
     [
-      `${'0'.repeat(64)}  imp-darwin-arm64`,
-      `${'1'.repeat(64)}  imp-darwin-x64`,
-      `${'2'.repeat(64)}  imp-linux-arm64`,
-      `${'3'.repeat(64)}  imp-linux-x64`,
+      `${'0'.repeat(64)}  impz-darwin-arm64`,
+      `${'1'.repeat(64)}  impz-darwin-x64`,
+      `${'2'.repeat(64)}  impz-linux-arm64`,
+      `${'3'.repeat(64)}  impz-linux-x64`,
       `${'f'.repeat(64)}  vmlinux`,
       '',
     ].join('\n'),
@@ -40,30 +40,30 @@ test('it renders each platform with its own URL and checksum', () => {
       "exitCode": 0,
       "stderr": "",
       "stdout": 
-    "class Imp < Formula
+    "class Impz < Formula
       desc "CLI for impd: persistent Linux microVMs that sleep when idle"
-      homepage "https://github.com/zgeoff/imp"
+      homepage "https://github.com/zgeoff/impz"
       version "1.2.3"
       license "MIT"
 
       on_macos do
         on_arm do
-          url "https://github.com/zgeoff/imp/releases/download/v1.2.3/imp-darwin-arm64"
+          url "https://github.com/zgeoff/impz/releases/download/v1.2.3/impz-darwin-arm64"
           sha256 "0000000000000000000000000000000000000000000000000000000000000000"
         end
         on_intel do
-          url "https://github.com/zgeoff/imp/releases/download/v1.2.3/imp-darwin-x64"
+          url "https://github.com/zgeoff/impz/releases/download/v1.2.3/impz-darwin-x64"
           sha256 "1111111111111111111111111111111111111111111111111111111111111111"
         end
       end
 
       on_linux do
         on_arm do
-          url "https://github.com/zgeoff/imp/releases/download/v1.2.3/imp-linux-arm64"
+          url "https://github.com/zgeoff/impz/releases/download/v1.2.3/impz-linux-arm64"
           sha256 "2222222222222222222222222222222222222222222222222222222222222222"
         end
         on_intel do
-          url "https://github.com/zgeoff/imp/releases/download/v1.2.3/imp-linux-x64"
+          url "https://github.com/zgeoff/impz/releases/download/v1.2.3/impz-linux-x64"
           sha256 "3333333333333333333333333333333333333333333333333333333333333333"
         end
       end
@@ -71,14 +71,14 @@ test('it renders each platform with its own URL and checksum', () => {
       def install
         # a bare download may arrive without +x, and the completions below run
         # the binary before Homebrew fixes modes
-        binary = Dir["imp-*"].first
+        binary = Dir["impz-*"].first
         chmod 0755, binary
-        bin.install binary => "imp"
-        generate_completions_from_executable(bin/"imp", "completion")
+        bin.install binary => "impz"
+        generate_completions_from_executable(bin/"impz", "completion")
       end
 
       test do
-        assert_equal version.to_s, shell_output("#{bin}/imp --version").strip
+        assert_equal version.to_s, shell_output("#{bin}/impz --version").strip
       end
     end
     "
@@ -94,10 +94,10 @@ test('it renders the same formula from the same release twice', () => {
   writeFileSync(
     sums,
     [
-      `${'0'.repeat(64)}  imp-darwin-arm64`,
-      `${'1'.repeat(64)}  imp-darwin-x64`,
-      `${'2'.repeat(64)}  imp-linux-arm64`,
-      `${'3'.repeat(64)}  imp-linux-x64`,
+      `${'0'.repeat(64)}  impz-darwin-arm64`,
+      `${'1'.repeat(64)}  impz-darwin-x64`,
+      `${'2'.repeat(64)}  impz-linux-arm64`,
+      `${'3'.repeat(64)}  impz-linux-x64`,
       '',
     ].join('\n'),
   );
@@ -117,10 +117,10 @@ test.skipIf(Bun.which('ruby') === null)('it renders a formula that is valid Ruby
   writeFileSync(
     sums,
     [
-      `${'0'.repeat(64)}  imp-darwin-arm64`,
-      `${'1'.repeat(64)}  imp-darwin-x64`,
-      `${'2'.repeat(64)}  imp-linux-arm64`,
-      `${'3'.repeat(64)}  imp-linux-x64`,
+      `${'0'.repeat(64)}  impz-darwin-arm64`,
+      `${'1'.repeat(64)}  impz-darwin-x64`,
+      `${'2'.repeat(64)}  impz-linux-arm64`,
+      `${'3'.repeat(64)}  impz-linux-x64`,
       '',
     ].join('\n'),
   );
@@ -141,7 +141,7 @@ test('it renders nothing for a platform missing from SHA256SUMS', () => {
 
   writeFileSync(
     sums,
-    [`${'0'.repeat(64)}  imp-darwin-arm64`, `${'3'.repeat(64)}  imp-linux-x64`, ''].join('\n'),
+    [`${'0'.repeat(64)}  impz-darwin-arm64`, `${'3'.repeat(64)}  impz-linux-x64`, ''].join('\n'),
   );
 
   const result = Bun.spawnSync(['bash', join(import.meta.dir, 'build-formula.sh'), '1.2.3', sums]);
@@ -152,7 +152,7 @@ test('it renders nothing for a platform missing from SHA256SUMS', () => {
     exitCode: result.exitCode,
   }).toStrictEqual({
     stdout: '',
-    stderr: `build-formula: no sha256 for imp-darwin-x64 in ${sums}\n`,
+    stderr: `build-formula: no sha256 for impz-darwin-x64 in ${sums}\n`,
     exitCode: 1,
   });
 });
@@ -164,10 +164,10 @@ test('it renders nothing for a checksum that is not 64 hex digits', () => {
   writeFileSync(
     sums,
     [
-      `${'0'.repeat(64)}  imp-darwin-arm64`,
-      `${'1'.repeat(64)}  imp-darwin-x64`,
-      `${'Z'.repeat(64)}  imp-linux-arm64`,
-      `${'3'.repeat(64)}  imp-linux-x64`,
+      `${'0'.repeat(64)}  impz-darwin-arm64`,
+      `${'1'.repeat(64)}  impz-darwin-x64`,
+      `${'Z'.repeat(64)}  impz-linux-arm64`,
+      `${'3'.repeat(64)}  impz-linux-x64`,
       '',
     ].join('\n'),
   );
@@ -180,7 +180,7 @@ test('it renders nothing for a checksum that is not 64 hex digits', () => {
     exitCode: result.exitCode,
   }).toStrictEqual({
     stdout: '',
-    stderr: `build-formula: no sha256 for imp-linux-arm64 in ${sums}\n`,
+    stderr: `build-formula: no sha256 for impz-linux-arm64 in ${sums}\n`,
     exitCode: 1,
   });
 });
@@ -192,10 +192,10 @@ test('it refuses a version that is not X.Y.Z', () => {
   writeFileSync(
     sums,
     [
-      `${'0'.repeat(64)}  imp-darwin-arm64`,
-      `${'1'.repeat(64)}  imp-darwin-x64`,
-      `${'2'.repeat(64)}  imp-linux-arm64`,
-      `${'3'.repeat(64)}  imp-linux-x64`,
+      `${'0'.repeat(64)}  impz-darwin-arm64`,
+      `${'1'.repeat(64)}  impz-darwin-x64`,
+      `${'2'.repeat(64)}  impz-linux-arm64`,
+      `${'3'.repeat(64)}  impz-linux-x64`,
       '',
     ].join('\n'),
   );

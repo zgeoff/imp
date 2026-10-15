@@ -3,24 +3,24 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
-import { loadConfig } from '@imp/daemon/src/config';
-import { createImpd } from '@imp/daemon/src/create-impd';
-import { createImage } from '@imp/daemon/src/db/images';
-import { openDatabase } from '@imp/daemon/src/db/open-database';
+import { createImpClient } from '@impz/client';
+import { loadConfig } from '@impz/daemon/src/config';
+import { createImpd } from '@impz/daemon/src/create-impd';
+import { createImage } from '@impz/daemon/src/db/images';
+import { openDatabase } from '@impz/daemon/src/db/open-database';
 import {
   buildImagePaths,
   buildSystemDrivePath,
   buildSystemDrivesDir,
-} from '@imp/daemon/src/storage/data-layout';
-import { createXfsBackend } from '@imp/daemon/src/storage/xfs-backend';
-import { buildMockNewImage } from '@imp/daemon/src/test-utils/build-mock-new-image';
-import { buildStubBrokerTokenEndpoint } from '@imp/daemon/src/test-utils/build-stub-broker-token-endpoint';
-import { buildStubCpuCgroups } from '@imp/daemon/src/test-utils/build-stub-cpu-cgroups';
-import { buildStubVmm } from '@imp/daemon/src/test-utils/build-stub-vmm';
-import { findFreePorts } from '@imp/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@imp/test-utils/invariant';
-import { server } from '@imp/test-utils/mock-server';
-import { createImpClient } from '@zgeoff/imp-client';
+} from '@impz/daemon/src/storage/data-layout';
+import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
+import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
+import { buildStubBrokerTokenEndpoint } from '@impz/daemon/src/test-utils/build-stub-broker-token-endpoint';
+import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
+import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
+import { invariant } from '@impz/test-utils/invariant';
+import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
 import { runCli } from '../test-utils/start-cli';
 import { startStubInfoFaultImpd } from '../test-utils/start-stub-info-fault-impd';
@@ -166,7 +166,7 @@ test('it refuses a secret value given as a flag, which only stdin may carry', as
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: unknown flag --value for add (see --help)\n',
+    stderr: 'impz: unknown flag --value for add (see --help)\n',
     code: 2,
   });
 });
@@ -175,19 +175,19 @@ test.each([
   [
     'an unknown kind',
     ['--kind', 'gitlab'],
-    'imp: --kind must be one of github, anthropic, npm, custom, oauth',
+    'impz: --kind must be one of github, anthropic, npm, custom, oauth',
   ],
-  ['a custom kind without hosts', ['--kind', 'custom'], 'imp: --kind custom needs --hosts'],
+  ['a custom kind without hosts', ['--kind', 'custom'], 'impz: --kind custom needs --hosts'],
   [
     'hosts on a github kind',
     ['--kind', 'github', '--hosts', 'api.github.com'],
-    'imp: --hosts, --header, --scheme and --user are for --kind custom and --kind oauth',
+    'impz: --hosts, --header, --scheme and --user are for --kind custom and --kind oauth',
   ],
-  ['an oauth kind without hosts', ['--kind', 'oauth'], 'imp: --kind oauth needs --hosts'],
+  ['an oauth kind without hosts', ['--kind', 'oauth'], 'impz: --kind oauth needs --hosts'],
   [
     'an oauth kind without a token URL and client ID',
     ['--kind', 'oauth', '--hosts', 'api.example.com'],
-    'imp: --kind oauth needs --token-url and --client-id',
+    'impz: --kind oauth needs --token-url and --client-id',
   ],
   [
     'an http token URL',
@@ -201,7 +201,7 @@ test.each([
       '--client-id',
       'c',
     ],
-    'imp: Invalid URL',
+    'impz: Invalid URL',
   ],
   [
     'an unknown token format',
@@ -217,22 +217,22 @@ test.each([
       '--token-format',
       'xml',
     ],
-    'imp: Invalid option: expected one of "json"|"form"',
+    'impz: Invalid option: expected one of "json"|"form"',
   ],
   [
     'oauth flags on a custom kind',
     ['--kind', 'custom', '--hosts', 'api.example.com', '--client-id', 'c'],
-    'imp: --token-url, --client-id and --token-format are for --kind oauth',
+    'impz: --token-url, --client-id and --token-format are for --kind oauth',
   ],
   [
     'an address as a host',
     ['--kind', 'custom', '--hosts', '10.0.0.1'],
-    'imp: must be a lowercase hostname such as api.example.com',
+    'impz: must be a lowercase hostname such as api.example.com',
   ],
   [
     'an unknown scheme',
     ['--kind', 'custom', '--hosts', 'api.example.com', '--scheme', 'digest'],
-    'imp: Invalid option: expected one of "bearer"|"basic"|"raw"',
+    'impz: Invalid option: expected one of "bearer"|"basic"|"raw"',
   ],
 ])('it refuses %s before it asks for a value', async (_case, flags, message) => {
   const result = await runCli({
@@ -251,14 +251,14 @@ test('it refuses an audit limit outside 1 to 1000', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --limit must be a whole number from 1 to 1000\n',
+    stderr: 'impz: --limit must be a whole number from 1 to 1000\n',
     code: 2,
   });
 });
 
 // impd's address is a closed port: a call would fail to connect, not refuse
 test.each([
-  [['secret', 'add', 'gh', '--kind', 'github', '--rebind'], 'imp: --rebind needs --replace\n'],
+  [['secret', 'add', 'gh', '--kind', 'github', '--rebind'], 'impz: --rebind needs --replace\n'],
   [
     [
       'secret',
@@ -271,11 +271,11 @@ test.each([
       '--upstream',
       'http://172.17.0.1:18081',
     ],
-    'imp: --upstream needs exactly one host in --hosts\n',
+    'impz: --upstream needs exactly one host in --hosts\n',
   ],
   [
     ['secret', 'add', 'gh', '--kind', 'github', '--upstream', 'http://172.17.0.1:18081'],
-    'imp: --upstream is for --kind custom\n',
+    'impz: --upstream is for --kind custom\n',
   ],
   [
     [
@@ -289,7 +289,7 @@ test.each([
       '--upstream',
       'http://172.17.0.1:18081/x',
     ],
-    'imp: must be an origin with no path\n',
+    'impz: must be an origin with no path\n',
   ],
 ])('it refuses %p before any call to impd', async (args, stderr) => {
   const result = await runCli({
@@ -366,7 +366,7 @@ test.each([
 
     expect(result).toStrictEqual({
       stdout: '',
-      stderr: `imp: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
+      stderr: `impz: this impd ${reason}; nothing was changed. Upgrade impd, or use an older imp CLI\n`,
       code: 1,
     });
 
@@ -405,7 +405,7 @@ test('it replaces no secret when the feature check’s connection drops', async 
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()\n',
+      'impz: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()\n',
     code: 1,
   });
 
@@ -485,7 +485,7 @@ test('it says until when an added oauth secret’s access token is valid', async
       'codex  oauth  ready until 2030-01-01T00:00:00.000Z  chatgpt.com  -',
       '',
     ].join('\n'),
-    stderr: 'imp: codex signed in, access token valid until 2030-01-01T00:00:00.000Z\n',
+    stderr: 'impz: codex signed in, access token valid until 2030-01-01T00:00:00.000Z\n',
     code: 0,
   });
 });
@@ -524,7 +524,7 @@ test('it says why an added oauth secret failed its sign-in', async () => {
       'codex  oauth  needs_login (invalid_grant)  chatgpt.com  -',
       '',
     ].join('\n'),
-    stderr: 'imp: codex is needs_login: invalid_grant\n',
+    stderr: 'impz: codex is needs_login: invalid_grant\n',
     code: 0,
   });
 });
@@ -615,7 +615,7 @@ test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
     },
   });
 
-  expect(result.stderr).toBe('imp: codex is pending: HTTP 503\n');
+  expect(result.stderr).toBe('impz: codex is pending: HTTP 503\n');
   expect(result.code).toBe(1);
 });
 
@@ -713,7 +713,7 @@ test('it stores nothing when stdin gives an empty value', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: no value given; nothing stored\n',
+    stderr: 'impz: no value given; nothing stored\n',
     code: 2,
   });
 
@@ -746,7 +746,7 @@ test('it lists no refused broker requests from an impd without them', async () =
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: this impd has no audit of refused broker requests and would not know the call; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+      'impz: this impd has no audit of refused broker requests and would not know the call; nothing was changed. Upgrade impd, or use an older imp CLI\n',
     code: 1,
   });
 
@@ -811,7 +811,7 @@ test('it refuses a path pattern that is not one, before it calls impd', async ()
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: --paths: must be a path such as /v1/messages, with * for one segment and a last /** for the rest\n',
+      'impz: --paths: must be a path such as /v1/messages, with * for one segment and a last /** for the rest\n',
     code: 2,
   });
 });
@@ -831,7 +831,7 @@ test('it makes no filtered grant on an impd from before grant filters', async ()
   expect(result).toStrictEqual({
     stdout: '',
     stderr:
-      'imp: this impd has no grant filters and would grant the whole host; nothing was changed. Upgrade impd, or use an older imp CLI\n',
+      'impz: this impd has no grant filters and would grant the whole host; nothing was changed. Upgrade impd, or use an older imp CLI\n',
     code: 1,
   });
 
@@ -881,7 +881,7 @@ test('it refuses an audit kind other than broker, refused or api', async () => {
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'imp: --kind is broker, refused or api\n',
+    stderr: 'impz: --kind is broker, refused or api\n',
     code: 2,
   });
 });

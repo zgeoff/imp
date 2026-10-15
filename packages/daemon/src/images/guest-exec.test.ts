@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { waitFor } from '@imp/test-utils/wait-for';
+import { waitFor } from '@impz/test-utils/wait-for';
 import { buildStubClock } from '../test-utils/build-stub-clock';
 import type { StubAnswer } from '../test-utils/build-stub-guest';
 import { buildStubGuest } from '../test-utils/build-stub-guest';
