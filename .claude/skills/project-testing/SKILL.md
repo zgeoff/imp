@@ -406,14 +406,13 @@ child that inherits them works on this checkout whatever its `-C` says.
   util-linux does, its `umount -R` refuses a dir that is not itself a mount.
   `test-utils/build-stub-move-stream.ts` (`buildStubMoveStream`) is a peer's move stream: a source's
   bytes, then an `onEnd` hook and a close, or a `failAtEnd` error.
-- **The real-pool tests.** `zfs-backend.real.test.ts`, `zfs-move.real.test.ts`, and
-  `zfs-move-flow.real.test.ts` skip unless `readZfsTestPool()` (`test-utils/read-zfs-test-pool.ts`)
-  finds `IMP_TEST_ZFS_ROOT` (a dataset) and `IMP_TEST_ZFS_DIR` (its mount dir) both set. Each test
-  makes its own dataset with `createZfsTestDataset`: a new `mkdtemp` dir under the mount dir names
-  it, a dataset of that name that `zfs list` already shows is refused untouched, and the caller's
-  stack releases only what was made (`umount -R` of the dir, `zfs destroy -R`, then the empty dir).
-  Its tests run it against `buildStubZfs`. `test-utils/write-synced-file.ts` fsyncs a disk file
-  before a snapshot.
+- **The real-pool tests.** `zfs-backend.real.test.ts` and `create-zfs-moves.test.ts` skip unless
+  `readZfsTestPool()` (`test-utils/read-zfs-test-pool.ts`) finds `IMP_TEST_ZFS_ROOT` (a dataset) and
+  `IMP_TEST_ZFS_DIR` (its mount dir) both set. Each test makes its own dataset with
+  `createZfsTestDataset`: a new `mkdtemp` dir under the mount dir names it, a dataset of that name
+  that `zfs list` already shows is refused untouched, and the caller's stack releases only what was
+  made (`umount -R` of the dir, `zfs destroy -R`, then the empty dir). Its tests run it against
+  `buildStubZfs`. `test-utils/write-synced-file.ts` fsyncs a disk file before a snapshot.
 - **`scripts/test-zfs.sh`** runs as root. It makes a sparse-file pool `imptest<pid>` of
   `IMP_ZFS_TEST_GIB` (default 4) under `IMP_ZFS_TEST_DIR` (default a new temp dir; a given dir may
   exist), mounts `<pool>/imp` with a legacy mount on `<dir>/mnt`, runs
