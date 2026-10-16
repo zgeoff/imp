@@ -14,8 +14,9 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
+import { buildStubImpdBeforeExecDropSysAdmin } from '../test-utils/build-stub-impd-before-exec-drop-sys-admin';
 import { buildStubImpdBeforeExecRequire } from '../test-utils/build-stub-impd-before-exec-require';
-import { checkExecRequire } from './check-exec-require';
+import { checkExecFeature } from './check-exec-feature';
 
 // impd booted in process on stub VMs, served at http://impd.test/ through
 // the run's MSW server
@@ -128,7 +129,7 @@ async function setupTest() {
 
 test('it passes an impd that checks exec requirements', async () => {
   const ctx = await setupTest();
-  const refusal = await checkExecRequire(ctx.url, ctx.rootToken);
+  const refusal = await checkExecFeature('execRequire', ctx.url, ctx.rootToken);
 
   expect(refusal).toBeNull();
 });
@@ -146,14 +147,14 @@ test('it sends the bearer token with the check', async () => {
     }),
   );
 
-  await checkExecRequire('http://impd.test', ctx.rootToken);
+  await checkExecFeature('execRequire', 'http://impd.test', ctx.rootToken);
 
   expect(received).toHaveBeenCalledExactlyOnceWith(`Bearer ${ctx.rootToken}`);
 });
 
 test('it reports an impd that rejects the token as unauthorized', async () => {
   const ctx = await setupTest();
-  const refusal = await checkExecRequire(ctx.url, 'wrong');
+  const refusal = await checkExecFeature('execRequire', ctx.url, 'wrong');
 
   expect(refusal).toStrictEqual({ kind: 'unauthorized' });
 });
@@ -165,7 +166,7 @@ test('it refuses an impd from before exec requirements as PRECONDITION_FAILED', 
 
   server.use(http.all('http://impd.test/*', (info) => older(info.request)));
 
-  const refusal = await checkExecRequire('http://impd.test', ctx.rootToken);
+  const refusal = await checkExecFeature('execRequire', 'http://impd.test', ctx.rootToken);
 
   expect(refusal).toStrictEqual({
     kind: 'failed',
@@ -179,11 +180,38 @@ test('it refuses an impd from before exec requirements as PRECONDITION_FAILED', 
   });
 });
 
+test('it passes an impd that drops CAP_SYS_ADMIN from an exec', async () => {
+  const ctx = await setupTest();
+  const refusal = await checkExecFeature('execDropSysAdmin', ctx.url, ctx.rootToken);
+
+  expect(refusal).toBeNull();
+});
+
+test('it refuses an impd that cannot drop CAP_SYS_ADMIN as PRECONDITION_FAILED', async () => {
+  const ctx = await setupTest();
+
+  const older = buildStubImpdBeforeExecDropSysAdmin((request) => ctx.impd.api.app.handle(request));
+
+  server.use(http.all('http://impd.test/*', (info) => older(info.request)));
+
+  const refusal = await checkExecFeature('execDropSysAdmin', 'http://impd.test', ctx.rootToken);
+
+  expect(refusal).toStrictEqual({
+    kind: 'failed',
+    code: 'PRECONDITION_FAILED',
+    message: 'nothing was started: this impd cannot start a command without CAP_SYS_ADMIN',
+    data: {
+      reason: 'impd_outdated',
+      detail: 'this impd cannot start a command without CAP_SYS_ADMIN',
+    },
+  });
+});
+
 test('it reports an impd it cannot reach as unreachable', async () => {
   // nothing listens on a free port
   const baseUrl = `http://127.0.0.1:${String(findFreePorts(1).take())}`;
 
-  const refusal = await checkExecRequire(baseUrl, 'root-token');
+  const refusal = await checkExecFeature('execRequire', baseUrl, 'root-token');
 
   expect(refusal).toStrictEqual({
     kind: 'unreachable',
@@ -197,7 +225,7 @@ test('it refuses a start when impd fails the check', async () => {
     http.post('http://impd.test/rpc/system/info', () => new HttpResponse('down', { status: 503 })),
   );
 
-  const refusal = await checkExecRequire('http://impd.test', 'root-token');
+  const refusal = await checkExecFeature('execRequire', 'http://impd.test', 'root-token');
 
   expect(refusal).toStrictEqual({
     kind: 'failed',
@@ -214,7 +242,7 @@ test('it refuses a start when impd answers the check with what it cannot read', 
     ),
   );
 
-  const refusal = await checkExecRequire('http://impd.test', 'root-token');
+  const refusal = await checkExecFeature('execRequire', 'http://impd.test', 'root-token');
 
   expect(refusal).toStrictEqual({
     kind: 'failed',

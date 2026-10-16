@@ -55,6 +55,8 @@ func (l *Launcher) Spec(req *proto.Request) (proc.Spec, error) {
 		Workdir: image.Workdir,
 		User:    user,
 		SetHome: true,
+		// the image's own start-up runs as services, outside this
+		DropSysAdmin: req.GetDropSysAdmin(),
 	}, nil
 }
 

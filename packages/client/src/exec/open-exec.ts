@@ -46,6 +46,11 @@ export interface ExecOptions {
   // `system.info.features.sessionLog` first (docs/guides/session-logs.md).
   readonly log?: boolean;
 
+  // runs the command without CAP_SYS_ADMIN and CAP_SYS_PTRACE
+  // (docs/architecture/guest/agent.md#read-only-files); an impd without the
+  // feature fails the exec with PRECONDITION_FAILED and nothing runs
+  readonly dropSysAdmin?: boolean;
+
   // closes the session, as `close()` does; before the start, `started` and
   // `exit` reject with the abort's reason (an AbortError), as `openExec` does
   readonly signal?: Readonly<AbortSignal>;
@@ -119,6 +124,7 @@ export function openExec(
     ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
     ...(options.require !== undefined && { require: options.require }),
     ...(options.log === true && { log: true }),
+    ...(options.dropSysAdmin === true && { dropSysAdmin: true }),
   });
 }
 

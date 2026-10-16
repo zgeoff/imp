@@ -105,6 +105,11 @@ export const ExecStartMessageSchema = z
     // (docs/guides/session-logs.md). An older impd drops it unread: check
     // `system.info.features.sessionLog`, then `started.output.log`.
     log: z.boolean().optional(),
+
+    // runs the command without CAP_SYS_ADMIN and CAP_SYS_PTRACE
+    // (docs/architecture/guest/agent.md#read-only-files). An older impd drops
+    // it unread: check `system.info.features.execDropSysAdmin` first.
+    dropSysAdmin: z.boolean().optional(),
   })
   .refine((start) => start.session === undefined || start.tty, {
     message: 'a session needs a tty',
@@ -144,6 +149,10 @@ export const ExecStartMessageSchema = z
       start.require.length === 0 ||
       (start.tool === undefined && start.outer !== true),
     { message: 'a tool or an outer exec takes no require', path: ['require'] },
+  )
+  .refine(
+    (start) => start.dropSysAdmin !== true || (start.tool === undefined && start.outer !== true),
+    { message: 'a tool or an outer exec cannot drop CAP_SYS_ADMIN', path: ['dropSysAdmin'] },
   );
 
 export const ExecAttachMessageSchema = z.object({

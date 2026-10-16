@@ -118,6 +118,10 @@ const SystemFeaturesSchema = z.object({
   // files.write and files.remove, the read-only files in the guest
   // (docs/architecture/guest/agent.md#read-only-files)
   readOnlyFiles: z.boolean().optional(),
+
+  // an `/exec` start takes `dropSysAdmin`, which an older impd drops unread
+  // and would run the command with CAP_SYS_ADMIN
+  execDropSysAdmin: z.boolean().optional(),
 });
 
 export const SystemInfoSchema = z.object({

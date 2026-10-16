@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/impz/agent/internal/dropcaps"
 	"github.com/zgeoff/impz/agent/internal/reaper"
 )
 
@@ -48,6 +49,9 @@ type Spec struct {
 	// RequireCgroup fails a spawn into Cgroup that fails, where the
 	// default runs the child without one.
 	RequireCgroup bool
+	// DropSysAdmin starts the child through the dropcaps helper, without
+	// dropcaps.Dropped. It needs the agent binary and takes no Helper spec.
+	DropSysAdmin bool
 }
 
 // Process is a started child.
@@ -135,21 +139,32 @@ func (d *Direct) Start(s Spec) (*Process, error) {
 	}
 	files := s.Files
 	path := ""
+	argv := s.Argv
 	// impd runs the agent by its path for sftp and tar: from the fd too, so
 	// it works with the system drive unmounted inside
 	if s.Helper || (d.AgentFile != nil && s.Argv[0] == d.Agent) {
-		path = d.Agent
-		if d.AgentFile != nil {
-			// the child's own fd of the binary: unmounting or replacing the
-			// path inside cannot break a helper
-			path = fmt.Sprintf("/proc/self/fd/%d", len(files))
-			files = append(append([]*os.File{}, files...), d.AgentFile)
+		if s.DropSysAdmin {
+			return nil, errors.New("a helper cannot drop CAP_SYS_ADMIN")
 		}
+		path, files = d.agentPath(files)
 	} else {
 		var err error
 		if path, err = LookPath(s.Argv[0], env); err != nil {
 			return nil, err
 		}
+	}
+	if s.DropSysAdmin {
+		if d.Agent == "" {
+			return nil, errors.New("no agent binary to drop CAP_SYS_ADMIN with")
+		}
+		agentFd := -1
+		if d.AgentFile != nil {
+			agentFd = len(files)
+		}
+		argv = dropcaps.Argv(agentFd, cred, path, s.Argv)
+		path, files = d.agentPath(files)
+		// the helper starts as root and becomes the user itself
+		cred = nil
 	}
 	dir := s.Dir
 	if dir == "" {
@@ -179,7 +194,7 @@ func (d *Direct) Start(s Spec) (*Process, error) {
 	attr := &syscall.ProcAttr{Dir: dir, Env: env, Files: fds, Sys: sys}
 	inCgroup := s.Cgroup != nil
 	pid, done, err := d.Reaper.Start(func() (int, error) {
-		pid, err := syscall.ForkExec(path, s.Argv, attr)
+		pid, err := syscall.ForkExec(path, argv, attr)
 		if err == nil || !inCgroup || s.RequireCgroup {
 			return pid, err
 		}
@@ -188,7 +203,7 @@ func (d *Direct) Start(s Spec) (*Process, error) {
 		// say) also lands here; its retry fails the same way, which is
 		// harmless.
 		sys.UseCgroupFD = false
-		pid, retryErr := syscall.ForkExec(path, s.Argv, attr)
+		pid, retryErr := syscall.ForkExec(path, argv, attr)
 		if retryErr == nil {
 			inCgroup = false
 			cgroupFallback.Do(func() {
@@ -203,6 +218,18 @@ func (d *Direct) Start(s Spec) (*Process, error) {
 	p := newDirectProcess(pid, pidfd, done)
 	p.InCgroup = inCgroup
 	return p, nil
+}
+
+// agentPath is the path the child runs the agent binary from, and files
+// with the binary's fd added when there is one.
+func (d *Direct) agentPath(files []*os.File) (string, []*os.File) {
+	if d.AgentFile == nil {
+		return d.Agent, files
+	}
+	// the child's own fd of the binary: unmounting or replacing the path
+	// inside cannot break a helper
+	path := fmt.Sprintf("/proc/self/fd/%d", len(files))
+	return path, append(append([]*os.File{}, files...), d.AgentFile)
 }
 
 // newDirectProcess signals through a pidfd until the child is reaped, so a

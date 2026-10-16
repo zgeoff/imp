@@ -108,6 +108,12 @@ message Request {
   optional string path = 27;
   // files.write: the file's content, at most 512 KiB.
   optional bytes data = 28;
+
+  // exec: the command starts without CAP_SYS_ADMIN and CAP_SYS_PTRACE, so
+  // nothing it starts can remount the read-only files writable
+  // (docs/architecture/guest/agent.md#read-only-files). An agent before 0.20.0
+  // ignores it.
+  optional bool drop_sys_admin = 29;
 }
 
 // A session's generation, and the offset of the first output byte the client

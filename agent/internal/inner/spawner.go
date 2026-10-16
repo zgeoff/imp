@@ -97,6 +97,7 @@ func (s *spawner) spawn(m message, fds []int) {
 	spec := proc.Spec{
 		Argv: w.Argv, Env: w.Env, Dir: w.Dir, Workdir: w.Workdir, User: w.User,
 		SetHome: w.SetHome, TTY: w.TTY, Helper: w.Helper, Files: files[:w.Files],
+		DropSysAdmin: w.DropSysAdmin,
 	}
 	if w.Cred != nil {
 		spec.Cred = &syscall.Credential{Uid: w.Cred.Uid, Gid: w.Cred.Gid, Groups: w.Cred.Groups}

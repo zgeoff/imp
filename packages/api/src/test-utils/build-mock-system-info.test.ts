@@ -65,6 +65,7 @@ test('it builds a default system info', () => {
       brokerRefusals: true,
       grantFilters: true,
       readOnlyFiles: true,
+      execDropSysAdmin: true,
     },
   });
 
@@ -137,6 +138,7 @@ test('it applies overrides on top of the defaults', () => {
       brokerRefusals: true,
       grantFilters: true,
       readOnlyFiles: true,
+      execDropSysAdmin: true,
     },
   });
 });

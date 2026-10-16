@@ -968,6 +968,31 @@ test('it sends an exec in the agent as outer, gated on its agent feature', async
   });
 });
 
+test('it passes a start that drops CAP_SYS_ADMIN to the backend', async () => {
+  const stub = buildStubExecBackend({ exec: buildStubAgentExecStream().stream });
+  const session = createExecSession(buildStubExecSocket().peer, stub.backend);
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    argv: ['claude'],
+    tty: true,
+    session: 'main',
+    dropSysAdmin: true,
+  });
+
+  await waitFor(() => {
+    expect(stub.opens).toStrictEqual([
+      {
+        kind: 'exec',
+        name: 'dev',
+        request: { argv: ['claude'], tty: true, session: 'main', dropSysAdmin: true },
+        feature: undefined,
+      },
+    ]);
+  });
+});
+
 test.each([
   ['a session', { argv: ['sh'], tty: true, session: 'main' }],
   ['a tool', { argv: ['create', 'x'], tty: false, tool: 'tar' }],

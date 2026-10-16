@@ -31,6 +31,7 @@ import {
   STUB_GENERATION,
   buildStubExecAgent,
 } from '../test-utils/build-stub-exec-agent';
+import { buildStubImpdBeforeExecDropSysAdmin } from '../test-utils/build-stub-impd-before-exec-drop-sys-admin';
 import { buildStubImpdBeforeExecRequire } from '../test-utils/build-stub-impd-before-exec-require';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
@@ -520,6 +521,38 @@ test('#openExec starts nothing that requires anything on an impd without execReq
     data: { reason: 'impd_outdated' },
   });
 
+  expect(ctx.agent.requests).toStrictEqual([]);
+});
+
+test('#openExec starts nothing that drops CAP_SYS_ADMIN on an impd without execDropSysAdmin', async () => {
+  const ctx = await setupTest();
+
+  const older = buildStubImpdBeforeExecDropSysAdmin((request) => ctx.impd.api.app.handle(request));
+
+  server.use(http.all('http://impd.test/*', (info) => older(info.request)));
+
+  const client = createImpClient({
+    url: 'http://impd.test/',
+    token: ctx.rootToken,
+    connect: (url) => new WebSocket(url.replace('ws://impd.test', ctx.url.replace('http', 'ws'))),
+  });
+
+  const handle = await client.openExec('dev', ['tick'], { dropSysAdmin: true });
+
+  expect(handle.exit).rejects.toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: { reason: 'impd_outdated' },
+  });
+
+  expect(ctx.agent.requests).toStrictEqual([]);
+});
+
+// the imp's agent is 0.18.0, which would ignore the field, so impd refuses
+test('#openExec hands a start that drops CAP_SYS_ADMIN to impd, which refuses an older agent', async () => {
+  const ctx = await setupTest();
+  const handle = await ctx.client.openExec('dev', ['tick'], { dropSysAdmin: true });
+
+  expect(handle.exit).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
   expect(ctx.agent.requests).toStrictEqual([]);
 });
 

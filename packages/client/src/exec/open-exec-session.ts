@@ -17,7 +17,8 @@ import type {
 import type { ReadonlyFields } from '@impz/shared';
 import type * as z from 'zod';
 import { resolveImpdUrl } from '../resolve-impd-url';
-import { checkExecRequire } from './check-exec-require';
+import { checkExecFeature } from './check-exec-feature';
+import type { ExecFeature } from './check-exec-feature';
 import { checkImpdAccess } from './check-impd-access';
 
 // a command to start: the start message without the tool and outer fields,
@@ -276,12 +277,27 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     }
   };
 
-  // a start that requires anything waits for impd to say it checks them
+  // a start that requires anything, or drops CAP_SYS_ADMIN, waits for impd
+  // to say it reads the field
   const sendOpen = async (): Promise<void> => {
     const start = options.start;
+    const features: ExecFeature[] = [];
 
     if ('argv' in start && start.require !== undefined && start.require.length > 0) {
-      const refusal = await checkExecRequire(options.baseUrl, options.token, options.fetch);
+      features.push('execRequire');
+    }
+
+    if ('argv' in start && start.dropSysAdmin === true) {
+      features.push('execDropSysAdmin');
+    }
+
+    for (const feature of features) {
+      const refusal = await checkExecFeature(
+        feature,
+        options.baseUrl,
+        options.token,
+        options.fetch,
+      );
 
       if (refusal !== null) {
         resolveOutcome(refusal);

@@ -52,6 +52,10 @@ export interface AgentExecRequest {
   // the exec.outer op, which an older agent refuses
   readonly outer?: boolean;
 
+  // runs without CAP_SYS_ADMIN and CAP_SYS_PTRACE; an agent before 0.20.0
+  // ignores it, so impd checks the agent's version first
+  readonly dropSysAdmin?: boolean;
+
   // what impd checks before it starts the command (exec/exec-require.ts);
   // never sent to the agent
   readonly require?: readonly ExecRequirement[];

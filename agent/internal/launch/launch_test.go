@@ -64,3 +64,12 @@ func TestStartPTYOpensNoPTYForAnEmptyArgv(t *testing.T) {
 	assert.Check(t, cmp.Nil(master))
 	assert.Check(t, !opened, "opened a pty for a request it refused")
 }
+
+func TestSpecDropsSysAdminWhenTheRequestAsks(t *testing.T) {
+	l := New(&proc.Direct{}, imagecfg.NewLive(imagecfg.Config{}), nil)
+
+	spec, err := l.Spec(&proto.Request{Argv: []string{"claude"}, DropSysAdmin: new(true)})
+
+	assert.NilError(t, err)
+	assert.Check(t, spec.DropSysAdmin)
+}

@@ -76,6 +76,9 @@ type wireSpec struct {
 	Helper    bool      `json:"helper,omitempty"`
 	Files     int       `json:"files"`
 	HasCgroup bool      `json:"has_cgroup,omitempty"`
+	// the agent and the inner init are one binary, so neither meets a peer
+	// that ignores this
+	DropSysAdmin bool `json:"drop_sys_admin,omitempty"`
 }
 
 type wireCred struct {
@@ -88,7 +91,7 @@ func toWire(s proc.Spec) *wireSpec {
 	w := &wireSpec{
 		Argv: s.Argv, Env: s.Env, Dir: s.Dir, Workdir: s.Workdir, User: s.User,
 		SetHome: s.SetHome, TTY: s.TTY, Helper: s.Helper, Files: len(s.Files),
-		HasCgroup: s.Cgroup != nil,
+		HasCgroup: s.Cgroup != nil, DropSysAdmin: s.DropSysAdmin,
 	}
 	if s.Cred != nil {
 		w.Cred = &wireCred{Uid: s.Cred.Uid, Gid: s.Cred.Gid, Groups: s.Cred.Groups}

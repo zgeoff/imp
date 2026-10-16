@@ -12520,6 +12520,9 @@
               },
               "readOnlyFiles": {
                 "type": "boolean"
+              },
+              "execDropSysAdmin": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -13715,6 +13718,9 @@
                 }
               },
               "log": {
+                "type": "boolean"
+              },
+              "dropSysAdmin": {
                 "type": "boolean"
               }
             },
