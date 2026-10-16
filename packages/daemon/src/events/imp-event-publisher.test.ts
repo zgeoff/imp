@@ -1,4 +1,4 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, jest, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,7 @@ import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { readInBackground } from '../test-utils/read-in-background';
+import { readQueuedText } from '../test-utils/read-queued-text';
 
 async function setupTest() {
   const stack = new AsyncDisposableStack();
@@ -158,6 +159,46 @@ async function setupTest() {
 
   return { config, db, dataDir, deps, vmm, logs, clock, sleepClock, impd, client, stack };
 }
+
+// oRPC's keepalive is its own setInterval, so fake timers run 400 s of a
+// stream with no event: past the 360 s Bun's fetch waits for a byte
+test('it sends a keepalive comment every 5 s through a stream with no event', async () => {
+  const ctx = await setupTest();
+
+  jest.useFakeTimers();
+
+  onTestFinished(() => {
+    jest.useRealTimers();
+  });
+
+  const response = await ctx.impd.api.app.handle(
+    new Request('http://impd.test/rpc/events/stream', {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+
+  invariant(response.body);
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+
+  onTestFinished(() => reader.cancel());
+
+  // the opening comment
+  await reader.read();
+
+  jest.advanceTimersByTime(400_000);
+
+  // real timers again: the comments are queued by now
+  jest.useRealTimers();
+
+  const queued = await readQueuedText(reader, 1000);
+
+  const keepalives = queued.split('\n\n').filter((frame) => frame === ': ');
+
+  expect(keepalives).toHaveLength(80);
+});
 
 test('it sends the snapshot, then each change with its reason', async () => {
   const ctx = await setupTest();

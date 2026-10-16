@@ -137,6 +137,39 @@ test('#createBuildEventStream repeats the progress at each keepalive while the b
   );
 });
 
+// 400 s of a silent build: past the 360 s Bun's fetch waits for a byte
+test('#createBuildEventStream sends progress every 15 s through a build silent for 400 s', async () => {
+  const clock = { now: 0 };
+  const done = Promise.withResolvers<ImageBuildEvent>();
+  const keepalive = buildStubRepeat();
+
+  const response = createBuildEventStream(new AbortController().signal, () => done.promise, {
+    keepaliveMs: 15_000,
+    now: () => clock.now,
+    repeat: keepalive.repeat,
+  });
+
+  await waitFor(() => {
+    expect(keepalive.countRunning(15_000)).toBe(1);
+  });
+
+  for (const tick of Array.from({ length: 27 }, (_, index) => index + 1)) {
+    clock.now = tick * 15_000;
+
+    keepalive.tick(15_000);
+  }
+
+  done.resolve({ type: 'error', code: 'BAD_REQUEST', message: 'no' });
+
+  const text = await response.text();
+
+  expect(text.split('\n').slice(1, 28)).toStrictEqual(
+    Array.from({ length: 27 }, (_, index) =>
+      JSON.stringify({ type: 'progress', phase: 'upload', elapsedMs: (index + 1) * 15_000 }),
+    ),
+  );
+});
+
 test('#createBuildEventStream stops the keepalive when the build ends', async () => {
   const done = Promise.withResolvers<ImageBuildEvent>();
   const keepalive = buildStubRepeat();
