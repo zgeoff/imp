@@ -38,9 +38,21 @@ export async function sendLongCall(
   init: Readonly<CallInit>,
   call: Readonly<LongCall>,
 ): Promise<Response> {
-  const expiry = new AbortController();
+  // one controller for the caller's abort and the deadline, since a browser
+  // the SDK serves (Firefox 121–123) has no AbortSignal.any
+  const limit = new AbortController();
 
   const expired = Promise.withResolvers<never>();
+
+  const onCallerAbort = (): void => {
+    limit.abort(request.signal.reason);
+  };
+
+  request.signal.addEventListener('abort', onCallerAbort, { once: true });
+
+  if (request.signal.aborted) {
+    onCallerAbort();
+  }
 
   const cancel = call.startTimer(() => {
     const error = new DOMException(
@@ -48,11 +60,11 @@ export async function sendLongCall(
       'TimeoutError',
     );
 
-    expiry.abort(error);
+    limit.abort(error);
     expired.reject(error);
   }, call.deadlineMs);
 
-  const signal = AbortSignal.any([request.signal, expiry.signal]);
+  const signal = limit.signal;
 
   const limited = new Request(request, { signal });
 
@@ -63,6 +75,8 @@ export async function sendLongCall(
     return await Promise.race([sent, expired.promise]);
   } finally {
     cancel();
+
+    request.signal.removeEventListener('abort', onCallerAbort);
   }
 }
 

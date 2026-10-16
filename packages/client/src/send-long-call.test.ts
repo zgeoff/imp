@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { join } from 'node:path';
 import { buildStubClock } from '@impz/daemon/src/test-utils/build-stub-clock';
 import { startStubSilentOrigin } from '@impz/daemon/src/test-utils/start-stub-silent-origin';
+import { invariant } from '@impz/test-utils/invariant';
 import { createImpClient } from './create-imp-client';
 
 function setupTest() {
@@ -196,6 +197,60 @@ test('#backups.run hands on the answer that comes before its deadline, and stops
 
   expect(answer).toStrictEqual({ ok: true });
   expect(ctx.clock.countPending()).toBe(0);
+});
+
+// a browser the SDK serves (Firefox 121–123) has no AbortSignal.any
+test('#backups.run ends at its deadline in a runtime without AbortSignal.any', async () => {
+  const ctx = setupTest();
+  const any = Object.getOwnPropertyDescriptor(AbortSignal, 'any');
+
+  invariant(any);
+
+  Reflect.deleteProperty(AbortSignal, 'any');
+
+  onTestFinished(() => {
+    Object.defineProperty(AbortSignal, 'any', any);
+  });
+
+  const call = ctx.client.backups.run();
+
+  await ctx.origin.longHeld;
+
+  ctx.clock.firePending();
+
+  expect('any' in AbortSignal).toBe(false);
+
+  expect(call).rejects.toMatchObject({
+    name: 'TimeoutError',
+    message: 'impd sent no answer to backups.run in 24 hours',
+  });
+
+  await expect(ctx.origin.longGone).toResolve();
+});
+
+test('#backups.run ends when its caller aborts in a runtime without AbortSignal.any', async () => {
+  const ctx = setupTest();
+  const any = Object.getOwnPropertyDescriptor(AbortSignal, 'any');
+
+  invariant(any);
+
+  Reflect.deleteProperty(AbortSignal, 'any');
+
+  onTestFinished(() => {
+    Object.defineProperty(AbortSignal, 'any', any);
+  });
+
+  const caller = new AbortController();
+
+  const call = ctx.client.backups.run(undefined, { signal: caller.signal });
+
+  await ctx.origin.longHeld;
+
+  caller.abort();
+
+  expect(call).rejects.toMatchObject({ name: 'AbortError' });
+
+  await expect(ctx.origin.longGone).toResolve();
 });
 
 test('#imps.list starts no deadline of its own', async () => {
