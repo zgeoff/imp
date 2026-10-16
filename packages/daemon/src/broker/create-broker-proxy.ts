@@ -1,5 +1,6 @@
 import type { Socket } from 'node:net';
 import { join } from 'node:path';
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { EgressMode } from '@impz/api';
 import type { Config } from '../config';
 import { writeAuditEntry } from '../db/broker-audit';
@@ -155,7 +156,7 @@ export function createBrokerProxy(deps: BrokerProxyDeps): BrokerProxy {
   const resolveTarget = async (host: string, mode: EgressMode): Promise<string> => {
     const isBlocked6 = await readBlocked6();
 
-    if (mode !== 'public') {
+    if (!EGRESS_MODE_TRAITS[mode].isPublic) {
       return resolveTunnelTarget(host, { isBlocked6 });
     }
 

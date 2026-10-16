@@ -1,3 +1,4 @@
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { EgressMode, Network, NetworkJoin } from '@impz/api';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import { listEgressSlots } from '../db/egress';
@@ -111,16 +112,16 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
 
     const others = network.imps.filter((name) => name !== impName);
     const mode = modes.get(impName);
-    const open = others.filter((name) => modes.get(name) === 'open');
-    const closed = others.filter((name) => modes.get(name) !== 'open');
-    const publics = others.filter((name) => modes.get(name) === 'public');
+    const open = others.filter((name) => isOpen(modes.get(name)));
+    const closed = others.filter((name) => !isOpen(modes.get(name)));
+    const publics = others.filter((name) => isPublic(modes.get(name)));
     const boxed = others.filter((name) => isBoxOrNone(modes.get(name)));
 
-    if (mode !== 'open' && open.length > 0) {
+    if (!isOpen(mode) && open.length > 0) {
       return `${impName} is ${String(mode)}, but ${open.join(', ')} on ${networkName} ${open.length === 1 ? 'is' : 'are'} open and can relay for it: ${TRUSTS_OPEN}`;
     }
 
-    if (mode === 'open' && closed.length > 0) {
+    if (isOpen(mode) && closed.length > 0) {
       return `${impName} is open, so ${closed.join(', ')} on ${networkName} can reach anything through it: ${TRUSTS_OPEN}`;
     }
 
@@ -128,7 +129,7 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
       return `${impName} is ${String(mode)}, but ${publics.join(', ')} on ${networkName} ${publics.length === 1 ? 'is' : 'are'} public and can relay for it to the internet: ${TRUSTS_PUBLIC}`;
     }
 
-    if (mode === 'public' && boxed.length > 0) {
+    if (isPublic(mode) && boxed.length > 0) {
       return `${impName} is public, so ${boxed.join(', ')} on ${networkName} can reach the internet through it: ${TRUSTS_PUBLIC}`;
     }
 
@@ -286,6 +287,17 @@ function toApiNetwork(network: Readonly<NetworkRecord>): Network {
   return { name: network.name, imps: network.imps, createdAt: network.createdAt };
 }
 
+function isOpen(mode: EgressMode | undefined): boolean {
+  return mode !== undefined && EGRESS_MODE_TRAITS[mode].isOpen;
+}
+
+function isPublic(mode: EgressMode | undefined): boolean {
+  return mode !== undefined && EGRESS_MODE_TRAITS[mode].isPublic;
+}
+
+// neither reaches the internet of its own: only a box's list, or nothing
 function isBoxOrNone(mode: EgressMode | undefined): boolean {
-  return mode === 'box' || mode === 'none';
+  return (
+    mode !== undefined && !EGRESS_MODE_TRAITS[mode].isOpen && !EGRESS_MODE_TRAITS[mode].isPublic
+  );
 }

@@ -1,3 +1,4 @@
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { EgressPolicy } from '@impz/api';
 import { parseIpv4 } from '../net/addressing';
 import { parseIpv6 } from '../net/addressing6';
@@ -69,8 +70,10 @@ export function isAddressAllowed(rules: AllowRules, address: string): boolean {
 // a box allows its names, and an address literal its ranges allow. Open and
 // public allow any: the broker itself dials only checked public addresses.
 export function isTunnelAllowed(policy: EgressPolicy, host: string): boolean {
-  if (policy.mode !== 'box') {
-    return policy.mode === 'open' || policy.mode === 'public';
+  const traits = EGRESS_MODE_TRAITS[policy.mode];
+
+  if (!traits.hasAllowList) {
+    return traits.isOpen || traits.isPublic;
   }
 
   const rules = buildAllowRules(policy.allow);

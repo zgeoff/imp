@@ -1,3 +1,4 @@
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { ExposeResult, ForkResult, Imp } from '@impz/api';
 import { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@impz/client';
 import type { ExecRequirement } from '@impz/client';
@@ -243,7 +244,7 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
     }
   }
 
-  if (input.policy?.mode === 'public') {
+  if (input.policy !== undefined && EGRESS_MODE_TRAITS[input.policy.mode].isPublic) {
     await requireFeature(client, 'publicEgress', 'refuse the public egress policy');
   }
 
@@ -530,7 +531,7 @@ export const policyCommand = defineCommand({
     runAction(context.host, async (client) => {
       const policy = parsePolicy(context.args.mode, context.args.allow);
 
-      if (policy?.mode === 'public') {
+      if (policy !== undefined && EGRESS_MODE_TRAITS[policy.mode].isPublic) {
         await requireFeature(client, 'publicEgress', 'refuse the public egress policy');
       }
 

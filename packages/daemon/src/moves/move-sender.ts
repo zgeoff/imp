@@ -1,3 +1,4 @@
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { MovePlan, MoveStatus, WarmHost } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildInvalidStateError, buildNotFoundError } from '../api-errors';
@@ -591,7 +592,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     // a move never changes the policy, either way
     const policy = await deps.egress.readPolicy(imp.name);
 
-    if (policy.mode === 'public' && !reply.keepsPublicEgress) {
+    if (EGRESS_MODE_TRAITS[policy.mode].isPublic && !reply.keepsPublicEgress) {
       throw new OfferRefusalError(
         "the target's impd predates the public egress policy and would receive the imp as none; upgrade it first",
       );

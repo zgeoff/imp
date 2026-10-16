@@ -57,6 +57,8 @@ export type {
 
 export { PublicAuthSchema } from './schemas/exposure-schema';
 export type { ExposeResult, PublicAuth } from './schemas/exposure-schema';
+export { EGRESS_MODE_TRAITS } from './schemas/egress-mode-traits';
+export type { EgressModeTraits } from './schemas/egress-mode-traits';
 export { EgressModeSchema, EgressPolicySchema } from './schemas/egress-schema';
 export type { EgressMode, EgressPolicy } from './schemas/egress-schema';
 export { EVENT_VERSION, ImpEventSchema } from './schemas/event-schema';

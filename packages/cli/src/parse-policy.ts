@@ -1,4 +1,4 @@
-import { EgressModeSchema } from '@impz/api';
+import { EGRESS_MODE_TRAITS, EgressModeSchema } from '@impz/api';
 import type { EgressPolicy } from '@impz/api';
 import { UsageError } from './usage-error';
 
@@ -23,7 +23,7 @@ export function parsePolicy(
     .map((entry) => entry.trim().toLowerCase())
     .filter((entry) => entry !== '');
 
-  if (parsed.data !== 'box' && entries.length > 0) {
+  if (!EGRESS_MODE_TRAITS[parsed.data].hasAllowList && entries.length > 0) {
     throw new UsageError(`--allow is for a box policy, not ${parsed.data}`);
   }
 
@@ -31,7 +31,7 @@ export function parsePolicy(
 }
 
 export function formatPolicy(policy: EgressPolicy): string {
-  return policy.mode === 'box'
+  return EGRESS_MODE_TRAITS[policy.mode].hasAllowList
     ? `box: ${policy.allow.length === 0 ? '(nothing)' : policy.allow.join(', ')}`
     : policy.mode;
 }
