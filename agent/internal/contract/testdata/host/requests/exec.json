@@ -6,5 +6,6 @@
   "rows": 40,
   "session": "build",
   "log": true,
+  "drop_sys_admin": true,
   "resume_from": { "execution_generation": "0123456789abcdef0123456789abcdef", "offset": 4096 }
 }

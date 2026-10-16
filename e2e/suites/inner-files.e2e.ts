@@ -93,3 +93,54 @@ test('it shows a file impd wrote read-only to root, replaces it, keeps it throug
   expect(removed).toStrictEqual({ removed: true });
   expect(gone).toBe('gone');
 });
+
+// the dropped exec runs first: the plain exec's remount would leave the
+// files writable for it
+test('it refuses root a remount of the files in an exec that drops CAP_SYS_ADMIN, and lets a plain exec remount them', async () => {
+  const ctx = await setupTest();
+
+  const name = `${ctx.prefix}files-caps`;
+  const path = '/run/imp/files/session.json';
+
+  const decoder = new TextDecoder();
+
+  await runImp('new', name, '--image', resolveImageName('e2e-tiny'));
+
+  registerRemoval(ctx.stack, config.keep, () => removeImpIfPresent(ctx.client, name));
+
+  await waitForExec(name);
+  await holdImp(name);
+
+  await ctx.client.files.write({ name, path: 'session.json', content: '{"session":"a"}' });
+
+  const dropped = await ctx.client.run(
+    name,
+    [
+      'sh',
+      '-c',
+      `id -u; mount -o remount,rw /run/imp/files || echo refused; echo '{"session":"b"}' > ${path} || echo read-only; cat ${path}`,
+    ],
+    { dropSysAdmin: true },
+  );
+
+  expect(decoder.decode(dropped.stdout).trim().split('\n')).toStrictEqual([
+    '0',
+    'refused',
+    'read-only',
+    '{"session":"a"}',
+  ]);
+
+  // busybox's mount names EPERM so
+  expect(decoder.decode(dropped.stderr)).toInclude('mount: permission denied');
+
+  const plain = await ctx.client.run(name, [
+    'sh',
+    '-c',
+    `mount -o remount,rw /run/imp/files && echo remounted; echo '{"session":"b"}' > ${path} && cat ${path}`,
+  ]);
+
+  expect(decoder.decode(plain.stdout).trim().split('\n')).toStrictEqual([
+    'remounted',
+    '{"session":"b"}',
+  ]);
+});

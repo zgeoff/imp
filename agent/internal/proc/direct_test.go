@@ -205,3 +205,19 @@ func TestStartRefusesARequiredCgroupThatIsNotOne(t *testing.T) {
 	assert.Check(t, cmp.ErrorContains(err, "start true: "))
 	assert.Check(t, cmp.Nil(p))
 }
+
+func TestStartRefusesToDropSysAdminFromAHelper(t *testing.T) {
+	d := &Direct{Reaper: testReaper, Agent: "/bin/true"}
+
+	_, err := d.Start(Spec{Argv: []string{"imp-agent", "tar"}, Helper: true, DropSysAdmin: true})
+
+	assert.Error(t, err, "a helper cannot drop CAP_SYS_ADMIN")
+}
+
+func TestStartRefusesToDropSysAdminWithoutAnAgentBinary(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+
+	_, err := d.Start(Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}, DropSysAdmin: true})
+
+	assert.Error(t, err, "no agent binary to drop CAP_SYS_ADMIN with")
+}

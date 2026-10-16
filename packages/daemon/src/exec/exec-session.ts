@@ -408,6 +408,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         ...(control.resumeFrom !== undefined && { resumeFrom: control.resumeFrom }),
         ...(control.log === true && { log: true }),
         ...(control.outer === true && { outer: true }),
+        ...(control.dropSysAdmin === true && { dropSysAdmin: true }),
         ...(control.require !== undefined && { require: control.require }),
         ...size,
       };

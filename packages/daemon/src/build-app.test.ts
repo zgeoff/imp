@@ -262,6 +262,7 @@ test('it serves system.info from config and the database', async () => {
       brokerRefusals: true,
       grantFilters: true,
       readOnlyFiles: true,
+      execDropSysAdmin: true,
     },
     ksm: null,
   });

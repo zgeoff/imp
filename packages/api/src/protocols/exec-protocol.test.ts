@@ -296,6 +296,58 @@ test('#ExecStartMessageSchema rejects an outer exec with a tool', () => {
   });
 });
 
+test('#ExecStartMessageSchema accepts a session start that drops CAP_SYS_ADMIN', () => {
+  const result = ExecStartMessageSchema.safeParse({
+    type: 'start',
+    name: 'dev',
+    argv: ['claude'],
+    tty: true,
+    session: 'main',
+    dropSysAdmin: true,
+  });
+
+  expect(result.data).toStrictEqual({
+    type: 'start',
+    name: 'dev',
+    argv: ['claude'],
+    tty: true,
+    session: 'main',
+    dropSysAdmin: true,
+  });
+});
+
+test('#ExecStartMessageSchema rejects an outer exec that drops CAP_SYS_ADMIN', () => {
+  const result = ExecStartMessageSchema.safeParse({
+    type: 'start',
+    name: 'dev',
+    argv: ['sh'],
+    tty: false,
+    outer: true,
+    dropSysAdmin: true,
+  });
+
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['dropSysAdmin'],
+    message: 'a tool or an outer exec cannot drop CAP_SYS_ADMIN',
+  });
+});
+
+test('#ExecStartMessageSchema rejects a tool that drops CAP_SYS_ADMIN', () => {
+  const result = ExecStartMessageSchema.safeParse({
+    type: 'start',
+    name: 'dev',
+    argv: ['create', '/user'],
+    tty: false,
+    tool: 'tar',
+    dropSysAdmin: true,
+  });
+
+  expect(result.error?.issues).toPartiallyContain({
+    path: ['dropSysAdmin'],
+    message: 'a tool or an outer exec cannot drop CAP_SYS_ADMIN',
+  });
+});
+
 test('#ExecStartMessageSchema accepts a start that requires the broker', () => {
   const result = ExecStartMessageSchema.safeParse({
     type: 'start',

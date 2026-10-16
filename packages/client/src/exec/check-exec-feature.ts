@@ -4,14 +4,28 @@ import type { ExecOutcome } from './open-exec-session';
 
 const CHECK_TIMEOUT_MS = 5000;
 
+// the features of a start field that an older impd drops unread, and what
+// the refusal says about such an impd
+const EXEC_FEATURE_GAPS = {
+  execRequire: 'this impd is older than 0.30.0 and does not check exec requirements',
+  execDropSysAdmin: 'this impd cannot start a command without CAP_SYS_ADMIN',
+} as const;
+
+export type ExecFeature = keyof typeof EXEC_FEATURE_GAPS;
+
 // the part of a system.info answer the check reads, as `/rpc` sends it
-const FeaturesSchema = z.object({ execRequire: z.boolean().optional() });
+const FeaturesSchema = z.object({
+  execRequire: z.boolean().optional(),
+  execDropSysAdmin: z.boolean().optional(),
+});
+
 const InfoAnswerSchema = z.object({ json: z.object({ features: FeaturesSchema.optional() }) });
 
-// An older impd drops `require` unread and runs the command anyway, so a
-// start that requires anything asks impd first. Null when impd checks
-// requirements; otherwise the outcome that ends the session unstarted.
-export async function checkExecRequire(
+// An older impd drops a start field it does not know and runs the command
+// anyway, so a start that sets one asks impd first. Null when impd has the
+// feature; otherwise the outcome that ends the session unstarted.
+export async function checkExecFeature(
+  feature: ExecFeature,
   baseUrl: string,
   token: string | null,
   customFetch: (request: Request) => Promise<Response> = fetch,
@@ -50,11 +64,11 @@ export async function checkExecRequire(
     };
   }
 
-  if (parsed.data.json.features?.execRequire === true) {
+  if (parsed.data.json.features?.[feature] === true) {
     return null;
   }
 
-  const detail = 'this impd is older than 0.30.0 and does not check exec requirements';
+  const detail = EXEC_FEATURE_GAPS[feature];
 
   return {
     kind: 'failed',

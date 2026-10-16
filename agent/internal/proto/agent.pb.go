@@ -111,7 +111,12 @@ type Request struct {
 	// root, 1 to 8 segments joined by "/" (docs/architecture/guest/agent.md#read-only-files).
 	Path *string `protobuf:"bytes,27,opt,name=path,proto3,oneof" json:"path,omitempty"`
 	// files.write: the file's content, at most 512 KiB.
-	Data          []byte `protobuf:"bytes,28,opt,name=data,proto3,oneof" json:"data,omitempty"`
+	Data []byte `protobuf:"bytes,28,opt,name=data,proto3,oneof" json:"data,omitempty"`
+	// exec: the command starts without CAP_SYS_ADMIN and CAP_SYS_PTRACE, so
+	// nothing it starts can remount the read-only files writable
+	// (docs/architecture/guest/agent.md#read-only-files). An agent before 0.20.0
+	// ignores it.
+	DropSysAdmin  *bool `protobuf:"varint,29,opt,name=drop_sys_admin,json=dropSysAdmin,proto3,oneof" json:"drop_sys_admin,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -340,6 +345,13 @@ func (x *Request) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *Request) GetDropSysAdmin() bool {
+	if x != nil && x.DropSysAdmin != nil {
+		return *x.DropSysAdmin
+	}
+	return false
 }
 
 // A session's generation, and the offset of the first output byte the client
@@ -2155,7 +2167,7 @@ var File_imp_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_imp_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x18imp/agent/v1/agent.proto\x12\fimp.agent.v1\"\xda\b\n" +
+	"\x18imp/agent/v1/agent.proto\x12\fimp.agent.v1\"\x98\t\n" +
 	"\aRequest\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
 	"\x04argv\x18\x02 \x03(\tR\x04argv\x12\x10\n" +
@@ -2191,7 +2203,8 @@ const file_imp_agent_v1_agent_proto_rawDesc = "" +
 	"\x06follow\x18\x19 \x01(\bH\x12R\x06follow\x88\x01\x01\x12/\n" +
 	"\x06cursor\x18\x1a \x01(\v2\x17.imp.agent.v1.LogCursorR\x06cursor\x12\x17\n" +
 	"\x04path\x18\x1b \x01(\tH\x13R\x04path\x88\x01\x01\x12\x17\n" +
-	"\x04data\x18\x1c \x01(\fH\x14R\x04data\x88\x01\x01B\x06\n" +
+	"\x04data\x18\x1c \x01(\fH\x14R\x04data\x88\x01\x01\x12)\n" +
+	"\x0edrop_sys_admin\x18\x1d \x01(\bH\x15R\fdropSysAdmin\x88\x01\x01B\x06\n" +
 	"\x04_cwdB\x06\n" +
 	"\x04_ttyB\a\n" +
 	"\x05_colsB\a\n" +
@@ -2218,7 +2231,8 @@ const file_imp_agent_v1_agent_proto_rawDesc = "" +
 	"\x06_linesB\t\n" +
 	"\a_followB\a\n" +
 	"\x05_pathB\a\n" +
-	"\x05_data\"W\n" +
+	"\x05_dataB\x11\n" +
+	"\x0f_drop_sys_admin\"W\n" +
 	"\n" +
 	"ResumeFrom\x121\n" +
 	"\x14execution_generation\x18\x01 \x01(\tR\x13executionGeneration\x12\x16\n" +

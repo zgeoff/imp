@@ -89,12 +89,28 @@ the same tmpfs again, so both find them in place. A cold boot ends them, and no 
 template or backup carries them, since none of those copies memory. A caller that needs a file after
 a boot writes it again before it starts what reads it.
 
-The bind refuses writes, and it is no boundary. Root in the container holds `CAP_SYS_ADMIN` in the
-agent's own user namespace, so it can remount the bind writable and change the files, or unmount it
-and put files of its own at the path. A changed file lasts until impd writes it again, because each
-write replaces the file with a new one; an unmount lasts until the container starts again. A process
-that only writes gets `EROFS`; a reader that must hold against a process willing to remount reads
-the value from its source over the API instead.
+By default the bind refuses writes, and it is no boundary. Root in the container holds
+`CAP_SYS_ADMIN` in the agent's own user namespace, so it can remount the bind writable and change
+the files, or unmount it and put files of its own at the path. A changed file lasts until impd
+writes it again, because each write replaces the file with a new one; an unmount lasts until the
+container starts again. A process that only writes gets `EROFS`.
+
+An exec started with `dropSysAdmin` closes the remount path for its own process tree. The inner init
+starts it as a small agent helper, which drops `CAP_SYS_ADMIN` and `CAP_SYS_PTRACE` from its
+bounding set and from every other capability set, then becomes the command with the same pid,
+terminal and cgroup leaf. Root in that tree gets `EPERM` from a remount or an unmount, and neither
+the command nor a setuid binary it runs gets the capabilities back, because an exec takes root's
+permitted set from the bounding set. `CAP_SYS_PTRACE` goes with it, because a tracer could otherwise
+make a process that still holds `CAP_SYS_ADMIN`, such as the container's init, run the remount. A
+new user namespace gives the tree no way back either: the kernel locks the read-only flag on each
+mount it copies into a namespace that the tree owns. The image's own start-up runs as services,
+outside that tree, so a service such as `dockerd` keeps its capabilities. The tree can still ask
+such a service to act for it, for example a privileged container that binds the files, so a caller
+that drops the capabilities to protect a file also runs no `dockerd` that the tree can reach. The
+tree cannot mount filesystems or start `dockerd` itself. A start that drops the capabilities, for a
+session that runs with them, fails with `BAD_REQUEST`, so the caller never attaches to a process
+that holds them. impd refuses the option for an agent that cannot drop the capabilities, because
+such an agent ignores the field.
 
 ## Execs and services
 

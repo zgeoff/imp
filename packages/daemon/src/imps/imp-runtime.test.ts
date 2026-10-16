@@ -656,6 +656,82 @@ test('it sends an outer exec to an agent from 0.16.0', async () => {
   ]);
 });
 
+test('it refuses an exec without CAP_SYS_ADMIN to an agent from before 0.20.0', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
+
+  invariant(identity);
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.19.0' });
+
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+    },
+    { stack: ctx.stack },
+  );
+
+  const opening = ctx.imps.openExec('dev', { argv: ['sh'], tty: true, dropSysAdmin: true });
+
+  expect(opening).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(opening).rejects.toThrow('no exec without CAP_SYS_ADMIN');
+  expect(agent.received).toBeEmpty();
+});
+
+test('it refuses an exec without CAP_SYS_ADMIN to an imp with no agent version on record', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+    },
+    { stack: ctx.stack },
+  );
+
+  // an imp booted before impd recorded versions has no identity file
+  rmSync(paths.vmIdentity);
+
+  expect(
+    ctx.imps.openExec('dev', { argv: ['sh'], tty: true, dropSysAdmin: true }),
+  ).rejects.toMatchObject({ code: 'AGENT_OUTDATED' });
+
+  expect(agent.received).toBeEmpty();
+});
+
+test('it sends an exec without CAP_SYS_ADMIN to an agent from 0.20.0', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+  const identity = readVmIdentity(paths);
+
+  invariant(identity);
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.20.0' });
+
+  const agent = await startStubAgent(
+    paths.vsockSocket,
+    (socket) => {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+    },
+    { stack: ctx.stack },
+  );
+
+  const stream = await ctx.imps.openExec('dev', { argv: ['sh'], tty: true, dropSysAdmin: true });
+
+  stream.close();
+
+  expect(agent.received.map((frame) => decodeJsonPayload(frame))).toStrictEqual([
+    { op: 'exec', argv: ['sh'], tty: true, drop_sys_admin: true },
+  ]);
+});
+
 test('it never idle-sleeps an image builder', async () => {
   const ctx = await setupTest();
   const builder = await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });

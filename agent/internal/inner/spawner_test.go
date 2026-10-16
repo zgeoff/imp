@@ -304,3 +304,18 @@ func TestACallTheInitNeverAnswersTimesOut(t *testing.T) {
 	assert.Check(t, cmp.ErrorIs(err, errNoAnswer))
 	assert.Check(t, took <= 2*time.Second, "the call took %s", took)
 }
+
+// the test's spawner has no agent binary, so the refusal shows the flag
+// reached it
+func TestASpawnCarriesTheDropOfCapSysAdminToTheInnerInit(t *testing.T) {
+	c, _ := pair(t)
+
+	_, err := c.Start(proc.Spec{
+		Argv:         []string{"true"},
+		Env:          []string{"PATH=/usr/bin:/bin"},
+		Files:        []*os.File{devnull(t), devnull(t), devnull(t)},
+		DropSysAdmin: true,
+	})
+
+	assert.ErrorContains(t, err, "no agent binary to drop CAP_SYS_ADMIN with")
+}

@@ -44,6 +44,14 @@ const FEATURES = {
 
   // files.write and files.remove; an older agent answers UNKNOWN_OP
   files: { since: [0, 19], missing: 'no read-only files' },
+
+  // an older agent ignores the field and runs the command with
+  // CAP_SYS_ADMIN, so strict
+  'drop-sys-admin': {
+    since: [0, 20],
+    missing: 'no exec without CAP_SYS_ADMIN',
+    strict: true,
+  },
 } as const satisfies Record<string, Feature>;
 
 export type AgentFeature = keyof typeof FEATURES;

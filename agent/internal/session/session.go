@@ -58,6 +58,8 @@ type session struct {
 	bootID     string
 	// log marks a session whose output impd keeps; only it takes taps
 	log bool
+	// dropSysAdmin marks a session that started without CAP_SYS_ADMIN
+	dropSysAdmin bool
 
 	stdin chan []byte
 	// done closes once the process exited and its output drained.
@@ -108,25 +110,26 @@ func newSession(name string, req *proto.Request, r run) *session {
 		cols, rows = 80, 24
 	}
 	return &session{
-		name:        name,
-		argv:        req.Argv,
-		started:     time.Now(),
-		proc:        r.proc,
-		master:      r.master,
-		generation:  r.generation,
-		seq:         r.seq,
-		bootID:      r.bootID,
-		log:         req.GetLog(),
-		stdin:       make(chan []byte, stdinQueue),
-		done:        make(chan struct{}),
-		screen:      newHistory(historyLimit),
-		raw:         newRing(ringSize),
-		taps:        make(map[*viewer]struct{}),
-		tapStart:    make(map[*viewer]uint64),
-		tapWait:     tapWait,
-		tapProgress: make(chan struct{}, 1),
-		cols:        cols,
-		rows:        rows,
+		name:         name,
+		argv:         req.Argv,
+		started:      time.Now(),
+		proc:         r.proc,
+		master:       r.master,
+		generation:   r.generation,
+		seq:          r.seq,
+		bootID:       r.bootID,
+		log:          req.GetLog(),
+		dropSysAdmin: req.GetDropSysAdmin(),
+		stdin:        make(chan []byte, stdinQueue),
+		done:         make(chan struct{}),
+		screen:       newHistory(historyLimit),
+		raw:          newRing(ringSize),
+		taps:         make(map[*viewer]struct{}),
+		tapStart:     make(map[*viewer]uint64),
+		tapWait:      tapWait,
+		tapProgress:  make(chan struct{}, 1),
+		cols:         cols,
+		rows:         rows,
 	}
 }
 

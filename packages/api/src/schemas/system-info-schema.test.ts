@@ -81,6 +81,7 @@ test('it accepts the system info of a host with every part turned on', () => {
       brokerRefusals: true,
       grantFilters: true,
       readOnlyFiles: true,
+      execDropSysAdmin: true,
     },
   } as const;
 

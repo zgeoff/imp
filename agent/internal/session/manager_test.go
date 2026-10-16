@@ -549,6 +549,21 @@ func TestServeAttachesAnExecToARunningSessionOfTheSameName(t *testing.T) {
 	assert.Check(t, !st.GetCreated(), "a running session was replaced")
 }
 
+// A start that drops CAP_SYS_ADMIN must not hand its caller a session that
+// holds it.
+func TestServeRefusesAStartThatDropsSysAdminOverASessionThatHoldsIt(t *testing.T) {
+	m := newTestManager(t, "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11")
+	first := start(t, m, "s1", "echo ready; sleep 30")
+	first.started(t)
+	first.until(t, "ready")
+	first.detach(t)
+
+	again := connect(t, m, &proto.Request{Op: proto.OpExec, Session: new("s1"), Tty: new(true),
+		Argv: []string{"sh", "-c", "echo other"}, Cols: new(uint32(80)), Rows: new(uint32(24)), DropSysAdmin: new(true)})
+
+	assert.Equal(t, again.errorCode(t), proto.ErrBadRequest)
+}
+
 // A viewer that stops reading is dropped, and finds DETACHED slow once it
 // reads again.
 func TestServeDropsAViewerThatStopsReading(t *testing.T) {

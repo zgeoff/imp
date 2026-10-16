@@ -224,6 +224,11 @@ func (m *Manager) find(req *proto.Request) (*session, bool, *proto.Error) {
 	count := len(m.sessions)
 	m.mu.Unlock()
 	if ok && (!s.exited() || isResumeOf(req.ResumeFrom, s) && !s.over()) {
+		// the caller asked for a command without CAP_SYS_ADMIN, and this
+		// one holds it
+		if req.GetDropSysAdmin() && !s.dropSysAdmin {
+			return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("session %q runs with CAP_SYS_ADMIN", s.name)}
+		}
 		return s, false, nil
 	}
 	// an exited session gives its name, and its slot, to the new one. Its

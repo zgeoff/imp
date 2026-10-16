@@ -19,6 +19,7 @@ import (
 
 	"github.com/zgeoff/impz/agent/internal/boot"
 	"github.com/zgeoff/impz/agent/internal/dial"
+	"github.com/zgeoff/impz/agent/internal/dropcaps"
 	"github.com/zgeoff/impz/agent/internal/inner"
 	"github.com/zgeoff/impz/agent/internal/outer"
 	"github.com/zgeoff/impz/agent/internal/proto"
@@ -67,6 +68,12 @@ func main() {
 		// it becomes the command
 		err := outer.RunHelper(os.Args[2:])
 		fmt.Fprintf(os.Stderr, "imp-agent outer: %v\n", err)
+		os.Exit(127)
+	case len(os.Args) > 5 && os.Args[1] == dropcaps.Command:
+		// not PID 1: the inner init starts it for an exec that drops
+		// CAP_SYS_ADMIN, and on success it becomes the command
+		err := dropcaps.RunHelper(os.Args[2:])
+		fmt.Fprintf(os.Stderr, "imp-agent %s: %v\n", dropcaps.Command, err)
 		os.Exit(127)
 	case len(os.Args) == 2 && os.Args[1] == inner.Command:
 		// PID 1 of the container's namespaces, never of the guest: on failure

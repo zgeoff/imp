@@ -396,6 +396,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
           requireFeature(paths, feature);
         }
 
+        if (request.dropSysAdmin === true) {
+          requireFeature(paths, 'drop-sys-admin');
+        }
+
         if (request.outer === true) {
           requireFeature(paths, 'outer-exec');
 
