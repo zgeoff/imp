@@ -314,7 +314,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         decompress: false,
         keepalive: false,
 
+        // Bun's 360 s limit on a silent answer is lifted: an imp's long poll
+        // or a long API call ends when its client's own deadline does, since
         // a client that goes away stops the upstream request too
+        timeout: false,
         signal: request.signal,
       });
 

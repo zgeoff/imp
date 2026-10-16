@@ -1,10 +1,11 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, jest, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';
+import { startStubSilentOrigin } from '../test-utils/start-stub-silent-origin';
 import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { PROXY_LABEL, createDockerProxy } from './proxy';
 import type { DockerProxyOptions } from './proxy';
@@ -1054,6 +1055,126 @@ test('it holds a build, a pull and an export past the control deadline that ends
 
   expect(created.status).toBe(502);
   expect(answered.map((response) => response.status)).toStrictEqual([200, 200, 200]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
+
+// Bun reads its fetch idle limit (360 s by default) only at startup, so the
+// proxy runs in a child Bun with 1 s; the child's plain fetch is the control
+// that the limit expires, after about 8 s on Bun 1.4.2
+test('it passes on a pull and an export that stay silent past Bun’s idle limit, where a plain fetch gives up', async () => {
+  const ctx = await setupTest();
+
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const socket = join(ctx.dir, 'silent-engine.sock');
+
+  // the export's ownership inspect answers at once; the pull and the export
+  // stay silent
+  startStubSilentOrigin(stack, {
+    unix: socket,
+    answerAtOnce: (request) =>
+      request.url.endsWith('/json')
+        ? Response.json({ Id: 'a'.repeat(64), Config: { Labels: { [PROXY_LABEL]: 'test-token' } } })
+        : null,
+  });
+
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, '../test-utils/run-idle-limited-requests.ts'),
+      JSON.stringify({ via: 'docker-proxy', socket }),
+    ],
+    {
+      env: { ...process.env, BUN_CONFIG_HTTP_IDLE_TIMEOUT: '1' },
+      stdout: 'pipe',
+      stderr: 'inherit',
+    },
+  );
+
+  // the child goes first, before the engine it calls
+  stack.defer(() => {
+    child.kill();
+  });
+
+  const output = await new Response(child.stdout).text();
+
+  const lines = output
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as unknown);
+
+  expect(lines).toIncludeSameMembers([
+    { kind: 'control', isOk: false, error: 'TimeoutError' },
+    { kind: 'pull', isOk: true, status: 200, body: 'the long answer' },
+    { kind: 'export', isOk: true, status: 200, body: 'the long answer' },
+  ]);
+}, 30_000);
+
+// fake timers run 400 s of an engine that sends nothing: no timer on the
+// proxy's side ends a pull or an export; the test above covers Bun's limit
+test('it passes on a pull and an export the engine answers after 400 s of fake time', async () => {
+  const ctx = await setupTest();
+
+  const proxy = ctx.startProxy({
+    upstreamSocket: ctx.engine.socket,
+    token: 'test-token',
+    hostImage: 'ghcr.io/zgeoff/imp-host:latest',
+    builderImage: null,
+    buildContextMaxBytes: 4 * 1024 ** 2,
+    log: ctx.log,
+  });
+
+  await ctx.engine.addContainer({ id: 'a'.repeat(64), labels: { [PROXY_LABEL]: 'test-token' } });
+
+  const release = Promise.withResolvers<void>();
+  const bothHeld = Promise.withResolvers<void>();
+  const held = { count: 0 };
+
+  onTestFinished(() => {
+    release.resolve();
+  });
+
+  // the pull and the export answer once released
+  ctx.engine.setAnswer(async (_request, seen) => {
+    if (seen.target.startsWith('/v1.55/images/create') || seen.target.endsWith('/export')) {
+      held.count += 1;
+
+      if (held.count === 2) {
+        bothHeld.resolve();
+      }
+
+      await release.promise;
+    }
+
+    return null;
+  });
+
+  jest.useFakeTimers();
+
+  onTestFinished(() => {
+    jest.useRealTimers();
+  });
+
+  const long = [
+    proxy(
+      new Request('http://docker/v1.55/images/create?fromImage=busybox&tag=latest', {
+        method: 'POST',
+      }),
+    ),
+    proxy(new Request('http://docker/v1.55/containers/aaaa/export')),
+  ];
+
+  await bothHeld.promise;
+
+  jest.advanceTimersByTime(400_000);
+  jest.useRealTimers();
+  release.resolve();
+
+  const answered = await Promise.all(long);
+
+  expect(answered.map((response) => response.status)).toStrictEqual([200, 200]);
   expect(ctx.engine.unexpected).toStrictEqual([]);
 });
 

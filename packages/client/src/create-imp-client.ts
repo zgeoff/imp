@@ -20,6 +20,8 @@ import type { ExecSocket } from './exec/open-exec-session';
 import { requireAwake } from './require-awake';
 import type { RequireAwakeOptions } from './require-awake';
 import { resolveImpdUrl } from './resolve-impd-url';
+import { LONG_CALL_DEADLINES_MS, sendLongCall } from './send-long-call';
+import type { CallInit, StartTimer } from './send-long-call';
 import { UnknownProcedureError } from './unknown-procedure-error';
 
 type RpcClient = ContractRouterClient<ImpContract>;
@@ -38,6 +40,10 @@ export interface ImpClientOptions {
 
   // opens the `/exec` socket; impd's own MCP endpoint bridges it in process
   readonly connect?: (url: string) => ExecSocket;
+
+  // the timer of a long call's deadline (LONG_CALL_DEADLINES_MS); setTimeout
+  // by default
+  readonly startTimer?: StartTimer;
 }
 
 export interface ImpClient extends RpcClient {
@@ -80,18 +86,34 @@ export interface ImpClient extends RpcClient {
 export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient {
   const token = options.token;
   const customFetch = options.fetch;
+  const startTimer = options.startTimer ?? startRealTimer;
+
+  const sendCall = (request: Request, init: Readonly<CallInit>): Promise<Response> =>
+    customFetch === undefined ? fetch(request, init) : customFetch(request);
 
   const link = new RPCLink({
     url: resolveImpdUrl(options.url, '/rpc').href,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
     fetch: async (request, init, _options, path) => {
-      const response =
-        customFetch === undefined ? await fetch(request, init) : await customFetch(request);
+      const procedure = path.join('.');
+      const deadlineMs = LONG_CALL_DEADLINES_MS.get(procedure);
+
+      const sent =
+        deadlineMs === undefined
+          ? sendCall(request, init)
+          : sendLongCall(request, init, {
+              procedure,
+              deadlineMs,
+              startTimer,
+              send: customFetch ?? null,
+            });
+
+      const response = await sent;
 
       if (isUnknownProcedure(response.status, response.headers.get('content-type'))) {
         await response.body?.cancel();
 
-        throw new UnknownProcedureError(path.join('.'));
+        throw new UnknownProcedureError(procedure);
       }
 
       return response;
@@ -141,6 +163,14 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
     requireAwake: (name, awakeOptions) => requireAwake(rpc, name, awakeOptions),
     checkServer: () => checkServer(rpc),
     buildImage: (name, context, buildOptions) => buildImage(execDeps, name, context, buildOptions),
+  };
+}
+
+function startRealTimer(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+
+  return () => {
+    clearTimeout(timer);
   };
 }
 

@@ -472,7 +472,12 @@ export function createImpdMoves(
   }>,
   hooks: Readonly<
     Pick<MoveServiceDeps, 'readTailnetIp' | 'releaseName' | 'onCommitted'> &
-      Partial<Pick<MoveServiceDeps, 'fetch' | 'partBytes' | 'readWarmHost' | 'readTapMac'>>
+      Partial<
+        Pick<
+          MoveServiceDeps,
+          'fetch' | 'startPeerDeadline' | 'partBytes' | 'readWarmHost' | 'readTapMac'
+        >
+      >
   >,
 ) {
   return createMoveService({

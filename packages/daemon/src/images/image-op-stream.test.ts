@@ -261,6 +261,49 @@ test('it repeats the progress at each keepalive while the work is silent', async
   expect(progress.value).toStrictEqual({ type: 'progress', phase: 'pull', elapsedMs: 15_000 });
 });
 
+// 400 s of silent work: past the 360 s Bun's fetch waits for a byte
+test('it sends progress every 15 s through work silent for 400 s', async () => {
+  const clock = { now: 0 };
+  const keepalive = buildStubRepeat();
+
+  const events = runImageOp(() => Promise.withResolvers<Image>().promise, {
+    firstPhase: 'pull',
+    signal: new AbortController().signal,
+    keepaliveMs: 15_000,
+    now: () => clock.now,
+    record: () => {},
+    repeat: keepalive.repeat,
+  });
+
+  await events.next();
+
+  const progress: unknown[] = [];
+
+  for (const tick of Array.from({ length: 27 }, (_, index) => index + 1)) {
+    const next = events.next();
+
+    await waitFor(() => {
+      expect(keepalive.countRunning(15_000)).toBe(1);
+    });
+
+    clock.now = tick * 15_000;
+
+    keepalive.tick(15_000);
+
+    const event = await next;
+
+    progress.push(event.value);
+  }
+
+  expect(progress).toStrictEqual(
+    Array.from({ length: 27 }, (_, index) => ({
+      type: 'progress',
+      phase: 'pull',
+      elapsedMs: (index + 1) * 15_000,
+    })),
+  );
+});
+
 test('it throws the failure through the stream and records what was thrown', () => {
   const records: unknown[] = [];
 

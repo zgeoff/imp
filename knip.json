@@ -52,8 +52,9 @@
       "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts"]
     },
     "packages/client": {
-      // the package smoke (scripts/release/check-client-runtimes.sh)
-      "entry": ["smoke/*.ts"],
+      // the package smoke (scripts/release/check-client-runtimes.sh), and
+      // the scripts a test runs in a child Bun
+      "entry": ["smoke/*.ts", "src/test-utils/run-*.ts"],
       "project": ["src/**/*.ts", "smoke/*.ts"]
     }
   }

@@ -19,7 +19,9 @@ ports fall in the per-imp range.
 A request asks the lifecycle for a running VM, which wakes a sleeping imp or boots a stopped one,
 and then goes to the guest's address from the host container. A response that needed a wake says how
 long it took in a header. The proxy sends `Connection: close` upstream, so a finished request leaves
-no keep-alive socket in the guest that would keep it awake. WebSockets are relayed message by
+no keep-alive socket in the guest that would keep it awake. The proxy lifts its fetch's limit on a
+silent answer, so a long poll in the guest or a long call to impd's API ends only when its client
+gives up, and the client's going ends the upstream request. WebSockets are relayed message by
 message.
 
 The proxy is open to anything that can reach it; the tailnet's ACL is the boundary. Browsers send a

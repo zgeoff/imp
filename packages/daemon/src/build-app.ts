@@ -52,6 +52,10 @@ const EXEC_SOCKET_OPTIONS = { idleTimeout: 30, sendPings: true } as const;
 // a socket whose token is removed closes with this: policy violation
 const CLOSE_REVOKED = 1008;
 
+// oRPC's own default, written out: the gap between an event stream's
+// keepalive comments
+const EVENT_KEEPALIVE_MS = 5000;
+
 // `now` is the clock exec tickets and sessions expire by
 export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
   // the token in <dataDir>/token, which keys the dashboard's sessions
@@ -120,6 +124,10 @@ export function buildApp(deps: AppDeps) {
   const handler = new RPCHandler(buildRouter({ ...deps, execTickets }), {
     // a GET is what a link or an <img> on any page can make the browser send
     plugins: [new StrictGetMethodPlugin()],
+
+    // a silent event stream (a follow, impd's events) sends a comment this
+    // often, far inside the 360 s that Bun's fetch waits for a byte
+    eventIteratorKeepAliveInterval: EVENT_KEEPALIVE_MS,
     interceptors: [
       onError((failure) => {
         if (!(failure instanceof ORPCError)) {

@@ -46,6 +46,11 @@ so the checkpoints share every block they shared on the source. The stream goes 
 bounded POSTs, so no request body ever has to fit a whole disk, and the target counts the bytes
 against the ticket and checks each file's hash.
 
+The target answers a part once it has read it, and the finish once the whole stream is on its disk,
+so an answer can stay silent for minutes on a large disk. The source therefore lifts its fetch's
+limit on a silent answer and gives each request to the target a deadline of its own, longer for a
+part and the finish than for the offer, the commit and the abort.
+
 The header carries the imp's settings, its grants by secret name, its leases with the time each has
 left, and its last cold boots, so a session client from before the move learns that the next boot
 ended its output ([sessions](../guest/sessions.md#generations-boots-and-offsets)). The target ends

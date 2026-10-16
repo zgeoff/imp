@@ -7,6 +7,7 @@ import { findImageByName } from '../db/images';
 import { findImpByName, updateImpExposure, updateImpMove } from '../db/imps';
 import { TEST_TOKEN, buildTestApp } from '../imps/test-imps';
 import { buildMockMoveTicketRow } from '../test-utils/build-mock-move-ticket-row';
+import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubDroppedCommit } from '../test-utils/build-stub-dropped-commit';
 import {
   buildJsonMoveFrame,
@@ -357,6 +358,240 @@ test('it ends a send to a target that is gone with the mark on, and says the abo
   const source = await findImpByName(ctx.source.db, 'dev');
 
   expect(status.state).toBe('sending');
+  expect(status.error).toContain('the target did not confirm the abort');
+  expect(source?.moveState).toBe('sending');
+});
+
+test('it ends a move whose target sends no answer to a part within an hour', async () => {
+  const clock = buildStubClock();
+  const partHeld = Promise.withResolvers<undefined>();
+
+  const ctx = await setupTest({
+    startPeerDeadline: clock.startTimer,
+
+    // the first part is held until its request is aborted
+    hook: (request, forward) => {
+      if (request.headers.get(MOVE_PART_HEADER) !== '0') {
+        return forward();
+      }
+
+      const aborted = Promise.withResolvers<Response>();
+
+      request.signal.addEventListener('abort', () => {
+        aborted.reject(request.signal.reason);
+      });
+
+      partHeld.resolve(undefined);
+
+      return aborted.promise;
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const moved = ctx.runMove('dev');
+
+  await partHeld.promise;
+
+  const pendingMs = clock.readPendingMs();
+
+  clock.firePending();
+
+  const status = await moved;
+
+  expect(pendingMs).toStrictEqual([3_600_000]);
+  expect(status.error).toContain('/move/receive: the target sent no answer in 60 minutes');
+});
+
+test('it ends a move whose target sends no answer to the finish within an hour', async () => {
+  const clock = buildStubClock();
+  const finishHeld = Promise.withResolvers<undefined>();
+
+  const ctx = await setupTest({
+    startPeerDeadline: clock.startTimer,
+
+    // the finish is held until its request is aborted
+    hook: (request, forward) => {
+      if (request.headers.get(MOVE_FINISH_HEADER) !== '1') {
+        return forward();
+      }
+
+      const aborted = Promise.withResolvers<Response>();
+
+      request.signal.addEventListener('abort', () => {
+        aborted.reject(request.signal.reason);
+      });
+
+      finishHeld.resolve(undefined);
+
+      return aborted.promise;
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const moved = ctx.runMove('dev');
+
+  await finishHeld.promise;
+
+  const pendingMs = clock.readPendingMs();
+
+  clock.firePending();
+
+  const status = await moved;
+
+  expect(pendingMs).toStrictEqual([3_600_000]);
+  expect(status.error).toContain('/move/receive: the target sent no answer in 60 minutes');
+});
+
+test('it keeps both copies when the target sends no answer to the commit within ten minutes', async () => {
+  const clock = buildStubClock();
+  const commitHeld = Promise.withResolvers<undefined>();
+
+  const ctx = await setupTest({
+    startPeerDeadline: clock.startTimer,
+
+    // the commit is held until its request is aborted
+    hook: (request, forward) => {
+      if (!request.url.endsWith(MOVE_PATHS.commit)) {
+        return forward();
+      }
+
+      const aborted = Promise.withResolvers<Response>();
+
+      request.signal.addEventListener('abort', () => {
+        aborted.reject(request.signal.reason);
+      });
+
+      commitHeld.resolve(undefined);
+
+      return aborted.promise;
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const moved = ctx.runMove('dev');
+
+  await commitHeld.promise;
+
+  const pendingMs = clock.readPendingMs();
+
+  clock.firePending();
+
+  const status = await moved;
+  const source = await findImpByName(ctx.source.db, 'dev');
+
+  expect(pendingMs).toStrictEqual([600_000]);
+  expect(status.error).toContain('/move/commit: the target sent no answer in 10 minutes');
+  expect(source?.moveState).toBe('moved');
+});
+
+test('it ends a move whose target sends no answer to the offer within ten minutes', async () => {
+  const clock = buildStubClock();
+  const offerHeld = Promise.withResolvers<undefined>();
+
+  const ctx = await setupTest({
+    startPeerDeadline: clock.startTimer,
+
+    // the offer is held until its request is aborted
+    hook: (request, forward) => {
+      if (!request.url.endsWith(MOVE_PATHS.offer)) {
+        return forward();
+      }
+
+      const aborted = Promise.withResolvers<Response>();
+
+      request.signal.addEventListener('abort', () => {
+        aborted.reject(request.signal.reason);
+      });
+
+      offerHeld.resolve(undefined);
+
+      return aborted.promise;
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const moved = ctx.runMove('dev');
+
+  await offerHeld.promise;
+
+  const pendingMs = clock.readPendingMs();
+
+  clock.firePending();
+
+  const status = await moved;
+
+  expect(pendingMs).toStrictEqual([600_000]);
+  expect(status.error).toContain('/move/offer: the target sent no answer in 10 minutes');
+});
+
+test('it keeps the mark when the target sends no answer to the abort within ten minutes', async () => {
+  const clock = buildStubClock();
+  const abortHeld = Promise.withResolvers<undefined>();
+
+  const ctx = await setupTest({
+    startPeerDeadline: clock.startTimer,
+
+    // the stream fails at once; the abort that follows is held until its
+    // request is aborted
+    hook: (request, forward) => {
+      if (request.url.endsWith(MOVE_PATHS.receive)) {
+        return Promise.reject(new TypeError('Unable to connect'));
+      }
+
+      if (!request.url.endsWith(MOVE_PATHS.abort)) {
+        return forward();
+      }
+
+      const aborted = Promise.withResolvers<Response>();
+
+      request.signal.addEventListener('abort', () => {
+        aborted.reject(request.signal.reason);
+      });
+
+      abortHeld.resolve(undefined);
+
+      return aborted.promise;
+    },
+  });
+
+  await createUbuntuImage(ctx.source);
+  await createUbuntuImage(ctx.target);
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+
+  const moved = ctx.runMove('dev');
+
+  await abortHeld.promise;
+
+  const pendingMs = clock.readPendingMs();
+
+  clock.firePending();
+
+  const status = await moved;
+  const source = await findImpByName(ctx.source.db, 'dev');
+
+  expect(pendingMs).toStrictEqual([600_000]);
   expect(status.error).toContain('the target did not confirm the abort');
   expect(source?.moveState).toBe('sending');
 });

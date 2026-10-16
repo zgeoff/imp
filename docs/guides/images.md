@@ -313,8 +313,9 @@ ends, with its outcome; a refused call is audited at once, as any refused call. 
 `imageOpStream` among the features of an impd that has them, and `imageBuilds` for one that sends
 steps and log events and answers `images.builds`. `impz image add`, `impz image build --on-host` and
 `impz template create` use them when impd does, and show the phase and its time on a terminal; with
-an older impd they call `images.add` or `images.build`, which answer only at the end. The dashboard
-calls `images.add`.
+an older impd they call `images.add` or `images.build`, which answer only at the end. The SDK waits
+up to 6 hours for either answer, with Bun's limit on a silent answer lifted. The dashboard calls
+`images.add`.
 
 When the client goes, impd stops what it can:
 

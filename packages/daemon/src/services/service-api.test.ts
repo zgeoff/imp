@@ -1,4 +1,4 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, jest, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,6 +35,7 @@ import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { readInBackground } from '../test-utils/read-in-background';
+import { readQueuedText } from '../test-utils/read-queued-text';
 import { startStubServiceAgent } from '../test-utils/start-stub-service-agent';
 import { createServiceApi } from './service-api';
 
@@ -795,6 +796,66 @@ test('it waits out a sleep in a follow without a wake, and goes on from its curs
   expect(asleep.lastActiveAt).toStrictEqual(before.lastActiveAt);
   expect(ctx.vmm.wakes).toHaveLength(1);
   expect(resumed?.cursor).toStrictEqual(create(LogCursorSchema, { inode: 7, offset: 4 }));
+});
+
+// oRPC's keepalive is its own setInterval, so fake timers run 400 s of a
+// follow that nothing writes to: past the 360 s Bun's fetch waits for a byte
+test('it sends a keepalive comment every 5 s through a silent follow', async () => {
+  const ctx = await setupTest();
+
+  // an agent with the services API, which each boot and wake reports
+  ctx.vmm.agent.version = '0.10.0';
+
+  const imp = await ctx.client.imps.create({ name: 'dev' });
+
+  await startStubServiceAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, {
+    knowsServices: true,
+    stack: ctx.stack,
+  });
+
+  await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  jest.useFakeTimers();
+
+  onTestFinished(() => {
+    jest.useRealTimers();
+  });
+
+  const response = await ctx.impd.api.app.handle(
+    new Request('http://impd.test/rpc/services/logs', {
+      method: 'POST',
+      headers: { authorization: 'Bearer root-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ json: { name: 'dev', service: 'web', follow: true } }),
+    }),
+  );
+
+  invariant(response.body);
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+
+  onTestFinished(() => reader.cancel());
+
+  const opened = { text: '' };
+
+  // the opening comment, then the sleeping event the follow waits on
+  while (!opened.text.includes('"sleeping"')) {
+    const chunk = await reader.read();
+
+    opened.text += chunk.value ?? '';
+  }
+
+  jest.advanceTimersByTime(400_000);
+
+  // real timers again: the comments are queued by now
+  jest.useRealTimers();
+
+  const queued = await readQueuedText(reader, 1000);
+
+  const keepalives = queued.split('\n\n').filter(Boolean);
+
+  expect(keepalives).toHaveLength(80);
+  expect(keepalives).toSatisfyAll((frame: string) => frame === ': ');
 });
 
 test('it leaves a sleeping imp asleep through a follow', async () => {
