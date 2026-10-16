@@ -15,7 +15,7 @@ export function parseJsonOutput(command: string, stdout: string): z.ZodSafeParse
     throw new Error(`no committed schema for impz ${command} --json`);
   }
 
-  const schema = z.fromJSONSchema(output.schema as z.core.JSONSchema.JSONSchema);
+  const schema = z.fromJSONSchema(output.schema);
 
   return schema.safeParse(JSON.parse(stdout));
 }
