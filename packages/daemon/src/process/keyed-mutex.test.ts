@@ -205,6 +205,40 @@ test('#tryRunExclusive holds the key, so a task queued behind it waits for it', 
   expect(log).toStrictEqual(['try start', 'try end', 'queued']);
 });
 
+test('#countQueued counts the running task of a key and each task behind it', async () => {
+  const mutex = createKeyedMutex();
+  const gate = Promise.withResolvers<void>();
+  const first = mutex.runExclusive('a', () => gate.promise);
+  const second = mutex.runExclusive('a', () => Promise.resolve());
+  const queued = mutex.countQueued('a');
+
+  gate.resolve();
+
+  await Promise.all([first, second]);
+
+  expect({ queued, other: mutex.countQueued('b'), after: mutex.countQueued('a') }).toStrictEqual({
+    queued: 2,
+    other: 0,
+    after: 0,
+  });
+});
+
+test('#countQueued does not count a try that a held key turned away', async () => {
+  const mutex = createKeyedMutex();
+  const gate = Promise.withResolvers<void>();
+  const held = mutex.runExclusive('a', () => gate.promise);
+
+  const tried = await mutex.tryRunExclusive('a', () => Promise.resolve());
+
+  const queued = mutex.countQueued('a');
+
+  gate.resolve();
+
+  await held;
+
+  expect({ tried, queued }).toStrictEqual({ tried: { ran: false }, queued: 1 });
+});
+
 test('#waitForAll resolves once every task of every key is done', async () => {
   const mutex = createKeyedMutex();
   const gateA = Promise.withResolvers<void>();
