@@ -247,7 +247,7 @@ export interface ImpDisk {
 }
 
 // what an imp reaches, and how the tailnet names it
-export interface ImpNetwork {
+interface ImpNetwork {
   readonly egress: ImpEgress;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly readServiceUrl: (name: string) => string | null;
