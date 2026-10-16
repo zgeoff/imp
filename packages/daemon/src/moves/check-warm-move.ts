@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { WarmHost, WarmMove } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import type { Config } from '../config';
@@ -114,7 +115,7 @@ export async function buildWarmHeader(
     meta: warm.meta,
     vm: readVmIdentity(deps.storage.resolveImpPaths(imp.id)),
     isDriveIncluded: warm.isDriveIncluded,
-    answers: egress.mode === 'box' ? deps.egress.readAnswers(imp.slot) : [],
+    answers: EGRESS_MODE_TRAITS[egress.mode].hasAllowList ? deps.egress.readAnswers(imp.slot) : [],
   };
 }
 

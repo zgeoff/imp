@@ -1,3 +1,4 @@
+import { EGRESS_MODE_TRAITS, EgressModeSchema } from '@impz/api';
 import type { WarmHost, WarmMove } from '@impz/api';
 import type { Config } from '../config';
 import { countSlots, formatSubnet } from '../net/addressing';
@@ -94,7 +95,7 @@ export function findWarmMismatches(move: Readonly<WarmMove>, target: Readonly<Wa
   checkFact('IMP_BROKER_PORT', String(move.host.brokerPort), String(target.brokerPort));
 
   // an open imp asks IMP_DNS itself; nothing redirects its queries
-  if (move.egressMode === 'open') {
+  if (isOpenMode(move.egressMode)) {
     checkFact('IMP_DNS', move.host.dns.join(','), target.dns.join(','));
   }
 
@@ -103,4 +104,11 @@ export function findWarmMismatches(move: Readonly<WarmMove>, target: Readonly<Wa
   }
 
   return found;
+}
+
+// the source's mode, sent as a string: one this host does not know is not open
+function isOpenMode(egressMode: string): boolean {
+  const mode = EgressModeSchema.safeParse(egressMode);
+
+  return mode.success && EGRESS_MODE_TRAITS[mode.data].isOpen;
 }

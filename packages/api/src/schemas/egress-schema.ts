@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { EGRESS_MODE_TRAITS } from './egress-mode-traits';
 
 const HOST_PATTERN = /^(?:[a-z0-9_][a-z0-9_-]{0,62}\.)+[a-z][a-z0-9-]{0,62}$/;
 const CIDR_PATTERN = /^(?<address>(?:\d{1,3}\.){3}\d{1,3})(?:\/(?<prefix>\d{1,2}))?$/;
@@ -26,7 +27,7 @@ export const EgressPolicySchema = z
     mode: EgressModeSchema,
     allow: z.array(EgressAllowEntrySchema).max(256).readonly().default([]),
   })
-  .refine((policy) => policy.mode === 'box' || policy.allow.length === 0, {
+  .refine((policy) => EGRESS_MODE_TRAITS[policy.mode].hasAllowList || policy.allow.length === 0, {
     message: 'only a box policy takes an allow-list',
     path: ['allow'],
   });

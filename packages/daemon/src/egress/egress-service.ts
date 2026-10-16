@@ -1,4 +1,5 @@
 import { Resolver } from 'node:dns/promises';
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { EgressPolicy } from '@impz/api';
 import { ORPCError } from '@orpc/server';
 import { buildMovingError, buildNotFoundError } from '../api-errors';
@@ -250,8 +251,10 @@ export function createEgressService(deps: EgressDeps): EgressService {
         guestIp: view.entry.guestIp,
         guestIp6: findGuestIp6(view.entry.guestIp),
         mode: view.entry.policy.mode,
-        cidrs: view.entry.policy.mode === 'box' ? view.rules.cidrs : [],
-        addresses: view.entry.policy.mode === 'box' ? sets.listAddresses(view.entry.slot) : [],
+        cidrs: EGRESS_MODE_TRAITS[view.entry.policy.mode].hasAllowList ? view.rules.cidrs : [],
+        addresses: EGRESS_MODE_TRAITS[view.entry.policy.mode].hasAllowList
+          ? sets.listAddresses(view.entry.slot)
+          : [],
       })),
     });
   };
@@ -260,7 +263,9 @@ export function createEgressService(deps: EgressDeps): EgressService {
   // IPv4 side and the uplinks only matter while some imp is public. A read
   // that fails then leaves public imps no uplink: the table refuses them all.
   const readHostNetwork = async (views: ReadonlyMap<number, SlotView>): Promise<HostNetwork> => {
-    const hasPublic = [...views.values()].some((view) => view.entry.policy.mode === 'public');
+    const hasPublic = [...views.values()].some(
+      (view) => EGRESS_MODE_TRAITS[view.entry.policy.mode].isPublic,
+    );
 
     try {
       return {
@@ -287,7 +292,10 @@ export function createEgressService(deps: EgressDeps): EgressService {
   // each time one appears with IMP_HOST_ADDRESSES empty, whatever
   // IMP_EGRESS_DENY holds (it always holds IMP_PUBLIC_IP)
   const checkDenyList = (views: ReadonlyMap<number, SlotView>): void => {
-    const hasPublic = [...views.values()].some((view) => view.entry.policy.mode === 'public');
+    const hasPublic = [...views.values()].some(
+      (view) => EGRESS_MODE_TRAITS[view.entry.policy.mode].isPublic,
+    );
+
     const isMissing = hasPublic && deps.config.hostAddresses.length === 0;
 
     if (isMissing && !state.denyListMissing) {
@@ -383,7 +391,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
     names: readonly string[],
     answers: readonly AddressAnswer[],
   ): Promise<void> => {
-    if (state.slots.get(slot)?.entry.policy.mode !== 'box') {
+    if (!hasAllowList(state.slots.get(slot))) {
       return;
     }
 
@@ -406,17 +414,19 @@ export function createEgressService(deps: EgressDeps): EgressService {
     }
 
     // an open imp on a network asks through impd, for its peers' names
-    if (view.entry.policy.mode === 'open') {
+    const traits = EGRESS_MODE_TRAITS[view.entry.policy.mode];
+
+    if (traits.isOpen) {
       return 'answer';
     }
 
     // any name, with the addresses it may not reach left out
-    if (view.entry.policy.mode === 'public') {
+    if (traits.isPublic) {
       return 'screen';
     }
 
     if (
-      view.entry.policy.mode === 'box' &&
+      traits.hasAllowList &&
       (isNameAllowed(view.rules, name) || sets.isAlias(slot, name, now()))
     ) {
       return 'admit';
@@ -431,7 +441,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
   const resolveExactNames = async (slot: number): Promise<void> => {
     const view = state.slots.get(slot);
 
-    if (view?.entry.policy.mode !== 'box') {
+    if (view === undefined || !hasAllowList(view)) {
       return;
     }
 
@@ -450,9 +460,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
     const due = sets.sweep(now());
 
     const scripts = [...due].flatMap(([slot, addresses]) =>
-      state.slots.get(slot)?.entry.policy.mode === 'box'
-        ? [buildElementChange('delete', slot, addresses)]
-        : [],
+      hasAllowList(state.slots.get(slot)) ? [buildElementChange('delete', slot, addresses)] : [],
     );
 
     if (scripts.length > 0) {
@@ -487,7 +495,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
   };
 
   const requireFirewall = (policy: EgressPolicy): void => {
-    if (policy.mode !== 'open' && state.unenforced !== null) {
+    if (EGRESS_MODE_TRAITS[policy.mode].needsRuleset && state.unenforced !== null) {
       throw new ORPCError('PRECONDITION_FAILED', {
         message: `impd cannot enforce a ${policy.mode} egress policy here: ${state.unenforced}`,
       });
@@ -497,7 +505,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
   const requirePolicy = (policy: EgressPolicy): void => {
     requireFirewall(policy);
 
-    if (policy.mode === 'public' && state.publicUnenforced !== null) {
+    if (EGRESS_MODE_TRAITS[policy.mode].isPublic && state.publicUnenforced !== null) {
       throw new ORPCError('PRECONDITION_FAILED', {
         message: `impd cannot read the routes a public egress policy needs: ${state.publicUnenforced}`,
       });
@@ -514,7 +522,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
         await applyTable();
 
         const closed = [...state.slots.values()].filter(
-          (view) => view.entry.policy.mode !== 'open',
+          (view) => EGRESS_MODE_TRAITS[view.entry.policy.mode].needsRuleset,
         );
 
         deps.log(
@@ -572,7 +580,11 @@ export function createEgressService(deps: EgressDeps): EgressService {
     requireImp: async (impId) => {
       const policy = await readEgressPolicy(deps.db, impId);
 
-      if (policy?.mode === 'public' && state.publicUnenforced !== null) {
+      if (
+        policy !== undefined &&
+        EGRESS_MODE_TRAITS[policy.mode].isPublic &&
+        state.publicUnenforced !== null
+      ) {
         await mutex.runExclusive('policy', tryApplyTable);
       }
 
@@ -681,7 +693,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
         const rules = buildAllowRules(policy.allow);
 
-        if (policy.mode === 'box') {
+        if (EGRESS_MODE_TRAITS[policy.mode].hasAllowList) {
           sets.prune(imp.slot, (allowed) => isNameAllowed(rules, allowed));
         } else {
           sets.clear(imp.slot);
@@ -704,11 +716,12 @@ export function createEgressService(deps: EgressDeps): EgressService {
         // the guest's own flows the new policy may deny, and the broker's
         // tunnels, which conntrack does not see. A tunnel is kept by its
         // host, and one that becomes public was dialled under fewer checks.
-        const isNewlyPublic = policy.mode === 'public' && previous.mode !== 'public';
+        const isNewlyPublic =
+          EGRESS_MODE_TRAITS[policy.mode].isPublic && !EGRESS_MODE_TRAITS[previous.mode].isPublic;
 
         deps.closeTunnels(imp.id, (host) => !isNewlyPublic && isTunnelAllowed(policy, host));
 
-        if (policy.mode !== 'open') {
+        if (EGRESS_MODE_TRAITS[policy.mode].needsRuleset) {
           await flushConnections(imp.ip);
         }
 
@@ -726,9 +739,18 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
 // an open or public imp: every name it asks is forwarded
 function isForwardedFreely(view: SlotView | undefined): boolean {
-  const mode = view?.entry.policy.mode;
+  if (view === undefined) {
+    return false;
+  }
 
-  return mode === 'open' || mode === 'public';
+  const traits = EGRESS_MODE_TRAITS[view.entry.policy.mode];
+
+  return traits.isOpen || traits.isPublic;
+}
+
+// a box imp: its allow-list's sets are the ones to keep
+function hasAllowList(view: SlotView | undefined): boolean {
+  return view !== undefined && EGRESS_MODE_TRAITS[view.entry.policy.mode].hasAllowList;
 }
 
 // each network's members, by the tap each sends from

@@ -1,3 +1,4 @@
+import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { EgressMode } from '@impz/api';
 
 // The nftables table impd owns (docs/architecture/network/egress.md#the-firewall).
@@ -14,10 +15,6 @@ const PEER_MARK = '0x01000000';
 // open imps reach anything but these: cloud metadata services, and the
 // shared range that holds the tailnet
 const OPEN_BLOCKED_RANGES: readonly string[] = ['169.254.0.0/16', '100.64.0.0/10'];
-
-// the policies whose IPv4 DNS goes to impd's resolver, whatever server the
-// guest asks
-const REDIRECTED_MODES: ReadonlySet<EgressMode> = new Set(['public', 'box', 'none']);
 
 // One slot's part of the table. `addresses` are what the resolver let in for
 // a box; `cidrs` are its allow-list's address entries. Both hold IPv4 and
@@ -76,13 +73,15 @@ export interface RulesetInput {
 // delete make the script work whether or not the table exists, on any
 // kernel, and nothing is ever half applied.
 export function buildRuleset(input: RulesetInput): string {
-  const box = input.slots.filter((slot) => slot.mode === 'box');
-  const redirected = input.slots.filter((slot) => REDIRECTED_MODES.has(slot.mode));
-  const hasPublic = input.slots.some((slot) => slot.mode === 'public');
+  const box = input.slots.filter((slot) => EGRESS_MODE_TRAITS[slot.mode].hasAllowList);
+  const redirected = input.slots.filter((slot) => EGRESS_MODE_TRAITS[slot.mode].needsRuleset);
+  const hasPublic = input.slots.some((slot) => EGRESS_MODE_TRAITS[slot.mode].isPublic);
 
   const peerTaps = new Set(input.networks.flatMap((peers) => peers.map((peer) => peer.tap)));
 
-  const openPeers = input.slots.filter((slot) => slot.mode === 'open' && peerTaps.has(slot.tap));
+  const openPeers = input.slots.filter(
+    (slot) => EGRESS_MODE_TRAITS[slot.mode].isOpen && peerTaps.has(slot.tap),
+  );
 
   const lines = [
     `table ${EGRESS_TABLE} {}`,

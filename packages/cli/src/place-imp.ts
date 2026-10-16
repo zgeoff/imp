@@ -1,4 +1,4 @@
-import { isImpAllowed } from '@impz/api';
+import { EGRESS_MODE_TRAITS, isImpAllowed } from '@impz/api';
 import type { EgressMode, Identity, SystemInfo } from '@impz/api';
 import { ORPCError } from '@impz/client';
 import type { ImpClient } from './create-imp-client';
@@ -196,11 +196,11 @@ function findImageRefusal(images: readonly string[], image: string | null): stri
 }
 
 function findPolicyRefusal(info: SystemInfo, mode: EgressMode | null): string | null {
-  if (mode === 'public' && info.features?.publicEgress !== true) {
+  if (mode !== null && EGRESS_MODE_TRAITS[mode].isPublic && info.features?.publicEgress !== true) {
     return `impd ${info.version} predates the public egress policy`;
   }
 
-  return mode === null || mode === 'open' || info.egress?.isEnforced === true
+  return mode === null || !EGRESS_MODE_TRAITS[mode].needsRuleset || info.egress?.isEnforced === true
     ? null
     : `it cannot enforce a ${mode} egress policy`;
 }
