@@ -1,4 +1,4 @@
-import { closeSync, constants, openSync, readFileSync, readSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, readSync, readlinkSync } from 'node:fs';
 
 // what the record and the log say when a kernel oops killed the VM
 export const KERNEL_OOPS_TRIGGER = 'a kernel oops killed firecracker';
@@ -48,13 +48,25 @@ export const NO_KERNEL_OOPS: KernelOopsWatch = {
   findOopsOwners: () => null,
 };
 
+// Where the oops's thread comes from: the kernel log, and impd's own PID
+// namespace, whose thread ids match the log's only when it is the host's
+interface KernelLog {
+  readonly kmsgPath: string;
+  readonly pidNamespacePath: string;
+}
+
+const HOST_KERNEL_LOG: KernelLog = {
+  kmsgPath: '/dev/kmsg',
+  pidNamespacePath: '/proc/self/ns/pid',
+};
+
 // An unreadable or malformed file reads as unknown: it never starts a hold,
 // and it never proves the reboot that clears one. `now` stamps the first read that finds the flag set.
 export function createKernelOopsWatch(
   path = '/proc/sys/kernel/tainted',
   now: () => number = Date.now,
   bootIdPath = '/proc/sys/kernel/random/boot_id',
-  kmsgPath = '/dev/kmsg',
+  kernelLog: KernelLog = HOST_KERNEL_LOG,
 ): KernelOopsWatch {
   const seen: { clear: boolean; oopsedAt: number | null } = { clear: false, oopsedAt: null };
 
@@ -99,7 +111,13 @@ export function createKernelOopsWatch(
       return boot.id;
     },
     findOopsOwners: (listOwners) => {
-      const threads = readKmsgOopsThreads(kmsgPath);
+      // the log names a thread by its id on the host; inside a container's
+      // PID namespace the sampler's ids are other numbers, which may collide
+      if (!isHostPidNamespace(kernelLog.pidNamespacePath)) {
+        return null;
+      }
+
+      const threads = readKmsgOopsThreads(kernelLog.kmsgPath);
 
       if (threads === null) {
         return null;
@@ -152,6 +170,17 @@ function readBootId(path: string): string | null {
   }
 
   return /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/v.test(text) ? text : null;
+}
+
+// the kernel's fixed inode for its first PID namespace, the host's
+const HOST_PID_NAMESPACE = 'pid:[4026531836]';
+
+function isHostPidNamespace(path: string): boolean {
+  try {
+    return readlinkSync(path) === HOST_PID_NAMESPACE;
+  } catch {
+    return false;
+  }
 }
 
 // the most a kmsg record holds is about 1 KiB of text and its dictionary

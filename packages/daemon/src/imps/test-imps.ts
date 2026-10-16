@@ -175,12 +175,13 @@ export interface ImpTestOptions {
   readonly createStorage?: (dataDir: string) => StorageBackend;
 
   // files that stand for /proc/sys/kernel/tainted, read on the harness's
-  // clock, /proc/sys/kernel/random/boot_id and /dev/kmsg; the kernel never
-  // oopses without them
+  // clock, /proc/sys/kernel/random/boot_id, /dev/kmsg and /proc/self/ns/pid;
+  // the kernel never oopses without them
   readonly kernelFiles?: {
     readonly taintPath: string;
     readonly bootIdPath: string;
     readonly kmsgPath: string;
+    readonly pidNamespacePath: string;
   };
 
   // a dir that stands for /proc, where the sampler reads each VM's threads
@@ -398,7 +399,10 @@ export async function createImpTest(
               options.kernelFiles.taintPath,
               readClock,
               options.kernelFiles.bootIdPath,
-              options.kernelFiles.kmsgPath,
+              {
+                kmsgPath: options.kernelFiles.kmsgPath,
+                pidNamespacePath: options.kernelFiles.pidNamespacePath,
+              },
             ),
       readThreadIds: (pid) =>
         options.procRoot === undefined ? null : readThreadIds(pid, options.procRoot),

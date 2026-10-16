@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createKernelOopsWatch } from './kernel-oops-watch';
@@ -12,11 +12,13 @@ function setupTest() {
   });
 
   // where the test writes the kernel's taint mask, as /proc/sys/kernel/tainted,
-  // its boot id, as /proc/sys/kernel/random/boot_id, and its log, as /dev/kmsg
+  // its boot id, as /proc/sys/kernel/random/boot_id, its log, as /dev/kmsg,
+  // and impd's PID namespace, as /proc/self/ns/pid
   return {
     taintPath: join(dir, 'tainted'),
     bootIdPath: join(dir, 'boot_id'),
     kmsgPath: join(dir, 'kmsg'),
+    pidNamespacePath: join(dir, 'pid'),
   };
 }
 
@@ -243,7 +245,12 @@ test('it finds the imp whose Firecracker owned the thread an oops killed', () =>
     ].join('\n'),
   );
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toStrictEqual(
     new Set(['a']),
@@ -262,7 +269,12 @@ test('it reads the task line of a kernel that puts the UID before the PID', () =
     ].join('\n'),
   );
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toStrictEqual(
     new Set(['a']),
@@ -283,7 +295,12 @@ test('it finds the owners of each oops since boot', () => {
     ].join('\n'),
   );
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(
     watch.findOopsOwners(
@@ -312,7 +329,12 @@ test('it reads past the dictionary lines under a record and a warning before the
     ].join('\n'),
   );
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(
     watch.findOopsOwners(
@@ -337,14 +359,25 @@ test('it finds no owners for an oops that killed a thread no VM owned', () => {
     ].join('\n'),
   );
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toBeNull();
 });
 
 test('it finds no owners when it cannot read the kernel log', () => {
   const ctx = setupTest();
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(watch.findOopsOwners(() => ['a'])).toBeNull();
 });
@@ -362,7 +395,12 @@ test('it finds no owners when the kernel log has dropped the first oops', () => 
     ].join('\n'),
   );
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(watch.findOopsOwners((thread) => (thread === 5151 ? ['b'] : []))).toBeNull();
 });
@@ -371,8 +409,12 @@ test('it finds no owners for an oops whose task line the log has lost', () => {
   const ctx = setupTest();
 
   writeFileSync(ctx.kmsgPath, '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI\n');
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   expect(watch.findOopsOwners(() => ['a'])).toBeNull();
 });
@@ -389,9 +431,37 @@ test('it keeps the owners it first found for an oops after their VM leaves the s
     ].join('\n'),
   );
 
-  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
 
   watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []));
 
   expect(watch.findOopsOwners(() => [])).toStrictEqual(new Set(['a']));
+});
+
+test('it finds no owners when impd runs outside the host PID namespace', () => {
+  const ctx = setupTest();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  // a container's namespace: the log's 4242 is another thread there
+  symlinkSync('pid:[4026532109]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
+
+  expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toBeNull();
 });

@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invariant } from '@impz/test-utils/invariant';
@@ -27,9 +27,13 @@ async function setupTest(options: ImpTestOptions = {}) {
   const bootIdPath = join(taintDir, 'boot_id');
   const kmsgPath = join(taintDir, 'kmsg');
   const procRoot = join(taintDir, 'proc');
+  const pidNamespacePath = join(taintDir, 'pid');
+
+  // impd runs in the host's PID namespace, where the log's thread ids are the sampler's
+  symlinkSync('pid:[4026531836]', pidNamespacePath);
 
   const harness = await createImpTest(stack, {
-    kernelFiles: { taintPath, bootIdPath, kmsgPath },
+    kernelFiles: { taintPath, bootIdPath, kmsgPath, pidNamespacePath },
     procRoot,
     ...options,
   });
