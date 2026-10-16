@@ -1,6 +1,6 @@
 {
   "name": "impz",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "private": true,
   "description": "Persistent Linux microVMs that sleep when idle and wake on request",
   "license": "MIT",
