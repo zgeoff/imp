@@ -61,6 +61,9 @@ interface Comparison {
   // the `$ref` pairs already under comparison, which a recursive schema meets again
   readonly seen: ReadonlySet<string>;
 
+  // a reader that names its fields, so an optional property must stay too
+  readonly hasStableFields: boolean;
+
   // the discriminator of the unions at a path, found from both sides' options
   readonly unionTags?: { readonly path: string; readonly keys: readonly string[] };
 }
@@ -87,7 +90,7 @@ export function collectJsonOutputChanges(base: JsonOutputSchema, head: JsonOutpu
       return [`${label}: removed`];
     }
 
-    return collectSchemaChanges(label, 'toClient', before.schema, after.schema);
+    return collectSchemaChanges(label, 'toClient', before.schema, after.schema, true);
   });
 }
 
@@ -181,9 +184,17 @@ function collectSchemaChanges(
   direction: MessageDirection,
   before: Schema,
   after: Schema,
+  hasStableFields = false,
 ): string[] {
   const [narrow, wide] = direction === 'toServer' ? [before, after] : [after, before];
-  const comparison = { direction, narrowRoot: narrow, wideRoot: wide, seen: new Set<string>() };
+
+  const comparison = {
+    direction,
+    narrowRoot: narrow,
+    wideRoot: wide,
+    seen: new Set<string>(),
+    hasStableFields,
+  };
 
   return collectChanges(narrow, wide, '', comparison).map((change) => `${label}${change}`);
 }
@@ -1067,9 +1078,17 @@ function collectPropertyChanges(
     return comparison.direction === 'toServer' ? [formatChange(`${path}.${key}`, 'removed')] : [];
   });
 
+  // an optional property that head's output drops, for a reader that names it
+  const dropped = comparison.hasStableFields
+    ? Object.keys(wideProperties)
+        .filter((key) => !(key in narrowProperties) && !wideRequired.includes(key))
+        .map((key) => formatChange(`${path}.${key}`, 'removed'))
+    : [];
+
   return [
     ...required,
     ...properties,
+    ...dropped,
     ...collectRecordChanges(narrowExtra, wideExtra, path, comparison),
     ...collectKeyChanges(narrow, wide, path, comparison),
   ];

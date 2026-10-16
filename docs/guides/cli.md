@@ -87,4 +87,5 @@ check fails a pull request that removes or renames such a field, or drops a comm
 unless the change is marked to ship as a new major
 ([breaking changes](../runbooks/releasing.md#breaking-changes)). A command prints the answer of the
 impd it talks to, so a newer impd can add fields that the schema does not hold, and a reader passes
-over a field it does not know. The `--json` output of any other command can change in any release.
+over a field it does not know. The `--json` output of any other command or mode, such as
+`impz ls --all --json`, can change in any release.

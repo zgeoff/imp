@@ -69,6 +69,128 @@ test('#collectJsonOutputChanges reports a field that a command’s output rename
   ]);
 });
 
+test('#collectJsonOutputChanges reports an optional field that a command’s output drops', () => {
+  const base = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { version: { type: 'string' }, ramSleepingMib: { type: 'integer' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const head = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { version: { type: 'string' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual([
+    'impz info --json .ramSleepingMib: removed',
+  ]);
+});
+
+test('#collectJsonOutputChanges reports an optional field that a command’s output renames', () => {
+  const base = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: {
+            storage: {
+              type: 'object',
+              properties: { usedBytes: { type: 'integer' }, isLow: { type: 'boolean' } },
+              required: ['usedBytes'],
+              additionalProperties: false,
+            },
+          },
+          required: ['storage'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const head = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: {
+            storage: {
+              type: 'object',
+              properties: { usedBytes: { type: 'integer' }, isFull: { type: 'boolean' } },
+              required: ['usedBytes'],
+              additionalProperties: false,
+            },
+          },
+          required: ['storage'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual([
+    'impz info --json .storage.isLow: removed',
+  ]);
+});
+
+test('#collectBreakingChanges passes an optional output field that a procedure drops', () => {
+  const base = {
+    procedures: {
+      'system.info': {
+        input: { type: 'object' },
+        output: {
+          type: 'object',
+          properties: { version: { type: 'string' }, ramSleepingMib: { type: 'integer' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'system.info': {
+        input: { type: 'object' },
+        output: {
+          type: 'object',
+          properties: { version: { type: 'string' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([]);
+});
+
 test('#collectJsonOutputChanges passes a field that a command’s output adds', () => {
   const base = {
     outputs: {
