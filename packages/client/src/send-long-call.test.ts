@@ -253,7 +253,7 @@ test('#backups.run ends when its caller aborts in a runtime without AbortSignal.
   await expect(ctx.origin.longGone).toResolve();
 });
 
-test('#backups.run throws the error of a transport that throws at once, and stops its deadline', () => {
+test('#backups.run throws the error of a transport that throws at once, and stops its deadline', async () => {
   const clock = buildStubClock();
 
   const client = createImpClient({
@@ -265,9 +265,16 @@ test('#backups.run throws the error of a transport that throws at once, and stop
     },
   });
 
-  const call = client.backups.run();
+  const [settled] = await Promise.allSettled([client.backups.run()]);
 
-  expect(call).rejects.toThrowWithMessage(Error, 'no transport');
+  if (settled?.status !== 'rejected') {
+    throw new Error('the call did not reject');
+  }
+
+  const reason: unknown = settled.reason;
+
+  expect(reason).toMatchObject({ message: 'no transport' });
+  expect(clock.delays).toStrictEqual([86_400_000]);
   expect(clock.countPending()).toBe(0);
 });
 
