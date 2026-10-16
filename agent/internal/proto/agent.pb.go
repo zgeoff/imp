@@ -90,7 +90,7 @@ type Request struct {
 	// agent.accept: the listener a CONNECTION frame came on.
 	Listener *string `protobuf:"bytes,17,opt,name=listener,proto3,oneof" json:"listener,omitempty"`
 	// agent.accept: the id the CONNECTION frame named.
-	Connection *uint32 `protobuf:"varint,18,opt,name=connection,proto3,oneof" json:"connection,omitempty"`
+	Connection *uint32 `protobuf:"varint,118,opt,name=connection,proto3,oneof" json:"connection,omitempty"`
 	// grow: the disk's new size in bytes.
 	DiskBytes *float64 `protobuf:"fixed64,19,opt,name=disk_bytes,json=diskBytes,proto3,oneof" json:"disk_bytes,omitempty"`
 	// claim: the values a cold boot reads from the kernel cmdline, and more.
@@ -2179,7 +2179,7 @@ const file_imp_agent_v1_agent_proto_rawDesc = "" +
 	"\aaddress\x18\x10 \x01(\tH\vR\aaddress\x88\x01\x01\x12\x1f\n" +
 	"\blistener\x18\x11 \x01(\tH\fR\blistener\x88\x01\x01\x12#\n" +
 	"\n" +
-	"connection\x18\x12 \x01(\rH\rR\n" +
+	"connection\x18v \x01(\rH\rR\n" +
 	"connection\x88\x01\x01\x12\"\n" +
 	"\n" +
 	"disk_bytes\x18\x13 \x01(\x01H\x0eR\tdiskBytes\x88\x01\x01\x12)\n" +
