@@ -193,13 +193,27 @@ const KMSG_READ_BYTES = 16_384;
 // "Oops: 0000 [#1] SMP", arm64's "Internal error: Oops: 0000000096000004 [#1] SMP"
 const OOPS_HEADER = /: [\da-f]{4,16} \[#(?<oops>\d+)\]/v;
 
-// the task line of the oops's register dump; the PID is the thread's id, and
-// kernels from 6.12 put the UID before it
+// the task line of a register dump or stack dump; the PID is the thread's
+// id, and kernels from 6.12 put the UID before it
 const OOPS_TASK = /^CPU: \d+ (?:UID: \d+ )?PID: (?<thread>\d+) Comm: /v;
 
+// what arm64 prints between an oops's header and its task line
+const OOPS_MODULES = /^Modules linked in:/v;
+
+// a warning's first lines; it ends, as an oops does, with an end marker
+const WARNING_START = /^(?:-+\[ cut here \]-+$|WARNING: )/v;
+const REPORT_END = /^---\[ end trace /v;
+
+// what the parse knows of the oops it is in
+interface OpenOops {
+  readonly number: number;
+  thread: number | null;
+  isTied: boolean;
+}
+
 // Each oops since boot and the thread it killed, from the kernel log. Null
-// unless the log still holds every oops from the first, each with its task
-// line: the kernel drops its oldest records once the log is full.
+// unless the log still holds every oops from the first, each tied to its
+// task line: the kernel drops its oldest records once the log is full.
 function readKmsgOopsThreads(
   path: string,
   readChunk: (fd: number, buffer: Buffer) => number,
@@ -212,25 +226,61 @@ function readKmsgOopsThreads(
 
   const threads = new Map<number, number | null>();
 
-  let oops: number | null = null;
+  // another CPU's report can print between an oops's lines, so a task line
+  // is the oops's only when it comes first, with no other report around it
+  let open: OpenOops | null = null;
+  let isWarningOpen = false;
+
+  // records the open oops's thread, or none when no task line ties to it
+  const writeOpenOops = (): void => {
+    if (open !== null) {
+      const tied = open.isTied ? open.thread : null;
+
+      threads.set(open.number, tied);
+
+      open = null;
+    }
+  };
 
   for (const message of messages) {
     const header = OOPS_HEADER.exec(message)?.groups?.['oops'];
-
-    if (header !== undefined) {
-      oops = Number(header);
-
-      threads.set(oops, null);
-      continue;
-    }
-
     const thread = OOPS_TASK.exec(message)?.groups?.['thread'];
 
-    // the first task line after the header is the oops's own
-    if (oops !== null && thread !== undefined && threads.get(oops) === null) {
-      threads.set(oops, Number(thread));
+    if (header !== undefined) {
+      // an oops cut short by another one ties to nothing
+      if (open !== null) {
+        open.isTied = false;
+      }
+
+      writeOpenOops();
+
+      open = { number: Number(header), thread: null, isTied: !isWarningOpen };
+
+      threads.set(open.number, null);
+    } else if (REPORT_END.test(message)) {
+      isWarningOpen = false;
+
+      writeOpenOops();
+    } else if (WARNING_START.test(message)) {
+      isWarningOpen = true;
+
+      if (open !== null) {
+        open.isTied = false;
+      }
+    } else if (open !== null && thread !== undefined) {
+      // a second task line belongs to another report, which makes the
+      // first one uncertain too
+      if (open.thread === null) {
+        open.thread = Number(thread);
+      } else {
+        open.isTied = false;
+      }
+    } else if (open?.thread === null && !OOPS_MODULES.test(message)) {
+      open.isTied = false;
     }
   }
+
+  writeOpenOops();
 
   const found = new Map<number, number>();
 
