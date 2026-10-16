@@ -177,6 +177,10 @@ impz token new nixie --scope manage --imps 'nixie-*' --image-ref-prefix ghcr.io/
 impz token set nixie --image-ref-prefix ''   # take the permission away
 ```
 
+nixie's own docs define the names it gives its imps, images and secrets, and why its token takes the
+pattern `nixie-*` and its sandbox images stay publicly pullable:
+[nixie's names in impd](https://github.com/zgeoff/nixie/blob/main/docs/architecture/deployment/impd-names.md).
+
 The token adds an image only when all of these hold, and each other add is `FORBIDDEN`:
 
 - The image's name is within its patterns, so `nixie-sandbox` and never `base`. The call must name
