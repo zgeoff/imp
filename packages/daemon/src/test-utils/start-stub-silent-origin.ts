@@ -1,7 +1,20 @@
-// A silent HTTP origin on loopback: `/control` waits until its client gives
-// up, and any other path until then, so its "the long answer" outlasts the
-// client's idle limit that the control's end proves expired.
-export function startStubSilentOrigin(stack: AsyncDisposableStack) {
+interface SilentOriginOptions {
+  // the control's path; `/control` by default
+  readonly controlPath?: string;
+
+  // what another path answers; the text "the long answer" by default
+  readonly answer?: () => Response;
+}
+
+// A silent HTTP origin on loopback: the control waits until its client gives
+// up, and any other path until then, so its answer outlasts the client's idle
+// limit that the control's end proves expired.
+export function startStubSilentOrigin(
+  stack: AsyncDisposableStack,
+  options: Readonly<SilentOriginOptions> = {},
+) {
+  const controlPath = options.controlPath ?? '/control';
+  const answerLong = options.answer ?? (() => new Response('the long answer'));
   const controlGone = Promise.withResolvers<void>();
   const longGone = Promise.withResolvers<void>();
   const controlHeld = Promise.withResolvers<void>();
@@ -16,10 +29,9 @@ export function startStubSilentOrigin(stack: AsyncDisposableStack) {
     fetch: async (request) => {
       await request.text();
 
-      const isControl = new URL(request.url).pathname === '/control';
+      const isControl = new URL(request.url).pathname === controlPath;
       const gone = isControl ? controlGone : longGone;
       const held = isControl ? controlHeld : longHeld;
-      const answer = isControl ? 'too late' : 'the long answer';
 
       held.resolve();
 
@@ -29,7 +41,7 @@ export function startStubSilentOrigin(stack: AsyncDisposableStack) {
 
       await controlGone.promise;
 
-      return new Response(answer);
+      return isControl ? new Response('too late') : answerLong();
     },
   });
 

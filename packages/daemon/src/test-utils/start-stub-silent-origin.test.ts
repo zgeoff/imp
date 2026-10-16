@@ -37,6 +37,36 @@ test('it answers the long path once the control’s client has given up', async 
   expect(text).toBe('the long answer');
 });
 
+test('it holds the control path it is given, and answers another path with its answer', async () => {
+  const ctx = setupTest();
+
+  const origin = startStubSilentOrigin(ctx.stack, {
+    controlPath: '/rpc/imps/list',
+    answer: () => Response.json({ json: { ok: true } }),
+  });
+
+  const control = new AbortController();
+
+  const controlCall = fetch(`${origin.origin}/rpc/imps/list`, {
+    method: 'POST',
+    body: '{}',
+    signal: control.signal,
+  });
+
+  const longCall = fetch(`${origin.origin}/rpc/backups/run`, { method: 'POST', body: '{}' });
+
+  await Promise.all([origin.controlHeld, origin.longHeld]);
+
+  control.abort();
+
+  await Promise.allSettled([controlCall]);
+
+  const response = await longCall;
+  const answer: unknown = await response.json();
+
+  expect(answer).toStrictEqual({ json: { ok: true } });
+});
+
 test('it marks the long path gone when its client gives up', async () => {
   const ctx = setupTest();
   const origin = startStubSilentOrigin(ctx.stack);
