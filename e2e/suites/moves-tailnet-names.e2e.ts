@@ -40,9 +40,9 @@ async function setupTest() {
 // collection-time gate: Bun 1.4.2's skipIf takes a boolean and has no in-body skip
 const tailscaleStatus = await readLocalTailscaleStatus();
 
-// the tailnet name handover waits for the Tailscale Services OAuth client of
-// #30 (op://cloud/imp-tailscale-oauth); set IMP_E2E_TAILNET_NAMES=1 once it
-// exists
+// the tailnet name handover needs the Tailscale Services OAuth client of #30
+// (op://imp-e2e/imp-e2e-tailscale-services); set IMP_E2E_TAILNET_NAMES=1 when
+// 1Password holds it
 const tailnetNamesMissing =
   !isTailnetReady(tailscaleStatus, hasTailscaleE2EKey()) ||
   process.env['IMP_E2E_TAILNET_NAMES'] !== '1';

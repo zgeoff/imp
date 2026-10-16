@@ -218,23 +218,26 @@ other secret in it is never printed. It takes `TAILSCALE_AUTHKEY` from the first
 1. `TAILSCALE_AUTHKEY` in your environment.
 2. `op read "$IMP_TAILSCALE_AUTHKEY_REF"`, only when `IMP_TAILSCALE_OP=1`, the 1Password CLI is on
    `PATH` and the read works, so other worktrees' dev instances stay off the tailnet. The reference
-   defaults to `op://cloud/imp-tailscale-authkey/credential`, a `tag:imp` key. The read gets 20
-   seconds, so a locked 1Password app cannot hang a run. A failed read stays quiet, falls through,
-   and sets `IMP_TAILSCALE_OP_MISSED=1`, so the rest of the run (a reboot, the e2e harness's later
-   steps) skips `op`.
+   defaults to `op://imp-e2e/imp-e2e-tailscale-oauth/client-secret`, the OAuth client of
+   `tag:imp-e2e`. A client secret (`tskey-client-`) joins ephemeral and preauthorized, as
+   `IMP_TAILSCALE_TAGS` or else `tag:imp-e2e`, so the instance reaches no live impd. The read gets
+   20 seconds, so a locked 1Password app cannot hang a run. A failed read stays quiet, falls
+   through, and sets `IMP_TAILSCALE_OP_MISSED=1`, so the rest of the run (a reboot, the e2e
+   harness's later steps) skips `op`.
 3. `TAILSCALE_AUTHKEY` in `.env`.
 
 With none of them, the dev instance stays off the tailnet. The key reaches Docker as
 `-e TAILSCALE_AUTHKEY` with no value, so it never shows in argv, and `bash -x` traces never show it.
 `load_tailscale_authkey` in `scripts/lib.sh` holds the order.
 
-The e2e harness never uses that key: a `tag:imp` node reaches a live impd. When a run includes the
-`tailscale` or `moves-tailnet` suite, `load_tailscale_e2e_authkey` reads the OAuth client of
-`tag:imp-e2e`, from `IMP_E2E_TAILSCALE_AUTHKEY` or else `op read "$IMP_E2E_TAILSCALE_OAUTH_REF"`
-(default `op://imp-e2e/imp-e2e-tailscale-oauth/client-secret`). The harness passes the secret to
-`dev.sh` as `TAILSCALE_AUTHKEY`, with `?ephemeral=true&preauthorized=true`, and
-`IMP_TAILSCALE_TAGS=tag:imp-e2e`. The tailnet policy lets `tag:imp-e2e` nodes reach each other on
-tcp 7070 and nothing else. Every other e2e run sets `IMP_DEV_TAILNET=0`.
+The e2e harness never uses a key from your environment or `.env`, because a `tag:imp` key there
+reaches a live impd. When a run includes the `tailscale` or `moves-tailnet` suite,
+`load_tailscale_e2e_authkey` reads the OAuth client of `tag:imp-e2e`, from
+`IMP_E2E_TAILSCALE_AUTHKEY` or else `op read "$IMP_E2E_TAILSCALE_OAUTH_REF"` (default
+`op://imp-e2e/imp-e2e-tailscale-oauth/client-secret`). The harness passes the secret to `dev.sh` as
+`TAILSCALE_AUTHKEY`, with `?ephemeral=true&preauthorized=true`, and
+`IMP_TAILSCALE_TAGS=tag:imp-e2e`. Every other e2e run sets `IMP_DEV_TAILNET=0`.
+[The e2e tailnet tag](../runbooks/e2e-tailnet.md) covers what impz relies on in the tailnet policy.
 
 `dev.sh` sets `IMP_UPLINK_MTU` from this machine's default route, unless it is set.
 

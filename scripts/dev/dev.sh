@@ -51,8 +51,9 @@
 #      IMP_TAILNET_NAME_PREFIX; the OAuth client comes from 1Password
 #      (write_tailnet_oauth_file in scripts/lib.sh) into <IMP_DEV_DATA>.
 #      TAILSCALE_AUTHKEY comes from the env, else 1Password
-#      (IMP_TAILSCALE_AUTHKEY_REF, default op://cloud/imp-tailscale-authkey/credential),
-#      else .env; see load_tailscale_authkey in scripts/lib.sh.
+#      (IMP_TAILSCALE_AUTHKEY_REF, default impz's tag:imp-e2e client
+#      op://imp-e2e/imp-e2e-tailscale-oauth/client-secret), else .env; see
+#      load_tailscale_authkey in scripts/lib.sh.
 #      IMP_DEV_NETWORK puts the container on that Docker network, and IMP_E2E=1
 #      lets impd use the challtestsrv DNS provider (the e2e harness's Pebble).
 #      IMP_DEV_IP gives the container that address on IMP_DEV_NETWORK.
