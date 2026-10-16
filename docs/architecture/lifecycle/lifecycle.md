@@ -26,6 +26,7 @@ stateDiagram-v2
   sleeping --> stopped
   sleeping --> error
   stopped --> running
+  stopped --> sleeping
   stopped --> error
   error --> running
   error --> stopped
@@ -35,10 +36,12 @@ A create writes the imp's row as `creating`, clones its disk from the image and 
 that asks for no start, such as a move's received copy or a restored backup, goes to `stopped` once
 its disk is ready. That move belongs to the create alone, so a stop refuses an imp that is still
 `creating`. A create that the governor turns away deletes the row again, so a refused create leaves
-nothing behind. `running` means a VM is up and its agent answered. `sleeping` means the VM is gone
-and a committed memory snapshot is on disk. `stopped` means there is neither, and the next use boots
-the disk cold. `error` holds an imp whose create or boot failed in a way impd could not undo, and a
-start or a stop leaves it.
+nothing behind. A warm move's commit takes its received copy from `stopped` to `sleeping`, onto the
+memory it brought. The table opens that edge to the commit alone, so a sleep refuses a stopped imp.
+`running` means a VM is up and its agent answered. `sleeping` means the VM is gone and a committed
+memory snapshot is on disk. `stopped` means there is neither, and the next use boots the disk cold.
+`error` holds an imp whose create or boot failed in a way impd could not undo, and a start or a stop
+leaves it.
 
 Anything that needs a VM wakes a sleeping imp and boots a stopped one: an exec, a console, a proxied
 request, an SSH login, a tunnel, a service change, a checkpoint and a lease. A stop frees the imp's
@@ -56,7 +59,8 @@ holds it.
 
 One state change runs outside the lock: a liveness repair. A read that finds an imp's VM dead, or
 its snapshot lost, marks it stopped with a conditional update, and skips the repair while the imp's
-lock is taken, so it never hides a VM that a start under the lock just booted.
+lock is taken, so it never hides a VM that a start under the lock just booted. The conditional
+update goes through the same state write and checks the same table.
 
 The repair also records why the VM died, when impd can tell. A VM that its memory limit killed is
 named as such. A VM lost after a kernel oops is named as an oops and kept off its disk until the

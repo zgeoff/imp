@@ -6,7 +6,12 @@ import { isAgentError } from '../agent-client/is-agent-error';
 import { sendServicesList } from '../agent-client/service-requests';
 import { buildAgentOutdatedApiError, buildRebootNeededError } from '../api-errors';
 import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold-boots';
-import { removeIdentityReset, updateImpActivity, updateImpDisk } from '../db/imps';
+import {
+  claimTrustPending,
+  removeIdentityReset,
+  updateImpActivity,
+  updateImpDisk,
+} from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { shrinkGuest } from '../memory/shrink-guest';
 import { createSemaphore } from '../process/semaphore';
@@ -608,12 +613,31 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     // loading record, whose live VM the next reconcile adopts
     removeSnapshotMeta(paths);
 
-    if (!running.isDiskGrowPending) {
-      return running;
+    const trusted = running.isTrustPending ? await applyPendingTrust(running, paths) : running;
+
+    if (!trusted.isDiskGrowPending) {
+      return trusted;
     }
 
     // the disk grew while it slept: a failed grow stays pending, the wake stands
-    return growGuestDisk(running).catch(() => running);
+    return growGuestDisk(trusted).catch(() => trusted);
+  };
+
+  // A warm move's first wake installs this host's broker CA at once: until
+  // then the guest trusts the source's (docs/architecture/storage/moves.md).
+  // A failed install fails no wake; the first exec installs it then.
+  const applyPendingTrust = async (imp: LockedImp, paths: ImpPaths): Promise<LockedImp> => {
+    try {
+      if (!(await claimTrustPending(context.db, imp.id))) {
+        return imp;
+      }
+
+      await context.readExecEnv(imp, paths.vsockSocket);
+    } catch (error) {
+      context.log(`impd: ${imp.name}: broker CA after the wake: ${readErrorMessage(error)}`);
+    }
+
+    return toLockedImp(imp, { ...imp, isTrustPending: false });
   };
 
   const removeLockedIdentityReset = async (imp: LockedImp): Promise<LockedImp> => {

@@ -1,10 +1,6 @@
 import type { WarmHost } from '@impz/api';
 import { ORPCError } from '@orpc/server';
-import type { Broker } from '../broker/broker-service';
 import type { Config } from '../config';
-import { claimTrustPending } from '../db/imps';
-import type { ImpRecord } from '../db/imps';
-import { readErrorMessage } from '../read-error-message';
 import { createMoveReceiver } from './move-receiver';
 import type { MoveReceiver, MoveReceiverDeps } from './move-receiver';
 import { createMoveSender } from './move-sender';
@@ -32,10 +28,7 @@ export interface MoveServiceDeps
   readonly storage: MoveSenderDeps['storage'] & MoveReceiverDeps['storage'];
   readonly imps: MoveSenderDeps['imps'] & MoveReceiverDeps['imps'];
 
-  // and, for a warm-moved imp's first wake, the broker's CA install
-  readonly grants: MoveSenderDeps['grants'] &
-    MoveReceiverDeps['grants'] &
-    Pick<Broker, 'readExecEnv'>;
+  readonly grants: MoveSenderDeps['grants'] & MoveReceiverDeps['grants'];
   readonly egress: MoveSenderDeps['egress'] & MoveReceiverDeps['egress'];
 
   // the tailnet IP, for a peer URL when IMP_PEER_URL is unset
@@ -77,27 +70,6 @@ export function createMoveService(deps: MoveServiceDeps): MoveService {
 
   const sender = createMoveSender({ ...deps, ranges, readWarmHost: readWarm });
   const receiver = createMoveReceiver({ ...deps, ranges, readPeerUrl, readWarmHost: readWarm });
-
-  // The first wake after a warm move installs this host's broker CA in the
-  // guest at once, not at its first exec: until then the guest trusts the
-  // source's (docs/architecture/storage/moves.md#warm-moves)
-  const applyPendingTrust = async (imp: ImpRecord): Promise<void> => {
-    try {
-      const isPending = await claimTrustPending(deps.db, imp.id);
-
-      if (isPending) {
-        await deps.grants.readExecEnv(imp, deps.storage.resolveImpPaths(imp.id).vsockSocket);
-      }
-    } catch (error) {
-      deps.log(`impd: move: ${imp.name}: broker CA after the wake: ${readErrorMessage(error)}`);
-    }
-  };
-
-  deps.db.writes.subscribe((write) => {
-    if (write.kind === 'changed' && write.reason === 'woke' && write.imp.isTrustPending) {
-      void applyPendingTrust(write.imp);
-    }
-  });
 
   return {
     ...sender,

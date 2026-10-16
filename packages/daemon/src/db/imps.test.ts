@@ -27,7 +27,6 @@ import {
   updateImpDisk,
   updateImpSettings,
   updateImpState,
-  updateImpStateIf,
 } from './imps';
 
 test('#createImp returns a creating imp with the defaults for what it leaves out', async () => {
@@ -636,7 +635,15 @@ test('#updateImpState keeps the awake span of a running imp marked running again
   expect(adopted.awakeSince).toStrictEqual(new Date(awakeSince));
 });
 
-test('#updateImpStateIf adds no awake time when a repair ends the span before its start', async () => {
+test('#updateImpState throws for an imp that is not there', async () => {
+  const ctx = await createTestDatabase();
+
+  expect(
+    updateImpState(ctx.db, 'imp-missing', { reason: 'stopped', state: 'stopped' }),
+  ).rejects.toThrow();
+});
+
+test('#updateImpState adds no awake time when a repair ends the span before its start', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
@@ -649,68 +656,102 @@ test('#updateImpStateIf adds no awake time when a repair ends the span before it
 
   invariant(running.awakeSince);
 
-  const repaired = await updateImpStateIf(
+  const repaired = await updateImpState(
     ctx.db,
     imp.id,
-    { state: 'running', pid: 42 },
     {
       reason: 'repaired',
       state: 'stopped',
       pid: null,
       awakeUntil: new Date(running.awakeSince.getTime() - 5000),
     },
+    { state: 'running', pid: 42 },
   );
 
   expect(repaired?.awakeMs).toBe(running.awakeMs);
 });
 
-test('#updateImpStateIf leaves a row whose pid changed first', async () => {
+test('#updateImpState leaves an expected row whose pid changed first', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
   await updateImpState(ctx.db, imp.id, { reason: 'booted', state: 'running', pid: 42 });
 
-  const stale = await updateImpStateIf(
+  const stale = await updateImpState(
     ctx.db,
     imp.id,
-    { state: 'running', pid: 41 },
     { reason: 'stopped', state: 'stopped', pid: null },
+    { state: 'running', pid: 41 },
   );
 
   expect(stale).toBeUndefined();
 });
 
-test('#updateImpStateIf applies the change while the row matches', async () => {
+test('#updateImpState applies the change while the row matches what it expects', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
   await updateImpState(ctx.db, imp.id, { reason: 'booted', state: 'running', pid: 42 });
 
-  const fresh = await updateImpStateIf(
+  const fresh = await updateImpState(
     ctx.db,
     imp.id,
-    { state: 'running', pid: 42 },
     { reason: 'stopped', state: 'stopped', pid: null },
+    { state: 'running', pid: 42 },
   );
 
   expect(fresh).toMatchObject({ state: 'stopped', pid: null });
 });
 
-test('#updateImpStateIf matches a row with no pid', async () => {
+test('#updateImpState matches an expected row with no pid', async () => {
   const ctx = await createTestDatabase();
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
-  const stopped = await updateImpStateIf(
+  const stopped = await updateImpState(
     ctx.db,
     imp.id,
-    { state: 'creating', pid: null },
     { reason: 'stopped', state: 'stopped' },
+    { state: 'creating', pid: null },
   );
 
   expect(stopped?.state).toBe('stopped');
+});
+
+test('#updateImpState keeps the firecracker version a compare-and-set write carries', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await updateImpState(ctx.db, imp.id, { reason: 'stopped', state: 'stopped' });
+
+  const running = await updateImpState(
+    ctx.db,
+    imp.id,
+    { reason: 'booted', state: 'running', pid: 42, firecrackerVersion: 'v1.18.2' },
+    { state: 'stopped', pid: null },
+  );
+
+  expect(running?.firecrackerVersion).toBe('v1.18.2');
+});
+
+test('#updateImpState refuses a compare-and-set move the lifecycle table does not list', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await updateImpState(ctx.db, imp.id, { reason: 'stopped', state: 'stopped' });
+
+  expect(
+    updateImpState(
+      ctx.db,
+      imp.id,
+      { reason: 'repaired', state: 'sleeping' },
+      { state: 'stopped', pid: null },
+    ),
+  ).rejects.toMatchObject({ code: 'INVALID_STATE' });
 });
 
 test('#updateImpActivity records when the imp was last active', async () => {
@@ -841,6 +882,9 @@ test('#updateImpCommitted leaves a warm move’s imp asleep on its memory, trust
     buildMockNewImp({ imageId: image.id, moveState: 'receiving' }),
   );
 
+  // a received copy is stopped once its disk is ready
+  await updateImpState(ctx.db, imp.id, { reason: 'stopped', state: 'stopped' });
+
   const committed = await updateImpCommitted(ctx.db, imp.id, 1_800_000_000_000, true);
 
   expect(committed).toMatchObject({
@@ -849,6 +893,39 @@ test('#updateImpCommitted leaves a warm move’s imp asleep on its memory, trust
     isTrustPending: true,
     moveState: null,
   });
+});
+
+test('#updateImpCommitted refuses a warm commit the lifecycle table does not list', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+
+  const imp = await createImp(
+    ctx.db,
+    buildMockNewImp({ imageId: image.id, moveState: 'receiving' }),
+  );
+
+  await updateImpState(ctx.db, imp.id, { reason: 'failed', state: 'error' });
+
+  expect(updateImpCommitted(ctx.db, imp.id, 1_800_000_000_000, true)).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+  });
+});
+
+test('#updateImpCommitted leaves the move mark on a warm commit it refuses', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+
+  const imp = await createImp(
+    ctx.db,
+    buildMockNewImp({ imageId: image.id, moveState: 'receiving' }),
+  );
+
+  await updateImpState(ctx.db, imp.id, { reason: 'failed', state: 'error' });
+  await updateImpCommitted(ctx.db, imp.id, 1_800_000_000_000, true).catch(() => {});
+
+  const after = await findImpById(ctx.db, imp.id);
+
+  expect(after?.moveState).toBe('receiving');
 });
 
 test('#updateImpCommitted leaves a cold move’s imp in its state', async () => {
@@ -870,6 +947,7 @@ test('#claimTrustPending claims a pending trust install', async () => {
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
+  await updateImpState(ctx.db, imp.id, { reason: 'stopped', state: 'stopped' });
   await updateImpCommitted(ctx.db, imp.id, 1_800_000_000_000, true);
 
   const isClaimed = await claimTrustPending(ctx.db, imp.id);
@@ -882,6 +960,7 @@ test('#claimTrustPending claims a pending trust install only once', async () => 
   const image = await createImage(ctx.db, buildMockNewImage());
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
 
+  await updateImpState(ctx.db, imp.id, { reason: 'stopped', state: 'stopped' });
   await updateImpCommitted(ctx.db, imp.id, 1_800_000_000_000, true);
   await claimTrustPending(ctx.db, imp.id);
 

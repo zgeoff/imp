@@ -30,6 +30,29 @@ test.each<[ImpState, ImpState]>([
   expect(canTransition(from, to)).toBeFalse();
 });
 
+test('#canTransition allows a warm move stopped to sleeping', () => {
+  expect(canTransition('stopped', 'sleeping', 'warm move')).toBeTrue();
+});
+
+test('#canTransition allows a warm move every edge open to any action', () => {
+  expect(canTransition('running', 'sleeping', 'warm move')).toBeTrue();
+});
+
+test.each<[ImpState]>([['creating'], ['error']])(
+  '#canTransition refuses a warm move %s to sleeping',
+  (from) => {
+    expect(canTransition(from, 'sleeping', 'warm move')).toBeFalse();
+  },
+);
+
+test('#findStatesLeadingTo names only running for a sleep', () => {
+  expect(findStatesLeadingTo('sleeping')).toStrictEqual(['running']);
+});
+
+test('#findStatesLeadingTo names running and stopped for a warm move to sleeping', () => {
+  expect(findStatesLeadingTo('sleeping', 'warm move')).toStrictEqual(['running', 'stopped']);
+});
+
 test('#findStatesLeadingTo names every state that can reach running', () => {
   expect(findStatesLeadingTo('running')).toStrictEqual([
     'creating',

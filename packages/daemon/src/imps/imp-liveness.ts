@@ -1,4 +1,4 @@
-import { findImpById, updateImpStateIf } from '../db/imps';
+import { findImpById, updateImpState } from '../db/imps';
 import type { ImpRecord, ImpStateChange } from '../db/imps';
 import { hasSnapshot, readLoadingMeta, readSnapshotMeta } from '../sleep/snapshot-meta';
 import type { ImpPaths } from '../storage/data-layout';
@@ -45,10 +45,9 @@ export async function checkLiveness(
       ? { ...slept, detail: { trigger }, error: trigger, oopsBootId }
       : slept;
 
-  const repaired = await updateImpStateIf(
+  const repaired = await updateImpState(
     context.db,
     imp.id,
-    { state: imp.state, pid: imp.pid },
     change ?? {
       reason: 'repaired',
       state: 'stopped',
@@ -59,6 +58,7 @@ export async function checkLiveness(
       nextBootCause: lostVm ? 'recovery' : 'wake_fallback',
       ...(trigger !== null && { detail: { trigger }, error: trigger, oopsBootId }),
     },
+    { state: imp.state, pid: imp.pid },
   );
 
   if (repaired === undefined) {
