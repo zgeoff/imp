@@ -222,7 +222,10 @@ schema from a freshly migrated database, and `bun test` fails while the committe
 After you change the agent protocol's schema, `proto/imp/agent/v1/agent.proto`, run
 `bun run gen:proto`. It lints the schema with buf, then writes the agent's Go types (with
 `protoc-gen-go` from the agent's `go.mod`, so Go must be on `PATH`), impd's TypeScript types and
-`docs/reference/agent-protocol.md`. CI runs it again and fails while the committed output differs.
+`docs/reference/agent-protocol.md`. CI runs it again and fails while the committed output differs. A
+further CI step compares the schema with main's under buf's `WIRE_JSON` rules and fails a change
+that breaks the wire format, binary or JSON, such as a changed field number or JSON name. Run the
+same check before you push with `bun x buf breaking --against '.git#branch=main'`.
 
 The property tests use fast-check. On a failure it prints the seed and the path of the shrunk case.
 Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay the case.
