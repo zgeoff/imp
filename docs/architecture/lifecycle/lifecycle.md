@@ -69,17 +69,20 @@ later never met the oops. An oops kills one thread and not its process, so a Fir
 the oops that hit it and die much later. impd therefore blames the oops only on the VM whose
 Firecracker owned the killed thread: it reads the thread's id from the oops header in the kernel log
 and matches it against the threads the resource sampler saw in each VM. It keeps that match after
-the VM leaves the sampler, so a VM lost later is judged against it. When impd cannot read the oops
-from the log, or no VM owned the thread, any VM may hold the disk, so impd blames the oops on every
-VM lost after it. Until the flag clears, impd refuses a start or a wake of that imp with an error
-that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)). The hold lives
-in the imp's record with the kernel's boot id, so it outlasts the reboot that freed the disk. At
-start impd clears every hold when it reads the flag clear, because only a reboot clears the flag. It
-also clears a hold that records another boot's id, whatever the flag reads, because an oops in
-another task between the reboot and impd's start sets the flag again without holding the imp. A read
-that fails or finds no taint mask does not prove a reboot, so a hold of this boot stays, and impd
-refuses a start or a wake of the held imp until a read finds the flag clear. A hold without a boot
-id, from an impd that did not record one or could not read it, waits for a clear read too.
+the VM leaves the sampler, so a VM lost later is judged against it. The log names the thread by its
+id in the host's PID namespace, so impd matches only when it runs in that namespace, because a
+container's thread ids are other numbers that may collide with it. When impd runs elsewhere, cannot
+read the oops from the log, or finds that no VM owned the thread, any VM may hold the disk, so impd
+blames the oops on every VM lost after it. Until the flag clears, impd refuses a start or a wake of
+that imp with an error that asks for the reboot
+([a kernel oops](../../guides/operations.md#a-kernel-oops)). The hold lives in the imp's record with
+the kernel's boot id, so it outlasts the reboot that freed the disk. At start impd clears every hold
+when it reads the flag clear, because only a reboot clears the flag. It also clears a hold that
+records another boot's id, whatever the flag reads, because an oops in another task between the
+reboot and impd's start sets the flag again without holding the imp. A read that fails or finds no
+taint mask does not prove a reboot, so a hold of this boot stays, and impd refuses a start or a wake
+of the held imp until a read finds the flag clear. A hold without a boot id, from an impd that did
+not record one or could not read it, waits for a clear read too.
 
 Background work never waits for a lock. The idle loop, the governor, the watchdog and the memory
 controller try the lock and skip the imp when anything holds it or waits for it. The governor holds
