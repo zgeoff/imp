@@ -10,7 +10,7 @@ import { checkLiveness } from './imp-liveness';
 const LOCKED = Symbol('locked');
 
 // a try that found the imp moving: it refuses as a held lock does
-const MOVING = Symbol('moving');
+const MOVING: unique symbol = Symbol('moving');
 
 // An imp record read under the imp's lifecycle lock. Only this module makes
 // one, so the VM operations that take it cannot run without the lock.
@@ -182,7 +182,7 @@ export function createImpLock(context: ImpContext): ImpLock {
       const result = await mutex.tryRunExclusive(id, () =>
         runCounted(id, () =>
           runJoined(async () => {
-            const imp = await readLocked(id, options).catch((error: unknown) => {
+            const imp = await readLocked(id, options).catch((error: unknown): typeof MOVING => {
               if (isMovingError(error)) {
                 return MOVING;
               }
@@ -190,16 +190,16 @@ export function createImpLock(context: ImpContext): ImpLock {
               throw error;
             });
 
-            return imp === MOVING ? imp : runAbout(imp, action);
+            return imp === MOVING ? MOVING : runAbout(imp, action);
           }),
         ),
       );
 
-      if (!result.ran || result.value === MOVING) {
-        return { ran: false };
+      if (!result.ran) {
+        return result;
       }
 
-      return { ran: true, value: result.value };
+      return result.value === MOVING ? { ran: false } : { ran: true, value: result.value };
     },
     isLocked: (id) => mutex.isLocked(id),
     countQueued: (id) => queued.get(id) ?? 0,
