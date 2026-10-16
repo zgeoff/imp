@@ -2,10 +2,11 @@
 
 ## [2.0.6](https://github.com/zgeoff/impz/compare/v2.0.5...v2.0.6) (2026-10-16)
 
-
 ### Bug Fixes
 
-* **geo-990:** give every long-silent call a keepalive or a deadline ([#410](https://github.com/zgeoff/impz/issues/410)) ([5e99b5c](https://github.com/zgeoff/impz/commit/5e99b5cef56a3aeaf4963ecf8ac943405ecea325))
+- **geo-990:** give every long-silent call a keepalive or a deadline
+  ([#410](https://github.com/zgeoff/impz/issues/410))
+  ([5e99b5c](https://github.com/zgeoff/impz/commit/5e99b5cef56a3aeaf4963ecf8ac943405ecea325))
 
 ## [2.0.5](https://github.com/zgeoff/impz/compare/v2.0.4...v2.0.5) (2026-10-16)
 
