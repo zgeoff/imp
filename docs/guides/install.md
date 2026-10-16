@@ -216,8 +216,10 @@ bash bootstrap.sh --yes --storage zfs --zfs-pool fast              # an existing
 - A later run without `--storage` keeps the env file's backend. The script refuses to switch
   backends, since the imps would stay behind on the old one.
 - ZFS takes no `--loop-file`.
-- The host image ships the 2.4 tools, which match Ubuntu 26.04's module. Ubuntu 24.04's module 2.2
-  has the zfs_uiomove bug, so impd refuses to start on it. Install a module with the fix, or set
+- The host image ships the 2.4 tools, which share a major version with every 2.x module. Debian 13's
+  module (2.3.9) has the zfs_uiomove fix. The stock modules of Ubuntu 24.04 (2.2.2) and Ubuntu 26.04
+  (2.4.1) are older than the fix, so impd refuses to start on them. Install a module with the fix
+  (2.3.7 or later on the 2.3 line, 2.4.2 or later on the 2.4 line), or set
   `IMP_ZFS_ALLOW_UIOMOVE_BUG=1` in the env file to start anyway
   ([the host](../architecture/host.md#what-the-host-gives)).
 
