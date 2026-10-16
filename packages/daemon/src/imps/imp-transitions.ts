@@ -3,9 +3,9 @@ import { buildInvalidStateError } from '../api-errors';
 
 // The imp lifecycle. Destroy is allowed from every state and removes the
 // record, so it is not a transition. running ↔ sleeping arrives with sleep
-// and wake.
+// and wake; creating → stopped is a create that does not start the imp.
 const TRANSITIONS: Readonly<Record<ImpState, readonly ImpState[]>> = {
-  creating: ['running', 'error'],
+  creating: ['running', 'stopped', 'error'],
   running: ['stopped', 'sleeping', 'error'],
   stopped: ['running', 'error'],
   sleeping: ['running', 'stopped', 'error'],

@@ -13,11 +13,12 @@ import {
 import type { CheckpointRecord } from '../db/checkpoints';
 import { writeNextBootCause } from '../db/cold-boots';
 import { readEgressPolicy } from '../db/egress';
-import { findImpByName, updateImpDisk, updateImpState } from '../db/imps';
+import { findImpByName, updateImpDisk } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { toLockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
+import { updateLockedImpState } from '../imps/update-locked-imp-state';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
 import type { DiskBudget } from '../storage/disk-budget';
@@ -256,7 +257,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         const ms = Math.round(performance.now() - started);
 
         // the state may be what it was, the disk is not: the stream hears of it
-        const restored = await updateImpState(deps.db, booted.id, {
+        const restored = await updateLockedImpState(deps.db, booted, {
           reason: 'restored',
           detail: { durationMs: ms, trigger: checkpoint.id },
           state: booted.state,

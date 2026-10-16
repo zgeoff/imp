@@ -3,7 +3,7 @@ import type { EgressPolicy, Imp, ImpKind } from '@impz/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
 import type { ImageRecord } from '../db/images';
-import { listImps, removeImp, updateImpDisk, updateImpSettings, updateImpState } from '../db/imps';
+import { listImps, removeImp, updateImpDisk, updateImpSettings } from '../db/imps';
 import { resolveMaxMemoryMib } from '../memory/elastic-memory';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths } from '../storage/data-layout';
@@ -253,7 +253,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           return growNewDisk();
         };
 
-        // past the lifecycle table: no stop ever leaves `creating` otherwise
+        // a create that does not start: creating → stopped, as the table lists
         if (input.start === false) {
           try {
             await setupNewDisk();
@@ -263,10 +263,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
             throw error;
           }
 
-          const stopped = await updateImpState(context.db, imp.id, {
-            reason: 'stopped',
-            state: 'stopped',
-          });
+          const stopped = await ops.updateState(imp, { reason: 'stopped', state: 'stopped' });
 
           return presenter.toApi(stopped);
         }

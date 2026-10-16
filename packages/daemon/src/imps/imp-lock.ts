@@ -1,4 +1,4 @@
-import { buildMovingError, buildNotFoundError } from '../api-errors';
+import { buildMovingError, buildNotFoundError, isMovingError } from '../api-errors';
 import { findImpById, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { createKeyedMutex } from '../process/keyed-mutex';
@@ -8,6 +8,9 @@ import type { ImpContext } from './imp-context';
 import { checkLiveness } from './imp-liveness';
 
 const LOCKED = Symbol('locked');
+
+// a try that found the imp moving: it refuses as a held lock does
+const MOVING = Symbol('moving');
 
 // An imp record read under the imp's lifecycle lock. Only this module makes
 // one, so the VM operations that take it cannot run without the lock.
@@ -30,9 +33,12 @@ export interface ImpLock {
     action: (imp: LockedImp) => Promise<T>,
     options?: WithImpOptions,
   ) => Promise<T>;
+
+  // as withImp, by id: a gone imp reaches `action` as undefined
   readonly withImpId: <T>(
     id: string,
     action: (imp: LockedImp | undefined) => Promise<T>,
+    options?: WithImpOptions,
   ) => Promise<T>;
 
   // for a new imp: `insert` writes its record under the lock it is created
@@ -43,10 +49,12 @@ export interface ImpLock {
     action: (imp: LockedImp) => Promise<T>,
   ) => Promise<T>;
 
-  // as withImpId, but only when nothing holds or waits for the lock
+  // as withImpId, but only when nothing holds or waits for the lock; a moving
+  // imp counts as held, so the try does not run
   readonly tryWithImpId: <T>(
     id: string,
     action: (imp: LockedImp | undefined) => Promise<T>,
+    options?: WithImpOptions,
   ) => Promise<TryResult<T>>;
 
   // true while a lifecycle operation runs or waits on the imp
@@ -58,6 +66,11 @@ export interface ImpLock {
 
   // resolves once no lifecycle operation runs or waits on any imp
   readonly waitForAll: () => Promise<void>;
+}
+
+// A record only the lock made: a cast cannot stand in for the lock.
+export function isLockedImp(imp: ImpRecord): imp is LockedImp {
+  return LOCKED in imp;
 }
 
 // The record an operation under the lock wrote: still under the same lock.
@@ -99,8 +112,12 @@ export function createImpLock(context: ImpContext): ImpLock {
   // operation may have storage its rows do not name yet
   const runJoined = <T>(task: () => Promise<T>) => context.storageGate.join(task);
 
-  // the lock is held: a dead VM can be marked stopped right away
-  const readLocked = async (id: string): Promise<LockedImp | undefined> => {
+  // the lock is held: a dead VM can be marked stopped right away. Every way
+  // into the lock reads here, so a moving imp reaches only its move's steps.
+  const readLocked = async (
+    id: string,
+    options: WithImpOptions,
+  ): Promise<LockedImp | undefined> => {
     const imp = await findImpById(context.db, id);
 
     if (imp === undefined) {
@@ -108,6 +125,10 @@ export function createImpLock(context: ImpContext): ImpLock {
     }
 
     const live = await checkLiveness(context, imp, true);
+
+    if (live.moveState !== null && options.isMove !== true) {
+      throw buildMovingError(live.name);
+    }
 
     return { ...live, [LOCKED]: true };
   };
@@ -129,24 +150,20 @@ export function createImpLock(context: ImpContext): ImpLock {
 
       return runExclusive(found.id, () =>
         runJoined(async () => {
-          const imp = await readLocked(found.id);
+          const imp = await readLocked(found.id, options);
 
           if (imp === undefined) {
             throw buildNotFoundError('imp', name);
-          }
-
-          if (imp.moveState !== null && options.isMove !== true) {
-            throw buildMovingError(imp.name);
           }
 
           return runAbout(imp, action);
         }),
       );
     },
-    withImpId: (id, action) =>
+    withImpId: (id, action, options = {}) =>
       runExclusive(id, () =>
         runJoined(async () => {
-          const imp = await readLocked(id);
+          const imp = await readLocked(id, options);
 
           return runAbout(imp, action);
         }),
@@ -161,16 +178,29 @@ export function createImpLock(context: ImpContext): ImpLock {
       ),
 
     // counted only once it runs: a refused try never queued
-    tryWithImpId: (id, action) =>
-      mutex.tryRunExclusive(id, () =>
+    tryWithImpId: async (id, action, options = {}) => {
+      const result = await mutex.tryRunExclusive(id, () =>
         runCounted(id, () =>
           runJoined(async () => {
-            const imp = await readLocked(id);
+            const imp = await readLocked(id, options).catch((error: unknown) => {
+              if (isMovingError(error)) {
+                return MOVING;
+              }
 
-            return runAbout(imp, action);
+              throw error;
+            });
+
+            return imp === MOVING ? imp : runAbout(imp, action);
           }),
         ),
-      ),
+      );
+
+      if (!result.ran || result.value === MOVING) {
+        return { ran: false };
+      }
+
+      return { ran: true, value: result.value };
+    },
     isLocked: (id) => mutex.isLocked(id),
     countQueued: (id) => queued.get(id) ?? 0,
     waitForAll: () => mutex.waitForAll(),

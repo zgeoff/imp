@@ -15,7 +15,12 @@ import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-
 import { isAgentError } from '../agent-client/is-agent-error';
 import { openAccept, openListener } from '../agent-client/listener-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
-import { buildBuilderError, buildInvalidStateError, isDiskFullError } from '../api-errors';
+import {
+  buildBuilderError,
+  buildInvalidStateError,
+  isDiskFullError,
+  isMovingError,
+} from '../api-errors';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import {
   findImpById,
@@ -617,9 +622,16 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       // waking or booting under its lock right now
       const imps = await listImps(context.db);
 
+      // a moving imp never runs: its move halted it before the mark
       await Promise.all(
         imps.map((imp) =>
-          lock.withImpId(imp.id, (fresh) => sleepIfRunning(fresh, 'impd is stopping')),
+          lock
+            .withImpId(imp.id, (fresh) => sleepIfRunning(fresh, 'impd is stopping'))
+            .catch((error: unknown) => {
+              if (!isMovingError(error)) {
+                throw error;
+              }
+            }),
         ),
       );
     },
@@ -673,70 +685,75 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
         context.log(`impd: removed the cgroup of imp ${impId}: no imp has that id`);
       }
 
+      // a moving imp too, as its move would: the moves recover after this
       await Promise.all(
         imps.map((listed) =>
-          lock.withImpId(listed.id, async (found) => {
-            if (found === undefined) {
-              return;
-            }
-
-            const imp = await reconciler.reconcileImp(found);
-
-            const paths = context.findPaths(imp.id);
-
-            // a loaded guest may answer late; killing it would lose its memory
-            if (imp.state === 'running') {
-              const ready = await context.vms.isAgentReady(paths);
-
-              const note = ready ? '' : ' (the agent does not answer yet)';
-              const jailed = imp.pid !== null && isJailedFirecracker(imp.pid) ? 'jailed ' : '';
-
-              context.log(
-                `impd: ${imp.name}: re-adopted ${jailed}firecracker pid ${String(imp.pid)}${note}`,
-              );
-
-              if (imp.pid !== null) {
-                await setAdoptedMemoryLimit(imp, paths);
-
-                context.cgroups.adopt(imp.id, imp.pid, imp.cpu, imp.memoryMib);
-
-                startCounting(context, imp, imp.pid);
-
-                await checkAdoptedMergeFlag(context, imp, imp.pid);
+          lock.withImpId(
+            listed.id,
+            async (found) => {
+              if (found === undefined) {
+                return;
               }
 
-              if (ready) {
-                await writeAdoptedBoot(context, imp);
+              const imp = await reconciler.reconcileImp(found);
+
+              const paths = context.findPaths(imp.id);
+
+              // a loaded guest may answer late; killing it would lose its memory
+              if (imp.state === 'running') {
+                const ready = await context.vms.isAgentReady(paths);
+
+                const note = ready ? '' : ' (the agent does not answer yet)';
+                const jailed = imp.pid !== null && isJailedFirecracker(imp.pid) ? 'jailed ' : '';
+
+                context.log(
+                  `impd: ${imp.name}: re-adopted ${jailed}firecracker pid ${String(imp.pid)}${note}`,
+                );
+
+                if (imp.pid !== null) {
+                  await setAdoptedMemoryLimit(imp, paths);
+
+                  context.cgroups.adopt(imp.id, imp.pid, imp.cpu, imp.memoryMib);
+
+                  startCounting(context, imp, imp.pid);
+
+                  await checkAdoptedMergeFlag(context, imp, imp.pid);
+                }
+
+                if (ready) {
+                  await writeAdoptedBoot(context, imp);
+                }
+
+                // the record does not change; the event stream still hears of it
+                await ops.updateState(imp, { reason: 'adopted', state: 'running' });
+
+                return;
               }
 
-              // the record does not change; the event stream still hears of it
-              await ops.updateState(imp, { reason: 'adopted', state: 'running' });
-
-              return;
-            }
-
-            if (imp.state !== 'creating') {
-              return;
-            }
-
-            const error = 'impd stopped while the imp was being created';
-
-            try {
-              if (imp.pid !== null && context.vms.isVmAlive(imp.pid, paths)) {
-                await context.vms.stopVm(imp.pid, paths, false);
+              if (imp.state !== 'creating') {
+                return;
               }
-            } catch (stopError) {
-              // one stuck VM must not keep impd from starting; the record
-              // keeps its pid, so a start or destroy kills it again
-              context.log(`impd: ${imp.name}: could not stop: ${readErrorMessage(stopError)}`);
 
-              await ops.updateState(imp, { reason: 'failed', state: 'error', error });
+              const error = 'impd stopped while the imp was being created';
 
-              return;
-            }
+              try {
+                if (imp.pid !== null && context.vms.isVmAlive(imp.pid, paths)) {
+                  await context.vms.stopVm(imp.pid, paths, false);
+                }
+              } catch (stopError) {
+                // one stuck VM must not keep impd from starting; the record
+                // keeps its pid, so a start or destroy kills it again
+                context.log(`impd: ${imp.name}: could not stop: ${readErrorMessage(stopError)}`);
 
-            await ops.updateState(imp, { reason: 'failed', state: 'error', pid: null, error });
-          }),
+                await ops.updateState(imp, { reason: 'failed', state: 'error', error });
+
+                return;
+              }
+
+              await ops.updateState(imp, { reason: 'failed', state: 'error', pid: null, error });
+            },
+            { isMove: true },
+          ),
         ),
       );
 
