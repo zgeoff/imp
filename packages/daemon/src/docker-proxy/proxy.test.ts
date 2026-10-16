@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { startStubDockerEngine } from '../test-utils/start-stub-docker-engine';
+import { startStubSilentOrigin } from '../test-utils/start-stub-silent-origin';
 import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { PROXY_LABEL, createDockerProxy } from './proxy';
 import type { DockerProxyOptions } from './proxy';
@@ -1056,6 +1057,60 @@ test('it holds a build, a pull and an export past the control deadline that ends
   expect(answered.map((response) => response.status)).toStrictEqual([200, 200, 200]);
   expect(ctx.engine.unexpected).toStrictEqual([]);
 });
+
+// Bun reads its fetch idle limit (360 s by default) only at startup, so the
+// proxy runs in a child Bun with 1 s; the child's plain fetch is the control
+// that the limit expires, after about 8 s on Bun 1.4.2
+test('it passes on a pull and an export that stay silent past Bun’s idle limit, where a plain fetch gives up', async () => {
+  const ctx = await setupTest();
+
+  const stack = new AsyncDisposableStack();
+
+  onTestFinished(() => stack.disposeAsync());
+
+  const socket = join(ctx.dir, 'silent-engine.sock');
+
+  // the export's ownership inspect answers at once; the pull and the export
+  // stay silent
+  startStubSilentOrigin(stack, {
+    unix: socket,
+    answerAtOnce: (request) =>
+      request.url.endsWith('/json')
+        ? Response.json({ Id: 'a'.repeat(64), Config: { Labels: { [PROXY_LABEL]: 'test-token' } } })
+        : null,
+  });
+
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, '../test-utils/run-idle-limited-requests.ts'),
+      JSON.stringify({ via: 'docker-proxy', socket }),
+    ],
+    {
+      env: { ...process.env, BUN_CONFIG_HTTP_IDLE_TIMEOUT: '1' },
+      stdout: 'pipe',
+      stderr: 'inherit',
+    },
+  );
+
+  // the child goes first, before the engine it calls
+  stack.defer(() => {
+    child.kill();
+  });
+
+  const output = await new Response(child.stdout).text();
+
+  const lines = output
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as unknown);
+
+  expect(lines).toIncludeSameMembers([
+    { kind: 'control', isOk: false, error: 'TimeoutError' },
+    { kind: 'pull', isOk: true, status: 200, body: 'the long answer' },
+    { kind: 'export', isOk: true, status: 200, body: 'the long answer' },
+  ]);
+}, 30_000);
 
 test('it answers 502 with the engine failure when the engine is unreachable', async () => {
   const ctx = await setupTest();

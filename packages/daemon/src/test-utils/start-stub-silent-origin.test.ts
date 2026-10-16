@@ -1,4 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { startStubSilentOrigin } from './start-stub-silent-origin';
 
 function setupTest() {
@@ -65,6 +68,66 @@ test('it holds the control path it is given, and answers another path with its a
   const answer: unknown = await response.json();
 
   expect(answer).toStrictEqual({ json: { ok: true } });
+});
+
+test('it answers at once a request its answerAtOnce answers, on the unix socket it is given', async () => {
+  const ctx = setupTest();
+
+  const dir = await mkdtemp(join(tmpdir(), 'silent-origin-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const socket = join(dir, 'engine.sock');
+
+  startStubSilentOrigin(ctx.stack, {
+    unix: socket,
+    answerAtOnce: (request) =>
+      request.url.endsWith('/json') ? Response.json({ Id: 'the container' }) : null,
+  });
+
+  const response = await fetch('http://docker/v1.55/containers/a/json', { unix: socket });
+  const answer: unknown = await response.json();
+
+  expect(answer).toStrictEqual({ Id: 'the container' });
+});
+
+test('it holds a request its answerAtOnce leaves, on the unix socket it is given', async () => {
+  const ctx = setupTest();
+
+  const dir = await mkdtemp(join(tmpdir(), 'silent-origin-'));
+
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+
+  const socket = join(dir, 'engine.sock');
+
+  const origin = startStubSilentOrigin(ctx.stack, {
+    unix: socket,
+    answerAtOnce: (request) =>
+      request.url.endsWith('/json') ? Response.json({ Id: 'the container' }) : null,
+  });
+
+  const control = new AbortController();
+
+  const controlCall = fetch('http://docker/control', {
+    method: 'POST',
+    body: 'the control call',
+    signal: control.signal,
+    unix: socket,
+  });
+
+  const longCall = fetch('http://docker/v1.55/containers/a/export', { unix: socket });
+
+  await Promise.all([origin.controlHeld, origin.longHeld]);
+
+  control.abort();
+
+  await Promise.allSettled([controlCall]);
+
+  const response = await longCall;
+  const text = await response.text();
+
+  expect(origin.origin).toBe('http://docker');
+  expect(text).toBe('the long answer');
 });
 
 test('it marks the long path gone when its client gives up', async () => {
