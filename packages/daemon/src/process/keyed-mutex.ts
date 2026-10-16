@@ -10,20 +10,29 @@ export interface KeyedMutex {
   // true while a task for `key` runs or waits
   readonly isLocked: (key: string) => boolean;
 
+  // the tasks for `key` that run or wait: 2 once a second one queues behind
+  // the first
+  readonly countQueued: (key: string) => number;
+
   // resolves once no task runs or waits for any key
   readonly waitForAll: () => Promise<void>;
 }
 
 export function createKeyedMutex(): KeyedMutex {
-  // per key, a promise that resolves when the newest queued task is done;
-  // it never rejects, so a failed task never blocks the next one
-  const tails = new Map<string, Promise<void>>();
+  // per key, a promise that resolves when the newest queued task is done,
+  // and how many tasks run or wait; the promise never rejects, so a failed
+  // task never blocks the next one
+  const queues = new Map<string, { tail: Promise<void>; count: number }>();
 
   const runExclusive = async <T>(key: string, task: () => Promise<T>): Promise<T> => {
-    const previous = tails.get(key);
+    const queue = queues.get(key) ?? { tail: Promise.resolve(), count: 0 };
+    const previous = queue.tail;
     const done = Promise.withResolvers<void>();
 
-    tails.set(key, done.promise);
+    queue.tail = done.promise;
+    queue.count += 1;
+
+    queues.set(key, queue);
 
     try {
       await previous;
@@ -32,8 +41,10 @@ export function createKeyedMutex(): KeyedMutex {
     } finally {
       done.resolve();
 
-      if (tails.get(key) === done.promise) {
-        tails.delete(key);
+      queue.count -= 1;
+
+      if (queue.count === 0) {
+        queues.delete(key);
       }
     }
   };
@@ -41,10 +52,10 @@ export function createKeyedMutex(): KeyedMutex {
   return {
     runExclusive,
 
-    // the check and runExclusive's tails.set run in one synchronous step, so
+    // the check and runExclusive's queues.set run in one synchronous step, so
     // no other task can slip in between
     tryRunExclusive: async (key, task) => {
-      if (tails.has(key)) {
+      if (queues.has(key)) {
         return { ran: false };
       }
 
@@ -52,10 +63,11 @@ export function createKeyedMutex(): KeyedMutex {
 
       return { ran: true, value };
     },
-    isLocked: (key) => tails.has(key),
+    isLocked: (key) => queues.has(key),
+    countQueued: (key) => queues.get(key)?.count ?? 0,
     waitForAll: async () => {
-      while (tails.size > 0) {
-        await Promise.all(tails.values());
+      while (queues.size > 0) {
+        await Promise.all([...queues.values()].map((queue) => queue.tail));
       }
     },
   };

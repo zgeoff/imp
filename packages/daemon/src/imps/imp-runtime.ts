@@ -49,7 +49,6 @@ import { createLockFreeSleep } from './lock-free-sleep';
 import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
 import { startCounting } from './read-running-imp-usage';
 import { createVmReconciler } from './reconcile-vms';
-import type { ShutdownGate } from './shutdown-gate';
 
 // What the wake proxy, the idle loop, the governor and impd's start and stop
 // need: imps woken on demand, put to sleep in the background, and the
@@ -176,7 +175,6 @@ export interface ImpRuntime {
 
 interface ImpRuntimeParts {
   readonly context: ImpContext;
-  readonly gate: ShutdownGate;
   readonly lock: ImpLock;
   readonly ops: ImpVmOps;
 }
@@ -615,7 +613,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     // open connections do not count: impd is going away
     sleepAllImps: async () => {
-      parts.gate.close();
+      ops.stopVmStarts();
 
       // every imp, not only the running ones: a sleeping or stopped imp may be
       // waking or booting under its lock right now

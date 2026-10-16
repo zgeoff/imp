@@ -30,7 +30,6 @@ import { createImpVmOps } from './imp-vm-ops';
 import { KERNEL_OOPS_REASON } from './kernel-oops-watch';
 import { readRunningImpUsage } from './read-running-imp-usage';
 import type { ResourceDelta } from './resource-sampler';
-import { createShutdownGate } from './shutdown-gate';
 
 export type { ImpServiceDeps } from './imp-context';
 
@@ -109,8 +108,7 @@ export type Imps = ImpService &
 export function createImpService(deps: ImpServiceDeps): Imps {
   const context = createImpContext(deps);
   const lock = createImpLock(context);
-  const gate = createShutdownGate();
-  const ops = createImpVmOps(context, gate);
+  const ops = createImpVmOps(context);
   const watchdog = createImpWatchdog(context, lock, ops);
   const presenter = createImpPresenter(context, watchdog.readSilentSince);
   const events = deps.events ?? createEventBus();
@@ -127,7 +125,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
 
   const leases = createImpLeases({ context, lock, ops, presenter });
   const commands = createImpCommands({ context, lock, ops, presenter, leases });
-  const runtime = createImpRuntime({ context, gate, lock, ops });
+  const runtime = createImpRuntime({ context, lock, ops });
 
   const sessions = createSessionService({
     context,

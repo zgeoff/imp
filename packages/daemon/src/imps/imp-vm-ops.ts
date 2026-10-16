@@ -4,7 +4,11 @@ import { ORPCError } from '@orpc/server';
 import { sendActivity } from '../agent-client/agent-requests';
 import { isAgentError } from '../agent-client/is-agent-error';
 import { sendServicesList } from '../agent-client/service-requests';
-import { buildAgentOutdatedApiError, buildRebootNeededError } from '../api-errors';
+import {
+  buildAgentOutdatedApiError,
+  buildRebootNeededError,
+  buildStoppingError,
+} from '../api-errors';
 import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold-boots';
 import {
   claimTrustPending,
@@ -41,7 +45,6 @@ import type { LockedImp } from './imp-lock';
 import { requireTransition } from './imp-transitions';
 import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
 import { startCounting } from './read-running-imp-usage';
-import type { ShutdownGate } from './shutdown-gate';
 import { startColdVm } from './start-cold-vm';
 import { updateLockedImpState } from './update-locked-imp-state';
 
@@ -118,10 +121,16 @@ export interface ImpVmOps {
 
   // runs a snapshot write in one of the host-wide sleep slots
   readonly withSleepSlot: <T>(task: () => Promise<T>) => Promise<T>;
+
+  // once impd puts every imp to sleep to stop: no VM starts after that,
+  // since it would outlive impd's last sleep pass; a start throws
+  // SERVICE_UNAVAILABLE
+  readonly stopVmStarts: () => void;
 }
 
-export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOps {
+export function createImpVmOps(context: ImpContext): ImpVmOps {
   const sleepSlots = createSemaphore(SLEEP_CONCURRENCY);
+  let isStopping = false;
 
   const updateState = async (
     imp: LockedImp,
@@ -188,7 +197,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     const isWake = cause === 'wake_fallback';
 
     try {
-      gate.requireOpen();
+      if (isStopping) {
+        throw buildStoppingError();
+      }
 
       requireNoOopsHold(context, imp);
     } catch (error) {
@@ -521,7 +532,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   // resumes from the snapshot, or boots cold when there is none, it does not
   // match this host, or the load fails: the disk is always the truth
   const wakeImpVm = async (imp: LockedImp): Promise<LockedImp> => {
-    gate.requireOpen();
+    if (isStopping) {
+      throw buildStoppingError();
+    }
 
     requireNoOopsHold(context, imp);
 
@@ -810,6 +823,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     growGuestDisk,
     startFreshImpVm,
     withSleepSlot: sleepSlots.run,
+    stopVmStarts: () => {
+      isStopping = true;
+    },
   };
 }
 
