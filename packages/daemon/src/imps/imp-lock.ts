@@ -12,9 +12,15 @@ const LOCKED = Symbol('locked');
 // a try that found the imp moving: it refuses as a held lock does
 const MOVING: unique symbol = Symbol('moving');
 
+// One callback's hold on an imp's lock, shared by every record read or
+// written under it; it ends with the callback.
+interface LockHold {
+  isHeld: boolean;
+}
+
 // An imp record read under the imp's lifecycle lock. Only this module makes
 // one, so the VM operations that take it cannot run without the lock.
-export type LockedImp = ImpRecord & { readonly [LOCKED]: true };
+export type LockedImp = ImpRecord & { readonly [LOCKED]: LockHold };
 
 interface WithImpOptions {
   // the move's own steps, which act on an imp they marked
@@ -68,9 +74,10 @@ export interface ImpLock {
   readonly waitForAll: () => Promise<void>;
 }
 
-// A record only the lock made: a cast cannot stand in for the lock.
-export function isLockedImp(imp: ImpRecord): imp is LockedImp {
-  return LOCKED in imp;
+// A record only the lock made, while its callback still holds the lock: a
+// cast or a record kept past the callback cannot stand in for the lock.
+export function isLockedImp(imp: ImpRecord & { readonly [LOCKED]?: LockHold }): imp is LockedImp {
+  return imp[LOCKED]?.isHeld === true;
 }
 
 // The record an operation under the lock wrote: still under the same lock.
@@ -79,7 +86,7 @@ export function toLockedImp(held: LockedImp, next: ImpRecord): LockedImp {
     throw new Error(`imp ${next.id} is not the locked imp ${held.id}`);
   }
 
-  return { ...next, [LOCKED]: true };
+  return { ...next, [LOCKED]: held[LOCKED] };
 }
 
 export function createImpLock(context: ImpContext): ImpLock {
@@ -130,7 +137,7 @@ export function createImpLock(context: ImpContext): ImpLock {
       throw buildMovingError(live.name);
     }
 
-    return { ...live, [LOCKED]: true };
+    return { ...live, [LOCKED]: { isHeld: true } };
   };
 
   const findImp = async (name: string): Promise<ImpRecord> => {
@@ -173,7 +180,7 @@ export function createImpLock(context: ImpContext): ImpLock {
         runJoined(async () => {
           const imp = await insert();
 
-          return runAbout({ ...imp, [LOCKED]: true }, action);
+          return runAbout({ ...imp, [LOCKED]: { isHeld: true } }, action);
         }),
       ),
 
@@ -208,10 +215,18 @@ export function createImpLock(context: ImpContext): ImpLock {
 }
 
 // Runs `action` on `imp` with the imp as the imp of every log line it
-// writes; a gone imp names none.
-function runAbout<I extends LockedImp | undefined, T>(
+// writes; a gone imp names none. The hold ends with `action`.
+async function runAbout<I extends LockedImp | undefined, T>(
   imp: I,
   action: (imp: I) => Promise<T>,
 ): Promise<T> {
-  return imp === undefined ? action(imp) : withImpLogContext(imp.name, () => action(imp));
+  if (imp === undefined) {
+    return action(imp);
+  }
+
+  try {
+    return await withImpLogContext(imp.name, () => action(imp));
+  } finally {
+    imp[LOCKED].isHeld = false;
+  }
 }

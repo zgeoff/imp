@@ -65,6 +65,18 @@ test('it refuses a move the lifecycle table does not list', async () => {
   });
 });
 
+test('it refuses a record kept past the callback that held its lock', async () => {
+  const ctx = await setupTest();
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: ctx.image.id }));
+  const kept = await ctx.lock.withImpId(imp.id, (locked) => Promise.resolve(locked));
+
+  invariant(kept);
+
+  const refusal = updateLockedImpState(ctx.db, kept, { reason: 'stopped', state: 'stopped' });
+
+  expect(refusal).rejects.toThrow(/a state write needs the imp's lock/);
+});
+
 test("it refuses a record read without the imp's lock", async () => {
   const ctx = await setupTest();
   const imp = await createImp(ctx.db, buildMockNewImp({ imageId: ctx.image.id }));
