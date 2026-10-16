@@ -119,7 +119,7 @@ test('#images.build ends at its 6 hour deadline when impd sends no answer', asyn
 
 test('#system.gc ends at its one hour deadline when impd sends no answer', async () => {
   const ctx = setupTest();
-  const call = ctx.client.system.gc();
+  const call = ctx.client.system.gc({});
 
   await ctx.origin.longHeld;
 
@@ -191,7 +191,8 @@ test('#backups.run hands on the answer that comes before its deadline, and stops
 
   await Promise.allSettled([controlCall]);
 
-  const answer = await call;
+  // the stand-in's answer, not a run's shape
+  const answer: unknown = await call;
 
   expect(answer).toStrictEqual({ ok: true });
   expect(ctx.clock.countPending()).toBe(0);
