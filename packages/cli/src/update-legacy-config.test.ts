@@ -191,6 +191,46 @@ test('it moves the file a part-way move left behind, beside the one it moved', (
   expect(readFileSync(join(ctx.dir, 'impz', 'token'), 'utf8')).toBe('file-token\n');
 });
 
+test.skipIf(!canUpdateReadOnly())(
+  'it notes a file the caller does not read that cannot move, and leaves it',
+  () => {
+    const ctx = setupTest();
+
+    mkdirSync(join(ctx.dir, 'impz'));
+    writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+    mkdirSync(join(ctx.dir, 'imp'));
+    writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+    updateReadOnly(ctx.stack, join(ctx.dir, 'imp'));
+
+    const warn = mock<(line: string) => void>();
+
+    updateLegacyConfig(join(ctx.dir, 'impz'), warn, ['config.json']);
+
+    const note = `impz: cannot move ${join(ctx.dir, 'imp', 'token')} to ${join(ctx.dir, 'impz', 'token')}, so it stays there: `;
+
+    expect(warn.mock.calls).toStrictEqual([
+      [expect.toSatisfy((line: string) => line.startsWith(note) && /EACCES|EPERM/.test(line))],
+    ]);
+
+    expect(readFileSync(join(ctx.dir, 'imp', 'token'), 'utf8')).toBe('file-token\n');
+    expect(readdirSync(join(ctx.dir, 'impz'))).toStrictEqual(['config.json']);
+  },
+);
+
+test.skipIf(!canUpdateReadOnly())('it rethrows the failed move of a file the caller reads', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'impz'));
+  writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+  mkdirSync(join(ctx.dir, 'imp'));
+  writeFileSync(join(ctx.dir, 'imp', 'token'), 'file-token\n');
+  updateReadOnly(ctx.stack, join(ctx.dir, 'imp'));
+
+  expect(() => {
+    updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>());
+  }).toThrow(expect.objectContaining({ code: expect.toBeOneOf(['EACCES', 'EPERM']) }));
+});
+
 test('it makes no directory when the old one holds neither file', () => {
   const ctx = setupTest();
 

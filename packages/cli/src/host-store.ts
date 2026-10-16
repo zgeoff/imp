@@ -40,6 +40,10 @@ const HostConfigSchema = z.object({
 const HOST_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
 const EMPTY_CONFIG: HostConfig = { current: null, hosts: {} };
 
+// the saved hosts need only their own file: a fallback token that cannot
+// move stays behind, for the call that reads it
+const HOST_FILES: readonly string[] = ['config.json'];
+
 export function resolveConfigDir(env: CliEnv): string {
   const configHome = env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config');
 
@@ -67,7 +71,7 @@ export function readHostConfig(
   env: CliEnv,
   warn: (line: string) => void = console.error,
 ): HostConfig {
-  updateLegacyConfig(resolveConfigDir(env), warn);
+  updateLegacyConfig(resolveConfigDir(env), warn, HOST_FILES);
 
   const path = resolveConfigPath(env);
   let text: string;
@@ -105,7 +109,7 @@ export function readHostConfig(
 // crash leaves the old file or the new one and no other user can read the
 // tokens at any point.
 export function writeHostConfig(env: CliEnv, config: HostConfig): void {
-  updateLegacyConfig(resolveConfigDir(env));
+  updateLegacyConfig(resolveConfigDir(env), console.error, HOST_FILES);
   mkdirSync(resolveConfigDir(env), { recursive: true, mode: 0o700 });
 
   // a symlinked config.json (dotfiles) stays a link: the rename replaces

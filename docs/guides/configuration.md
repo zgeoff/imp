@@ -267,7 +267,9 @@ The file holds each host's URL and token, so the CLI writes it with mode 0600 an
 users can read it. No command prints a token. The CLI kept `config.json` and `token` in
 `~/.config/imp/` before its rename to `impz`. The first command that reads or writes the config
 moves each of the two files that `~/.config/impz/` lacks, and never writes over a file there, so a
-move that fails part way finishes on a later call.
+move that fails part way finishes on a later call. A command that uses a saved host needs only
+`config.json`, so when the old `token` cannot move, the command notes the file it left behind and
+goes on. A command that falls back to the token file fails on that move instead.
 
 ```sh
 impz login https://imp.example.ts.net             # asks for the token; saves the host "imp"
