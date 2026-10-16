@@ -465,3 +465,35 @@ test('it finds no owners when impd runs outside the host PID namespace', () => {
 
   expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toBeNull();
 });
+
+test('it finds no owners when the kernel overwrote records while impd read the log', () => {
+  const ctx = setupTest();
+
+  // the file stands for the log's path; the reads below stand for its records
+  writeFileSync(ctx.kmsgPath, '');
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  // oops #1 reads, then the kernel overwrites what held oops #2, then the end
+  const reads = [
+    '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI\n',
+    '4,815,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu\n',
+    'EPIPE',
+    'EAGAIN',
+  ];
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+    readChunk: (_fd, buffer) => {
+      const next = reads.shift() ?? 'EAGAIN';
+
+      if (next === 'EPIPE' || next === 'EAGAIN') {
+        throw Object.assign(new Error(next), { code: next });
+      }
+
+      return buffer.write(next);
+    },
+  });
+
+  expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toBeNull();
+});

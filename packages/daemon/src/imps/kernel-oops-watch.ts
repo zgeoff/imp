@@ -53,6 +53,9 @@ export const NO_KERNEL_OOPS: KernelOopsWatch = {
 interface KernelLog {
   readonly kmsgPath: string;
   readonly pidNamespacePath: string;
+
+  // one read of the log; a test throws the kernel's EPIPE from it
+  readonly readChunk?: (fd: number, buffer: Buffer) => number;
 }
 
 const HOST_KERNEL_LOG: KernelLog = {
@@ -117,7 +120,7 @@ export function createKernelOopsWatch(
         return null;
       }
 
-      const threads = readKmsgOopsThreads(kernelLog.kmsgPath);
+      const threads = readKmsgOopsThreads(kernelLog.kmsgPath, kernelLog.readChunk ?? readSync);
 
       if (threads === null) {
         return null;
@@ -197,8 +200,11 @@ const OOPS_TASK = /^CPU: \d+ (?:UID: \d+ )?PID: (?<thread>\d+) Comm: /v;
 // Each oops since boot and the thread it killed, from the kernel log. Null
 // unless the log still holds every oops from the first, each with its task
 // line: the kernel drops its oldest records once the log is full.
-function readKmsgOopsThreads(path: string): ReadonlyMap<number, number> | null {
-  const messages = readKmsgMessages(path);
+function readKmsgOopsThreads(
+  path: string,
+  readChunk: (fd: number, buffer: Buffer) => number,
+): ReadonlyMap<number, number> | null {
+  const messages = readKmsgMessages(path, readChunk);
 
   if (messages === null) {
     return null;
@@ -244,7 +250,10 @@ function readKmsgOopsThreads(path: string): ReadonlyMap<number, number> | null {
 // The text of each record in the kernel log, oldest first. /dev/kmsg gives
 // one "<prio>,<seq>,<usec>,<flags>;<text>" record a read and EAGAIN at the
 // end; a dictionary line under a record starts with a space.
-function readKmsgMessages(path: string): string[] | null {
+function readKmsgMessages(
+  path: string,
+  readChunk: (fd: number, buffer: Buffer) => number,
+): string[] | null {
   let fd: number;
 
   try {
@@ -258,7 +267,7 @@ function readKmsgMessages(path: string): string[] | null {
 
   try {
     for (;;) {
-      const count = readKmsgChunk(fd, buffer);
+      const count = readKmsgChunk(fd, buffer, readChunk);
 
       if (count === null) {
         return null;
@@ -282,21 +291,18 @@ function readKmsgMessages(path: string): string[] | null {
 }
 
 // bytes read, 0 at the end of the log, null on a failed read. EPIPE says the
-// kernel overwrote the next record; the read after it goes on from the oldest
-function readKmsgChunk(fd: number, buffer: Buffer): number | null {
-  for (;;) {
-    try {
-      return readSync(fd, buffer);
-    } catch (error) {
-      const code = error instanceof Error && 'code' in error ? error.code : null;
+// kernel overwrote records past this read, which may hold a whole oops, so
+// the log read so far no longer proves it holds every oops
+function readKmsgChunk(
+  fd: number,
+  buffer: Buffer,
+  readChunk: (fd: number, buffer: Buffer) => number,
+): number | null {
+  try {
+    return readChunk(fd, buffer);
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? error.code : null;
 
-      if (code === 'EAGAIN') {
-        return 0;
-      }
-
-      if (code !== 'EPIPE') {
-        return null;
-      }
-    }
+    return code === 'EAGAIN' ? 0 : null;
   }
 }
