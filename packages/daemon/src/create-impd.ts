@@ -131,6 +131,7 @@ type ImpBoundaries = Pick<
   | 'sleepTiming'
   | 'openTap'
   | 'kernelOops'
+  | 'readThreadIds'
 >;
 
 // What impd reaches outside its own code: every field but the four
