@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.3.0](https://github.com/zgeoff/impz/compare/v2.2.1...v2.3.0) (2026-10-16)
+
+### Features
+
+- **geo-1062:** gate the cli's --json output as a contract
+  ([#429](https://github.com/zgeoff/impz/issues/429))
+  ([7056932](https://github.com/zgeoff/impz/commit/70569329761672185e312afa8e2191083668f88a))
+
 ## [2.2.1](https://github.com/zgeoff/impz/compare/v2.2.0...v2.2.1) (2026-10-16)
 
 ### Bug Fixes
