@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { readStatFields } from '../process/proc';
 import { isFirecrackerAlive } from './firecracker-process';
 
@@ -101,4 +101,15 @@ export function readCpuTicks(pid: number, procRoot = '/proc'): number | null {
   const fields = readStatFields(pid, procRoot);
 
   return fields === null ? null : Number(fields[11]) + Number(fields[12]);
+}
+
+// the ids of the process's threads, from /proc/<pid>/task; null when gone
+export function readThreadIds(pid: number, procRoot = '/proc'): number[] | null {
+  try {
+    return readdirSync(`${procRoot}/${String(pid)}/task`)
+      .filter((name) => /^\d+$/v.test(name))
+      .map(Number);
+  } catch {
+    return null;
+  }
 }

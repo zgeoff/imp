@@ -12,8 +12,12 @@ function setupTest() {
   });
 
   // where the test writes the kernel's taint mask, as /proc/sys/kernel/tainted,
-  // and its boot id, as /proc/sys/kernel/random/boot_id
-  return { taintPath: join(dir, 'tainted'), bootIdPath: join(dir, 'boot_id') };
+  // its boot id, as /proc/sys/kernel/random/boot_id, and its log, as /dev/kmsg
+  return {
+    taintPath: join(dir, 'tainted'),
+    bootIdPath: join(dir, 'boot_id'),
+    kmsgPath: join(dir, 'kmsg'),
+  };
 }
 
 test('it reads a clear taint mask as no oops', () => {
@@ -222,4 +226,172 @@ test('it keeps the first boot id it read', () => {
   writeFileSync(ctx.bootIdPath, 'c47a9e20-1b3d-4f68-a5c2-7e9d0b1f3a54\n');
 
   expect(watch.findBootId()).toBe('6b1f0c3e-92d4-4a7b-8e5f-0d2c4a6b8e1f');
+});
+
+test('it finds the imp whose Firecracker owned the thread an oops killed', () => {
+  const ctx = setupTest();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '1,812,90412345,-;BUG: unable to handle page fault for address: ffffc90000a3f000',
+      '1,813,90412350,-;#PF: supervisor read access in kernel mode',
+      '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '4,816,90412370,-;Hardware name: QEMU Standard PC (Q35 + ICH9, 2009)',
+      '',
+    ].join('\n'),
+  );
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toStrictEqual(
+    new Set(['a']),
+  );
+});
+
+test('it reads the task line of a kernel that puts the UID before the PID', () => {
+  const ctx = setupTest();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,814,90412360,-;Oops: general protection fault, probably for non-canonical address 0xdead000000000100: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412365,-;CPU: 3 UID: 0 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.17.0-5-generic #5-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toStrictEqual(
+    new Set(['a']),
+  );
+});
+
+test('it finds the owners of each oops since boot', () => {
+  const ctx = setupTest();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '4,901,95000000,-;Oops: 0002 [#2] PREEMPT SMP NOPTI',
+      '4,902,95000005,-;CPU: 1 PID: 5151 Comm: fc_vcpu 1 Tainted: P      D    O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(
+    watch.findOopsOwners(
+      (thread) =>
+        new Map([
+          [4242, ['a']],
+          [5151, ['b']],
+        ]).get(thread) ?? [],
+    ),
+  ).toStrictEqual(new Set(['a', 'b']));
+});
+
+test('it reads past the dictionary lines under a record and a warning before the oops', () => {
+  const ctx = setupTest();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,700,80000000,-;WARNING: CPU: 2 PID: 3131 at fs/inode.c:330 drop_nlink+0x3e/0x50',
+      '4,701,80000005,c;CPU: 2 PID: 3131 Comm: rm Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      ' SUBSYSTEM=cpu',
+      ' DEVICE=+cpu:cpu2',
+      '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P        W  O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(
+    watch.findOopsOwners(
+      (thread) =>
+        new Map([
+          [4242, ['a']],
+          [3131, ['b']],
+        ]).get(thread) ?? [],
+    ),
+  ).toStrictEqual(new Set(['a']));
+});
+
+test('it finds no owners for an oops that killed a thread no VM owned', () => {
+  const ctx = setupTest();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412365,-;CPU: 1 PID: 7777 Comm: z_rd_int Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []))).toBeNull();
+});
+
+test('it finds no owners when it cannot read the kernel log', () => {
+  const ctx = setupTest();
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(watch.findOopsOwners(() => ['a'])).toBeNull();
+});
+
+test('it finds no owners when the kernel log has dropped the first oops', () => {
+  const ctx = setupTest();
+
+  // the log filled and lost oops #1, which may have hit another VM
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,901,95000000,-;Oops: 0002 [#2] PREEMPT SMP NOPTI',
+      '4,902,95000005,-;CPU: 1 PID: 5151 Comm: fc_vcpu 1 Tainted: P      D    O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(watch.findOopsOwners((thread) => (thread === 5151 ? ['b'] : []))).toBeNull();
+});
+
+test('it finds no owners for an oops whose task line the log has lost', () => {
+  const ctx = setupTest();
+
+  writeFileSync(ctx.kmsgPath, '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI\n');
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  expect(watch.findOopsOwners(() => ['a'])).toBeNull();
+});
+
+test('it keeps the owners it first found for an oops after their VM leaves the sampler', () => {
+  const ctx = setupTest();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, ctx.kmsgPath);
+
+  watch.findOopsOwners((thread) => (thread === 4242 ? ['a'] : []));
+
+  expect(watch.findOopsOwners(() => [])).toStrictEqual(new Set(['a']));
 });

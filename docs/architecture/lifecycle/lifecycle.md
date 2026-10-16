@@ -65,11 +65,17 @@ lasts until the reboot clears it. impd reads the kernel's taint flag for an oops
 each repair of a lost VM. It blames the oops only after it saw the flag go from clear to set,
 because a VM that ran when impd started had already outlived any earlier oops. It also blames it
 only for a VM that was running when impd first read the flag set, because a VM that booted or woke
-later never met the oops. Until the flag clears, impd refuses a start or a wake of that imp with an
-error that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)). The hold
-lives in the imp's record with the kernel's boot id, so it outlasts the reboot that freed the disk.
-At start impd clears every hold when it reads the flag clear, because only a reboot clears the flag.
-It also clears a hold that records another boot's id, whatever the flag reads, because an oops in
+later never met the oops. An oops kills one thread and not its process, so a Firecracker can outlive
+the oops that hit it and die much later. impd therefore blames the oops only on the VM whose
+Firecracker owned the killed thread: it reads the thread's id from the oops header in the kernel log
+and matches it against the threads the resource sampler saw in each VM. It keeps that match after
+the VM leaves the sampler, so a VM lost later is judged against it. When impd cannot read the oops
+from the log, or no VM owned the thread, any VM may hold the disk, so impd blames the oops on every
+VM lost after it. Until the flag clears, impd refuses a start or a wake of that imp with an error
+that asks for the reboot ([a kernel oops](../../guides/operations.md#a-kernel-oops)). The hold lives
+in the imp's record with the kernel's boot id, so it outlasts the reboot that freed the disk. At
+start impd clears every hold when it reads the flag clear, because only a reboot clears the flag. It
+also clears a hold that records another boot's id, whatever the flag reads, because an oops in
 another task between the reboot and impd's start sets the flag again without holding the imp. A read
 that fails or finds no taint mask does not prove a reboot, so a hold of this boot stays, and impd
 refuses a start or a wake of the held imp until a read finds the flag clear. A hold without a boot

@@ -42,6 +42,7 @@ import {
   readCpuTicks,
   readOwnedRamMib,
   readRssMib,
+  readThreadIds,
   readUnsharedRamMib,
   readVmMemory,
 } from '../vmm/vm-stats';
@@ -170,6 +171,9 @@ export interface ImpServiceDeps {
   // whether the host's kernel has oopsed (kernel-oops-watch.ts); never by
   // default
   readonly kernelOops?: KernelOopsWatch;
+
+  // the threads of a VM's Firecracker, for the oops above; /proc by default
+  readonly readThreadIds?: (pid: number) => readonly number[] | null;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -313,6 +317,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
       readCpuTicks,
       readNetBytes: (tap) => readGuestNetBytes(tap),
       readMemory,
+      readThreadIds: deps.readThreadIds ?? readThreadIds,
     }),
     memoryLimit: deps.memoryLimit ?? NO_MEMORY_LIMIT,
     pluggedSizes: deps.pluggedSizes ?? createPluggedSizes(),

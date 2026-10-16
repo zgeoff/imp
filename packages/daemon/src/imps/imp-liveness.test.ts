@@ -2,6 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { invariant } from '@impz/test-utils/invariant';
 import { findImpByName, updateImpState } from '../db/imps';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
@@ -13,8 +14,9 @@ async function setupTest(options: ImpTestOptions = {}) {
 
   onTestFinished(() => stack.disposeAsync());
 
-  // the host's taint mask, as /proc/sys/kernel/tainted, and its boot id, as
-  // /proc/sys/kernel/random/boot_id; a test writes them
+  // the host's taint mask, as /proc/sys/kernel/tainted, its boot id, as
+  // /proc/sys/kernel/random/boot_id, its kernel log, as /dev/kmsg, and the
+  // VMs' threads, as /proc/<pid>/task; a test writes them
   const taintDir = mkdtempSync(join(tmpdir(), 'imp-taint-'));
 
   stack.defer(() => {
@@ -23,16 +25,19 @@ async function setupTest(options: ImpTestOptions = {}) {
 
   const taintPath = join(taintDir, 'tainted');
   const bootIdPath = join(taintDir, 'boot_id');
+  const kmsgPath = join(taintDir, 'kmsg');
+  const procRoot = join(taintDir, 'proc');
 
   const harness = await createImpTest(stack, {
-    kernelFiles: { taintPath, bootIdPath },
+    kernelFiles: { taintPath, bootIdPath, kmsgPath },
+    procRoot,
     ...options,
   });
 
   // the image every imp boots from
   await harness.createTestImage('ubuntu');
 
-  return { ...harness, taintPath, bootIdPath };
+  return { ...harness, taintPath, bootIdPath, kmsgPath, procRoot };
 }
 
 test('it finds a VM that died after its sleep wrote the snapshot asleep, not stopped', async () => {
@@ -300,6 +305,140 @@ test('it gives no kernel oops trigger to a VM lost while the flag stays as impd 
   // the API leaves out an error the record does not have
   expect(found.state).toBe('stopped');
   expect(found).not.toContainKey('error');
+});
+
+test('it holds only the imp whose Firecracker owned the thread a kernel oops killed', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(ctx.taintPath, '0\n');
+
+  // impd's start reads the flag clear
+  await ctx.imps.reconcileImps();
+  await ctx.imps.createImp({ name: 'hit' });
+  await ctx.imps.createImp({ name: 'other' });
+
+  const hit = await findImpByName(ctx.db, 'hit');
+  const other = await findImpByName(ctx.db, 'other');
+
+  invariant(hit?.pid);
+  invariant(other?.pid);
+
+  // each Firecracker's main thread and a vCPU thread
+  mkdirSync(join(ctx.procRoot, String(hit.pid), 'task', '4242'), { recursive: true });
+  mkdirSync(join(ctx.procRoot, String(hit.pid), 'task', String(hit.pid)), { recursive: true });
+  mkdirSync(join(ctx.procRoot, String(other.pid), 'task', '5151'), { recursive: true });
+  mkdirSync(join(ctx.procRoot, String(other.pid), 'task', String(other.pid)), { recursive: true });
+
+  await ctx.imps.sampleResources();
+
+  // the oops hits the first imp's vCPU thread
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '1,812,90412345,-;BUG: unable to handle page fault for address: ffffc90000a3f000',
+      '4,813,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,814,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  ctx.fake.alive.clear();
+
+  const foundHit = await ctx.imps.getImp('hit');
+  const foundOther = await ctx.imps.getImp('other');
+
+  expect(foundHit.error).toBe('a kernel oops killed firecracker');
+  expect(foundOther.state).toBe('stopped');
+  expect(foundOther).not.toContainKey('error');
+});
+
+test('it starts an imp whose VM died after a kernel oops killed a thread of another VM', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(ctx.taintPath, '0\n');
+
+  // impd's start reads the flag clear
+  await ctx.imps.reconcileImps();
+  await ctx.imps.createImp({ name: 'hit' });
+  await ctx.imps.createImp({ name: 'other' });
+
+  const hit = await findImpByName(ctx.db, 'hit');
+  const other = await findImpByName(ctx.db, 'other');
+
+  invariant(hit?.pid);
+  invariant(other?.pid);
+  mkdirSync(join(ctx.procRoot, String(hit.pid), 'task', '4242'), { recursive: true });
+  mkdirSync(join(ctx.procRoot, String(other.pid), 'task', '5151'), { recursive: true });
+
+  await ctx.imps.sampleResources();
+
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,813,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,814,90412365,-;CPU: 3 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  // the hit VM dies and leaves the sampler; the other dies on a later pass
+  ctx.fake.alive.delete(hit.pid);
+
+  await ctx.imps.getImp('hit');
+  await ctx.imps.sampleResources();
+
+  ctx.fake.alive.delete(other.pid);
+
+  await ctx.imps.getImp('other');
+
+  const started = await ctx.imps.startImp('other');
+
+  expect(started.state).toBe('running');
+});
+
+test('it holds every imp lost after a kernel oops killed a thread that no VM owned', async () => {
+  const ctx = await setupTest();
+
+  writeFileSync(ctx.taintPath, '0\n');
+
+  // impd's start reads the flag clear
+  await ctx.imps.reconcileImps();
+  await ctx.imps.createImp({ name: 'first' });
+  await ctx.imps.createImp({ name: 'second' });
+
+  const first = await findImpByName(ctx.db, 'first');
+  const second = await findImpByName(ctx.db, 'second');
+
+  invariant(first?.pid);
+  invariant(second?.pid);
+  mkdirSync(join(ctx.procRoot, String(first.pid), 'task', '4242'), { recursive: true });
+  mkdirSync(join(ctx.procRoot, String(second.pid), 'task', '5151'), { recursive: true });
+
+  await ctx.imps.sampleResources();
+
+  // the oops hits a thread outside every VM
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,813,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,814,90412365,-;CPU: 1 PID: 7777 Comm: z_rd_int Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '',
+    ].join('\n'),
+  );
+
+  writeFileSync(ctx.taintPath, '128\n');
+
+  ctx.fake.alive.clear();
+
+  const foundFirst = await ctx.imps.getImp('first');
+  const foundSecond = await ctx.imps.getImp('second');
+
+  expect(foundFirst.error).toBe('a kernel oops killed firecracker');
+  expect(foundSecond.error).toBe('a kernel oops killed firecracker');
 });
 
 test('it logs at start that the host needs a reboot when the kernel has oopsed', async () => {
