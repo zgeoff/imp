@@ -18,10 +18,23 @@ const TRANSITIONS: Readonly<Record<ImpState, Readonly<Partial<Record<ImpState, T
 
 const STATES: readonly ImpState[] = ['creating', 'running', 'sleeping', 'stopped', 'error'];
 
-export function canTransition(from: ImpState, to: ImpState, via: TransitionVia = 'any'): boolean {
-  const edge = TRANSITIONS[from][to];
+const VIAS: ReadonlySet<string> = new Set<TransitionVia>(['any', 'warm move']);
 
-  return edge === 'any' || (edge !== undefined && edge === via);
+// own keys only, so a prototype key or an unknown state or via is refused
+export function canTransition(from: ImpState, to: ImpState, via: TransitionVia = 'any'): boolean {
+  if (!VIAS.has(via) || !Object.hasOwn(TRANSITIONS, from)) {
+    return false;
+  }
+
+  const edges = TRANSITIONS[from];
+
+  if (!Object.hasOwn(edges, to)) {
+    return false;
+  }
+
+  const edge = edges[to];
+
+  return edge === 'any' || edge === via;
 }
 
 // the states `to` is reachable from, for an INVALID_STATE answer

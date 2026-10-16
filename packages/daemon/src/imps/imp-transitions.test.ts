@@ -30,6 +30,22 @@ test.each<[ImpState, ImpState]>([
   expect(canTransition(from, to)).toBeFalse();
 });
 
+// a caller's cast lets any string through, so the table must refuse it
+test.each<[string, string, string]>([
+  ['constructor', 'name', 'Object'],
+  ['__proto__', 'constructor', 'any'],
+  ['running', 'constructor', 'any'],
+  ['running', '__proto__', 'any'],
+  ['hibernating', 'running', 'any'],
+  ['running', 'hibernating', 'any'],
+  ['running', 'sleeping', 'teleport'],
+  ['running', 'sleeping', 'constructor'],
+])('#canTransition refuses the unknown move %s to %s via %s', (from, to, via) => {
+  const canTransitionAny = canTransition as (from: string, to: string, via: string) => boolean;
+
+  expect(canTransitionAny(from, to, via)).toBeFalse();
+});
+
 test('#canTransition allows a warm move stopped to sleeping', () => {
   expect(canTransition('stopped', 'sleeping', 'warm move')).toBeTrue();
 });
