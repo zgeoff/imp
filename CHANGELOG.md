@@ -2,10 +2,11 @@
 
 ## [2.2.0](https://github.com/zgeoff/impz/compare/v2.1.0...v2.2.0) (2026-10-16)
 
-
 ### Features
 
-* **geo-880:** let an exec drop cap_sys_admin from its process tree ([#427](https://github.com/zgeoff/impz/issues/427)) ([73c1a6b](https://github.com/zgeoff/impz/commit/73c1a6b4e8d5ffea79d830a95df12f7de9345fff))
+- **geo-880:** let an exec drop cap_sys_admin from its process tree
+  ([#427](https://github.com/zgeoff/impz/issues/427))
+  ([73c1a6b](https://github.com/zgeoff/impz/commit/73c1a6b4e8d5ffea79d830a95df12f7de9345fff))
 
 ## [2.1.0](https://github.com/zgeoff/impz/compare/v2.0.8...v2.1.0) (2026-10-16)
 
