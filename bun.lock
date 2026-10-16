@@ -34,7 +34,7 @@
     },
     "packages/api": {
       "name": "@impz/api",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "dependencies": {
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
@@ -47,7 +47,7 @@
     },
     "packages/cli": {
       "name": "@impz/cli",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "bin": {
         "impz": "src/main.ts",
       },
@@ -70,7 +70,7 @@
     },
     "packages/client": {
       "name": "@impz/client",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "dependencies": {
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
@@ -93,7 +93,7 @@
     },
     "packages/daemon": {
       "name": "@impz/daemon",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@impz/api": "workspace:*",

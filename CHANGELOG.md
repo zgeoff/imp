@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.5](https://github.com/zgeoff/impz/compare/v2.0.4...v2.0.5) (2026-10-16)
+
+### Bug Fixes
+
+- **geo-1027:** read saved hosts when the old token file cannot move
+  ([#408](https://github.com/zgeoff/impz/issues/408))
+  ([d1264df](https://github.com/zgeoff/impz/commit/d1264df442ae1323f2bd93583d7144fb317c4253))
+
 ## [2.0.4](https://github.com/zgeoff/impz/compare/v2.0.3...v2.0.4) (2026-10-16)
 
 ### Bug Fixes
