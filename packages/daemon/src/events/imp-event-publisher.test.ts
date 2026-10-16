@@ -195,9 +195,10 @@ test('it sends a keepalive comment every 5 s through a stream with no event', as
 
   const queued = await readQueuedText(reader, 1000);
 
-  const keepalives = queued.split('\n\n').filter((frame) => frame === ': ');
+  const keepalives = queued.split('\n\n').filter(Boolean);
 
   expect(keepalives).toHaveLength(80);
+  expect(keepalives).toSatisfyAll((frame: string) => frame === ': ');
 });
 
 test('it sends the snapshot, then each change with its reason', async () => {
