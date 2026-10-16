@@ -39,7 +39,7 @@ import type { ImpPaths } from '../storage/data-layout';
 import type { ImpCgroup } from '../vmm/cpu-cgroups';
 import { checkMergeFlag } from './check-merge-flag';
 import { formatTimings } from './format-timings';
-import type { ImpContext } from './imp-context';
+import type { ImpContext, ImpVms } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
 import { requireTransition } from './imp-transitions';
@@ -832,7 +832,7 @@ export function createImpVmOps(context: ImpContext): ImpVmOps {
 // allocated size: the mem file is sparse after --dig-holes
 // The task an oops killed holds the imp's disk until the host reboots: no VM
 // boots or wakes on it before a read of the taint flag clear proves that.
-function requireNoOopsHold(context: ImpContext, imp: Readonly<LockedImp>): void {
+function requireNoOopsHold(context: ImpVms, imp: Readonly<LockedImp>): void {
   if (imp.hasOopsHold && context.kernelOops.readFlag() !== 'clear') {
     throw buildRebootNeededError(imp.name);
   }

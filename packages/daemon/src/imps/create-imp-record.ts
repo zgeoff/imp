@@ -6,7 +6,7 @@ import { createImpInFreeSlot, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { countSlots } from '../net/addressing';
 import { resolveCpuSettings } from './cpu-limit';
-import type { ImpContext } from './imp-context';
+import type { ImpClock, ImpHost, ImpVms } from './imp-context';
 
 const CREATE_TRIES = 3;
 const NAME_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -34,7 +34,7 @@ interface NewImpInput {
 // A `creating` record with id `id` and a free slot, under the requested name or a free
 // `imp-xxxx`.
 export async function createImpRecord(
-  context: ImpContext,
+  context: ImpHost & ImpClock & ImpVms,
   id: string,
   input: NewImpInput,
   image: ImageRecord,
@@ -93,7 +93,7 @@ export async function createImpRecord(
 }
 
 // the requested name, else a free `imp-xxxx`
-async function resolveImpName(context: ImpContext, requested: string | undefined): Promise<string> {
+async function resolveImpName(context: ImpHost, requested: string | undefined): Promise<string> {
   if (requested !== undefined) {
     return requested;
   }

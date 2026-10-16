@@ -1,4 +1,4 @@
-import type { ImpContext } from '../imps/imp-context';
+import type { ImpClock, ImpDisk, ImpHost, ImpVms } from '../imps/imp-context';
 import type { ImpLock } from '../imps/imp-lock';
 import type { ImpVmOps } from '../imps/imp-vm-ops';
 import { readErrorMessage } from '../read-error-message';
@@ -16,7 +16,7 @@ const RECHECK_MS = 1000;
 // The watchdog over impd's own imps: its recovery takes the imp's lock the
 // way background sleeps do, and gives way to any operation holding it.
 export function createImpWatchdog(
-  context: ImpContext,
+  context: ImpHost & ImpClock & ImpVms & ImpDisk,
   lock: ImpLock,
   ops: ImpVmOps,
 ): AgentWatchdog {

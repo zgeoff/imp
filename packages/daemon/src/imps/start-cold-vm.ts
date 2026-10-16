@@ -9,7 +9,7 @@ import type { ImpCgroup } from '../vmm/cpu-cgroups';
 import { TemplateRestoreError } from '../vmm/template-vm';
 import type { StartedVm } from '../vmm/vm-runner';
 import { formatTimings } from './format-timings';
-import type { ImpContext } from './imp-context';
+import type { ImpHost, ImpVms } from './imp-context';
 import type { LockedImp } from './imp-lock';
 
 // the claim's seed for the guest's entropy pool; the agent wants 32 or more
@@ -30,7 +30,7 @@ interface ColdVmStart {
 // else the kernel's boot. A template that fails to restore goes, and the
 // imp boots the kernel (docs/architecture/lifecycle/boot-templates.md#restore).
 export async function startColdVm(
-  context: ImpContext,
+  context: ImpHost & ImpVms,
   start: Readonly<ColdVmStart>,
 ): Promise<StartedVm> {
   const imp = start.imp;

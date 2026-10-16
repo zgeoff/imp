@@ -12,7 +12,7 @@ import {
 import { buildImpPaths, buildImpsDir, buildWatchdogSlot } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import { isImpVm } from '../vmm/firecracker-process';
-import type { ImpContext } from './imp-context';
+import type { ImpHost, ImpMemory, ImpVms } from './imp-context';
 import type { LockedImp } from './imp-lock';
 import type { ImpVmOps } from './imp-vm-ops';
 
@@ -33,7 +33,10 @@ export interface VmReconciler {
 const STATE_WAIT_MS = 10_000;
 const STATE_RETRY_MS = 250;
 
-export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconciler {
+export function createVmReconciler(
+  context: ImpHost & ImpVms & ImpMemory,
+  ops: ImpVmOps,
+): VmReconciler {
   const readVmStateWithin = async (paths: ImpPaths) => {
     const deadline = Date.now() + STATE_WAIT_MS;
 

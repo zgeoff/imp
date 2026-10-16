@@ -1,6 +1,6 @@
 import { chmodSync, lchownSync, mkdirSync, rmSync } from 'node:fs';
 import { isDiskFullError } from '../api-errors';
-import type { ImpContext } from '../imps/imp-context';
+import type { ImpDisk, ImpHost, ImpVms } from '../imps/imp-context';
 import type { LockedImp } from '../imps/imp-lock';
 import type { ImpVmOps } from '../imps/imp-vm-ops';
 import { IMPD_USER } from '../process/impd-user';
@@ -13,7 +13,7 @@ import { buildWatchdogSlot } from '../storage/data-layout';
 // the VM stops. Without room, or on a failed snapshot, it logs why and leaves
 // the VM to the restart that follows.
 export async function writeWatchdogSnapshot(
-  context: ImpContext,
+  context: ImpHost & ImpVms & ImpDisk,
   ops: Pick<ImpVmOps, 'withSleepSlot'>,
   imp: LockedImp,
 ): Promise<void> {

@@ -176,16 +176,42 @@ export interface ImpServiceDeps {
   readonly readThreadIds?: (pid: number) => readonly number[] | null;
 }
 
-// What every part of the imp service shares: the deps with their defaults
-// filled in, and the small lookups each part needs.
-export interface ImpContext {
+// the host: its config, its database of imps, its log, and what it boots with
+export interface ImpHost {
   readonly config: Config;
   readonly db: ImpDatabase;
+  readonly log: (message: string) => void;
+  readonly identity: HostIdentity;
+}
+
+export interface ImpClock {
+  readonly now: () => number;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly sleepTiming: SleepTiming;
+}
+
+// what boots and runs an imp's VM, and where its files are
+export interface ImpVms {
   readonly images: ImageService;
   readonly taps: TapDevices;
   readonly vms: VmRunner;
   readonly storage: StorageBackend;
-  readonly log: (message: string) => void;
+  readonly cgroups: CpuCgroups;
+  readonly hostCpus: number;
+
+  // null when IMP_BOOT_TEMPLATES is off: every cold boot boots the kernel
+  readonly templates: BootTemplates | null;
+  readonly findPaths: (impId: string) => ImpPaths;
+  readonly findAddress: (slot: number) => SlotAddress;
+
+  // who the imp's Firecracker runs as; null runs it unjailed (IMP_JAILER)
+  readonly findJailUser: (imp: Readonly<ImpRecord>) => JailUser | null;
+  readonly growFilesystem: (disk: string) => Promise<boolean>;
+  readonly kernelOops: KernelOopsWatch;
+}
+
+// what an imp's VM holds of the host's RAM, and what may admit more
+export interface ImpMemory {
   readonly admission: RamAdmission | undefined;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
   readonly readRssMib: (pid: number, apiSocket: string) => number | null;
@@ -194,44 +220,43 @@ export interface ImpContext {
   // unshared size, since a wake splits what KSM merged
   readonly readSleepRamMib: (pid: number, apiSocket: string) => number | null;
   readonly checkGuestMerge: (pid: number) => Promise<boolean | null>;
-
   readonly mergeFlags: MergeFlags;
-  readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
-  readonly readServiceUrl: (name: string) => string | null;
-  readonly now: () => number;
-  readonly sleep: (ms: number) => Promise<void>;
-  readonly sleepTiming: SleepTiming;
-  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
-  readonly growFilesystem: (disk: string) => Promise<boolean>;
-  readonly storageGate: StorageGate;
-  readonly diskBudget: DiskBudget;
-  readonly readDiskUsage: (impId: string) => CachedDiskUsage | undefined;
-  readonly identity: HostIdentity;
-  readonly tracker: ActivityTracker;
-  readonly sessions: SessionCache;
-  readonly inners: InnerCache;
-  readonly sessionLogs: SessionLogs;
-  readonly findPaths: (impId: string) => ImpPaths;
-  readonly findAddress: (slot: number) => SlotAddress;
-
-  // who the imp's Firecracker runs as; null runs it unjailed (IMP_JAILER)
-  readonly findJailUser: (imp: Readonly<ImpRecord>) => JailUser | null;
-  readonly egress: ImpEgress;
-  readonly cgroups: CpuCgroups;
-  readonly hostCpus: number;
-
-  // null when IMP_BOOT_TEMPLATES is off: every cold boot boots the kernel
-  readonly templates: BootTemplates | null;
-
-  // the latest look at each running VM (resource-sampler.ts)
-  readonly resources: ResourceSampler;
-
   readonly memoryLimit: MemoryLimit;
 
   // what each awake elastic guest holds plugged, as impd last saw it
   readonly pluggedSizes: PluggedSizes;
-  readonly kernelOops: KernelOopsWatch;
+
+  // the latest look at each running VM (resource-sampler.ts)
+  readonly resources: ResourceSampler;
 }
+
+// the guest's agent as impd sees it: its sessions, its activity, its execs
+export interface ImpGuest {
+  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
+  readonly tracker: ActivityTracker;
+  readonly sessions: SessionCache;
+  readonly inners: InnerCache;
+  readonly sessionLogs: SessionLogs;
+}
+
+// the host's disk room, and the gate the storage GC waits on
+export interface ImpDisk {
+  readonly storageGate: StorageGate;
+  readonly diskBudget: DiskBudget;
+  readonly readDiskUsage: (impId: string) => CachedDiskUsage | undefined;
+}
+
+// what an imp reaches, and how the tailnet names it
+export interface ImpNetwork {
+  readonly egress: ImpEgress;
+  readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
+  readonly readServiceUrl: (name: string) => string | null;
+}
+
+// What every part of the imp service shares: the deps with their defaults
+// filled in, and the small lookups each part needs, split by concern. A part
+// of the service takes only the parts it reads.
+export type ImpContext = ImpHost & ImpClock & ImpVms & ImpMemory & ImpGuest & ImpDisk & ImpNetwork;
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
   const slotPlan = {
@@ -241,6 +266,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
   };
 
   const log = deps.log ?? printLog;
+  const now = deps.now ?? Date.now;
   const cgroups = deps.cgroups ?? createCpuCgroups({ root: '/nonexistent', log });
   const readRam = deps.readRamMib;
   const readRss = deps.readRssMib;
@@ -262,14 +288,39 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
       log,
     });
 
-  return {
+  const records: ImpHost = {
     config: deps.config,
     db: deps.db,
+    log,
+    identity: deps.identity,
+  };
+
+  const clock: ImpClock = {
+    now,
+    sleep: deps.sleep ?? Bun.sleep,
+    sleepTiming: deps.sleepTiming ?? { now: () => performance.now(), sleep: Bun.sleep },
+  };
+
+  const vms: ImpVms = {
     images: deps.images,
     taps: deps.taps,
     vms: deps.vms,
     storage: deps.storage,
-    log,
+    cgroups,
+    hostCpus: deps.hostCpus ?? availableParallelism(),
+    templates:
+      deps.templates === undefined ? createDefaultTemplates(deps, cgroups, log) : deps.templates,
+    findPaths: (impId) => deps.storage.resolveImpPaths(impId),
+    findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
+    findJailUser: (imp) =>
+      deps.config.jailerBin === null || imp.jailUid === null
+        ? null
+        : { uid: imp.jailUid, gid: imp.jailUid },
+    growFilesystem: deps.growFilesystem ?? growFilesystem,
+    kernelOops: deps.kernelOops ?? NO_KERNEL_OOPS,
+  };
+
+  const memory: ImpMemory = {
     admission: deps.admission,
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readRssMib: deps.readRssMib ?? readRssMib,
@@ -279,50 +330,45 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
         : (deps.readUnsharedRamMib ?? readUnsharedRamMib),
     checkGuestMerge: deps.checkGuestMerge ?? checkGuestMemoryMergeable,
     mergeFlags: createMergeFlags(),
-    readTailnetHostname: deps.readTailnetHostname,
-    readServiceUrl: deps.readServiceUrl ?? (() => null),
-    now: deps.now ?? Date.now,
-    sleep: deps.sleep ?? Bun.sleep,
-    sleepTiming: deps.sleepTiming ?? { now: () => performance.now(), sleep: Bun.sleep },
-    readExecEnv: deps.readExecEnv ?? (() => Promise.resolve({ kind: 'ungranted' })),
-    growFilesystem: deps.growFilesystem ?? growFilesystem,
-    readDiskUsage: deps.readDiskUsage ?? (() => {}),
-    storageGate: deps.storageGate ?? createStorageGate(),
-    diskBudget,
-    identity: deps.identity,
-    tracker: createActivityTracker(),
-    sessions: createSessionCache(),
-    inners: createInnerCache(),
-    sessionLogs: createSessionLogs({
-      limits: deps.config.sessionLog,
-      requireRoom: diskBudget.requireRoom,
-      now: deps.now ?? Date.now,
-      log,
-      ...(deps.openTap !== undefined && { openTap: deps.openTap }),
-    }),
-    findPaths: (impId) => deps.storage.resolveImpPaths(impId),
-    findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
-    findJailUser: (imp) =>
-      deps.config.jailerBin === null || imp.jailUid === null
-        ? null
-        : { uid: imp.jailUid, gid: imp.jailUid },
-    egress: deps.egress ?? NO_EGRESS,
-    cgroups,
-    hostCpus: deps.hostCpus ?? availableParallelism(),
-    templates:
-      deps.templates === undefined ? createDefaultTemplates(deps, cgroups, log) : deps.templates,
+    memoryLimit: deps.memoryLimit ?? NO_MEMORY_LIMIT,
+    pluggedSizes: deps.pluggedSizes ?? createPluggedSizes(),
     resources: createResourceSampler({
-      now: deps.now ?? Date.now,
+      now,
       readCpuStat: cgroups.readCpuStat,
       readCpuTicks,
       readNetBytes: (tap) => readGuestNetBytes(tap),
       readMemory,
       readThreadIds: deps.readThreadIds ?? readThreadIds,
     }),
-    memoryLimit: deps.memoryLimit ?? NO_MEMORY_LIMIT,
-    pluggedSizes: deps.pluggedSizes ?? createPluggedSizes(),
-    kernelOops: deps.kernelOops ?? NO_KERNEL_OOPS,
   };
+
+  const guest: ImpGuest = {
+    readExecEnv: deps.readExecEnv ?? (() => Promise.resolve({ kind: 'ungranted' })),
+    tracker: createActivityTracker(),
+    sessions: createSessionCache(),
+    inners: createInnerCache(),
+    sessionLogs: createSessionLogs({
+      limits: deps.config.sessionLog,
+      requireRoom: diskBudget.requireRoom,
+      now,
+      log,
+      ...(deps.openTap !== undefined && { openTap: deps.openTap }),
+    }),
+  };
+
+  const disk: ImpDisk = {
+    storageGate: deps.storageGate ?? createStorageGate(),
+    diskBudget,
+    readDiskUsage: deps.readDiskUsage ?? (() => {}),
+  };
+
+  const network: ImpNetwork = {
+    egress: deps.egress ?? NO_EGRESS,
+    readTailnetHostname: deps.readTailnetHostname,
+    readServiceUrl: deps.readServiceUrl ?? (() => null),
+  };
+
+  return { ...records, ...clock, ...vms, ...memory, ...guest, ...disk, ...network };
 }
 
 function createDefaultTemplates(

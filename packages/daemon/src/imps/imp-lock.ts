@@ -4,7 +4,7 @@ import type { ImpRecord } from '../db/imps';
 import { createKeyedMutex } from '../process/keyed-mutex';
 import type { TryResult } from '../process/keyed-mutex';
 import { withImpLogContext } from '../process/with-imp-log-context';
-import type { ImpContext } from './imp-context';
+import type { ImpDisk, ImpHost, ImpMemory, ImpVms } from './imp-context';
 import { checkLiveness } from './imp-liveness';
 
 const LOCKED = Symbol('locked');
@@ -93,7 +93,7 @@ export function toLockedImp(held: LockedImp, next: ImpRecord): LockedImp {
   return { ...next, [LOCKED]: held[LOCKED] };
 }
 
-export function createImpLock(context: ImpContext): ImpLock {
+export function createImpLock(context: ImpHost & ImpVms & ImpMemory & ImpDisk): ImpLock {
   const mutex = createKeyedMutex();
 
   // under the imp's lock, inside the storage gate: the GC never runs while an
