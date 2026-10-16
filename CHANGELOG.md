@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.7](https://github.com/zgeoff/impz/compare/v2.0.6...v2.0.7) (2026-10-16)
+
+### Bug Fixes
+
+- **geo-988:** check the lifecycle table and moves at every state lock
+  ([#414](https://github.com/zgeoff/impz/issues/414))
+  ([dff578f](https://github.com/zgeoff/impz/commit/dff578f82a0d46f389de1082ce0a6f5f864abd8d))
+
 ## [2.0.6](https://github.com/zgeoff/impz/compare/v2.0.5...v2.0.6) (2026-10-16)
 
 ### Bug Fixes
