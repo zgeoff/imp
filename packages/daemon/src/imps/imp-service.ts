@@ -81,8 +81,8 @@ export interface ImpCheckpointHooks {
   readonly destroyImpId: ImpCommands['destroyImpId'];
   readonly lockImp: <T>(name: string, action: (imp: LockedImp) => Promise<T>) => Promise<T>;
 
-  // by id, with no MOVING check: a move's commit and abort, which settle the
-  // mark itself
+  // by id, as the move's own step: a move's commit and abort, which settle
+  // the mark itself
   readonly lockImpId: <T>(
     id: string,
     action: (imp: LockedImp | undefined) => Promise<T>,
@@ -150,7 +150,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     readBootStatus: (imp) => readBootStatus(imp, context.findPaths(imp.id), context.identity),
     isUnmergeable: (id) => context.mergeFlags.isLost(id),
     lockImp: lock.withImp,
-    lockImpId: lock.withImpId,
+    lockImpId: (id, action) => lock.withImpId(id, action, { isMove: true }),
     haltImp: ops.stopImpVm,
     bootImp: (imp) => ops.startImpVm(imp, 'restore'),
     requireRunningImp: ops.requireRunningImp,

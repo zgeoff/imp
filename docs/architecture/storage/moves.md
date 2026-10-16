@@ -69,10 +69,10 @@ may run.
 | `moved`   | `receiving`          | Nobody. A commit or an abort ends it.         |
 | gone      | none                 | The target.                                   |
 
-A marked imp's lock refuses every call by name with `MOVING`, except the move's own steps, so no
-start, wake, stop, fork, checkpoint or restore runs, and its egress policy and grants refuse
-changes, since the header carries the ones the send read. The marked imp keeps its row, so the
-storage sweep keeps every file the send reads.
+A marked imp's lock refuses every call with `MOVING`, except the move's own steps, so no start,
+wake, stop, fork, checkpoint or restore runs, and its egress policy and grants refuse changes, since
+the header carries the ones the send read. The marked imp keeps its row, so the storage sweep keeps
+every file the send reads.
 
 The source marks the imp `moved` only once it has checked the receipt: a MAC over the files' hashes,
 keyed with the ticket's secret, which only the two hosts know. So a receipt that checks came from

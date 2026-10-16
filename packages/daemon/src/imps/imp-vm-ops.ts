@@ -6,7 +6,7 @@ import { isAgentError } from '../agent-client/is-agent-error';
 import { sendServicesList } from '../agent-client/service-requests';
 import { buildAgentOutdatedApiError, buildRebootNeededError } from '../api-errors';
 import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold-boots';
-import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
+import { removeIdentityReset, updateImpActivity, updateImpDisk } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { shrinkGuest } from '../memory/shrink-guest';
 import { createSemaphore } from '../process/semaphore';
@@ -39,6 +39,7 @@ import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
 import { startCounting } from './read-running-imp-usage';
 import type { ShutdownGate } from './shutdown-gate';
 import { startColdVm } from './start-cold-vm';
+import { updateLockedImpState } from './update-locked-imp-state';
 
 // what a sleep waits under the imp's lock for an elastic guest to unplug
 const SLEEP_SHRINK_LIMIT_MS = 2000;
@@ -122,11 +123,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     imp: LockedImp,
     change: Readonly<ImpStateChange>,
   ): Promise<LockedImp> => {
-    if (change.state !== imp.state) {
-      requireTransition(imp.state, change.state, `move to ${change.state}`);
-    }
-
-    const updated = await updateImpState(context.db, imp.id, change);
+    const updated = await updateLockedImpState(context.db, imp, change);
 
     if (change.state !== 'running') {
       context.sessions.forget(imp.id);
@@ -138,7 +135,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       void context.sessionLogs.endImp(findSessionLogImp(context.findPaths, updated));
     }
 
-    return toLockedImp(imp, updated);
+    return updated;
   };
 
   const writeFailure = async (imp: LockedImp, error: unknown): Promise<void> => {

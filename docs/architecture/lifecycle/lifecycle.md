@@ -9,12 +9,15 @@ proxy, the SSH gateway or a tunnel, asks the lifecycle for one.
 ## States
 
 An imp is in one of five states. A transition table names the legal moves, and any other move fails
-with `INVALID_STATE`. A destroy works from every state and is no transition: it removes the imp.
+with `INVALID_STATE`. The state write checks the table itself, and it takes only a record read under
+the imp's lock, so no command moves an imp past the table. A destroy works from every state and is
+no transition: it removes the imp.
 
 ```mermaid
 stateDiagram-v2
   [*] --> creating
   creating --> running
+  creating --> stopped
   creating --> error
   running --> sleeping
   running --> stopped
@@ -29,11 +32,13 @@ stateDiagram-v2
 ```
 
 A create writes the imp's row as `creating`, clones its disk from the image and boots it. A create
-that the governor turns away deletes the row again, so a refused create leaves nothing behind.
-`running` means a VM is up and its agent answered. `sleeping` means the VM is gone and a committed
-memory snapshot is on disk. `stopped` means there is neither, and the next use boots the disk cold.
-`error` holds an imp whose create or boot failed in a way impd could not undo, and a start or a stop
-leaves it.
+that asks for no start, such as a move's received copy or a restored backup, goes to `stopped` once
+its disk is ready. That move belongs to the create alone, so a stop refuses an imp that is still
+`creating`. A create that the governor turns away deletes the row again, so a refused create leaves
+nothing behind. `running` means a VM is up and its agent answered. `sleeping` means the VM is gone
+and a committed memory snapshot is on disk. `stopped` means there is neither, and the next use boots
+the disk cold. `error` holds an imp whose create or boot failed in a way impd could not undo, and a
+start or a stop leaves it.
 
 Anything that needs a VM wakes a sleeping imp and boots a stopped one: an exec, a console, a proxied
 request, an SSH login, a tunnel, a service change, a checkpoint and a lease. A stop frees the imp's
@@ -76,9 +81,12 @@ its own admission lock while it sleeps imps, and a boot waiting for admission ho
 so a governor that waited for imp locks could deadlock with it.
 
 The lock also gates moves. While an imp is marked as moving between hosts, the lock refuses every
-call by name with `MOVING`, except the move's own steps
-([moves](../storage/moves.md#one-live-copy)). Every operation under the lock joins the storage gate
-too, so the storage sweep never takes a disk that an operation is about to name
+call with `MOVING`, by name or by ID, except the move's own steps
+([moves](../storage/moves.md#one-live-copy)). The refusal sits in the read under the lock, so no
+caller depends on the order in which the move writes its mark. A background try finds a moving imp
+held and skips it, and impd's start-up repair reaches a moving imp as its move does, because the
+moves recover only after it. Every operation under the lock joins the storage gate too, so the
+storage sweep never takes a disk that an operation is about to name
 ([disk space](../storage/disk-space.md#the-sweep)).
 
 ## What keeps an imp awake

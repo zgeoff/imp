@@ -5,6 +5,7 @@ import { canTransition, findStatesLeadingTo, requireTransition } from './imp-tra
 
 test.each<[ImpState, ImpState]>([
   ['creating', 'running'],
+  ['creating', 'stopped'],
   ['creating', 'error'],
   ['running', 'stopped'],
   ['running', 'sleeping'],
@@ -21,7 +22,6 @@ test.each<[ImpState, ImpState]>([
 });
 
 test.each<[ImpState, ImpState]>([
-  ['creating', 'stopped'],
   ['creating', 'sleeping'],
   ['running', 'running'],
   ['stopped', 'sleeping'],
@@ -40,7 +40,12 @@ test('#findStatesLeadingTo names every state that can reach running', () => {
 });
 
 test('#findStatesLeadingTo names every state that can reach stopped', () => {
-  expect(findStatesLeadingTo('stopped')).toStrictEqual(['running', 'sleeping', 'error']);
+  expect(findStatesLeadingTo('stopped')).toStrictEqual([
+    'creating',
+    'running',
+    'sleeping',
+    'error',
+  ]);
 });
 
 test('#findStatesLeadingTo names no state for creating', () => {
@@ -55,14 +60,14 @@ test('#requireTransition passes an allowed transition', () => {
 
 test('#requireTransition throws INVALID_STATE with the states that lead to the target', () => {
   const refusal = Promise.try(() => {
-    requireTransition('creating', 'stopped', 'stop');
+    requireTransition('stopped', 'sleeping', 'sleep');
   });
 
   expect(refusal).rejects.toStrictEqual(
     new ORPCError('INVALID_STATE', {
       status: 409,
-      message: 'cannot stop an imp that is creating (allowed: running, sleeping, error)',
-      data: { state: 'creating', allowed: ['running', 'sleeping', 'error'] },
+      message: 'cannot sleep an imp that is stopped (allowed: running)',
+      data: { state: 'stopped', allowed: ['running'] },
     }),
   );
 });

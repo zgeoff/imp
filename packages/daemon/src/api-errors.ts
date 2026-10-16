@@ -84,6 +84,10 @@ export function buildMovingError(name: string) {
   });
 }
 
+export function isMovingError(error: unknown): error is ORPCError<'MOVING', unknown> {
+  return error instanceof ORPCError && error.code === 'MOVING';
+}
+
 // an image builder is impd's alone while it builds (docs/guides/images.md#isolated-builds)
 export function buildBuilderError(name: string) {
   return new ORPCError('PRECONDITION_FAILED', {
