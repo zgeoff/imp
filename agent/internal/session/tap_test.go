@@ -43,7 +43,7 @@ func heldForTap(m *Manager, name string) bool {
 	m.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.heldForTap
+	return s.phase == phaseHeldForTap
 }
 
 // waitOnFile is a script line that blocks until path exists, so the test
