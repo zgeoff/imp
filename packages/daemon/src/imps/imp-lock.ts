@@ -15,8 +15,10 @@ const MOVING: unique symbol = Symbol('moving');
 // One callback's hold on an imp's lock, shared by every record read or
 // written under it; it ends with the callback.
 interface LockHold {
-  isHeld: boolean;
+  readonly impId: string;
 }
+
+const endedHolds = new WeakSet<LockHold>();
 
 // An imp record read under the imp's lifecycle lock. Only this module makes
 // one, so the VM operations that take it cannot run without the lock.
@@ -77,7 +79,9 @@ export interface ImpLock {
 // A record only the lock made, while its callback still holds the lock: a
 // cast or a record kept past the callback cannot stand in for the lock.
 export function isLockedImp(imp: ImpRecord & { readonly [LOCKED]?: LockHold }): imp is LockedImp {
-  return imp[LOCKED]?.isHeld === true;
+  const hold = imp[LOCKED];
+
+  return hold !== undefined && !endedHolds.has(hold);
 }
 
 // The record an operation under the lock wrote: still under the same lock.
@@ -137,7 +141,7 @@ export function createImpLock(context: ImpContext): ImpLock {
       throw buildMovingError(live.name);
     }
 
-    return { ...live, [LOCKED]: { isHeld: true } };
+    return { ...live, [LOCKED]: { impId: id } };
   };
 
   const findImp = async (name: string): Promise<ImpRecord> => {
@@ -180,7 +184,7 @@ export function createImpLock(context: ImpContext): ImpLock {
         runJoined(async () => {
           const imp = await insert();
 
-          return runAbout({ ...imp, [LOCKED]: { isHeld: true } }, action);
+          return runAbout({ ...imp, [LOCKED]: { impId: imp.id } }, action);
         }),
       ),
 
@@ -227,6 +231,6 @@ async function runAbout<I extends LockedImp | undefined, T>(
   try {
     return await withImpLogContext(imp.name, () => action(imp));
   } finally {
-    imp[LOCKED].isHeld = false;
+    endedHolds.add(imp[LOCKED]);
   }
 }
