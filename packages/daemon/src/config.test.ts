@@ -60,6 +60,7 @@ test('it fills every setting from its default when the env is empty', () => {
     defaultImage: 'base',
     storageBackend: 'xfs',
     zfsRoot: null,
+    isUiomoveBugAllowed: false,
     tailscaleEnabled: false,
     tailscaleHostname: 'imp',
     tailnetRules: null,
@@ -210,6 +211,16 @@ test('it reads the zfs backend with its root dataset', () => {
 
   expect(config.storageBackend).toBe('zfs');
   expect(config.zfsRoot).toBe('tank/imp');
+});
+
+test('it reads IMP_ZFS_ALLOW_UIOMOVE_BUG=1 as the zfs_uiomove override', () => {
+  const config = loadConfig({
+    IMP_STORAGE_BACKEND: 'zfs',
+    IMP_ZFS_ROOT: 'tank/imp',
+    IMP_ZFS_ALLOW_UIOMOVE_BUG: '1',
+  });
+
+  expect(config.isUiomoveBugAllowed).toBe(true);
 });
 
 test('it rejects a port base that cannot fit every slot', () => {

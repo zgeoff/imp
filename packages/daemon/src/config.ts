@@ -107,6 +107,9 @@ const EnvSchema = z.object({
   IMP_DEFAULT_IMAGE: z.string().default('base'),
   IMP_STORAGE_BACKEND: z.enum(['xfs', 'zfs']).default('xfs'),
   IMP_ZFS_ROOT: z.string().optional(),
+
+  // 1 starts on a zfs module with the zfs_uiomove bug (docs/architecture/host.md)
+  IMP_ZFS_ALLOW_UIOMOVE_BUG: z.enum(['0', '1']).default('0'),
   TAILSCALE_AUTHKEY: z.string().optional(),
   IMP_TAILSCALE_NODE: z.literal('1').optional(),
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
@@ -259,6 +262,9 @@ export interface Config {
   // dataset mounted on dataDir, such as tank/imp
   readonly storageBackend: StorageBackendKind;
   readonly zfsRoot: string | null;
+
+  // with zfs, start on a module with the zfs_uiomove bug instead of refusing it
+  readonly isUiomoveBugAllowed: boolean;
 
   // the host container is a tailnet node: it has a key, or the entrypoint
   // started tailscaled from saved node state (IMP_TAILSCALE_NODE=1) after
@@ -507,6 +513,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
     storageBackend: parsed.IMP_STORAGE_BACKEND,
     zfsRoot: parsed.IMP_ZFS_ROOT ?? null,
+    isUiomoveBugAllowed: parsed.IMP_ZFS_ALLOW_UIOMOVE_BUG === '1',
     tailscaleEnabled: isTailnetNode,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
     tailnetRules: parseTailnetRules(parsed.IMP_TAILNET_IDENTITIES),

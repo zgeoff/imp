@@ -14,6 +14,12 @@ holds.
 - **Storage**: an XFS mount with reflink on the data directory, or a ZFS dataset impd's backend
   owns, with the modules each needs. The container's ZFS tools must share a major version with the
   host's module ([storage](./storage/storage.md#zfs)).
+- **A ZFS module with the zfs_uiomove fix**: 2.3.7 or later on the 2.3 line, 2.4.2 or later on the
+  2.4 line, or any later line. An older module can oops the kernel when a kill lands during a disk
+  read, and the oops holds that imp's disk until a reboot
+  ([minimum module versions](./storage/storage.md#zfs)). impd refuses to start on an older module,
+  and its error includes the fixed versions and the override. `IMP_ZFS_ALLOW_UIOMOVE_BUG=1` starts
+  it anyway, with a warning at start and in `/health`, for a host that cannot upgrade.
 - **Memory settings**: overcommit on and little swapping, and on ZFS a capped ARC. The ARC sits
   outside impd's RAM budget, so the installers set the budget from the host's RAM less a share for
   the host and the ARC cap.

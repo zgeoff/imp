@@ -214,7 +214,7 @@ test('#createStorageBackend marks the data dir zfs once start succeeds', async (
         run: zfs.run,
         streams: zfs.streams,
         readMounts: zfs.readMounts,
-        readModuleVersion: () => '2.2.2-0ubuntu9',
+        readModuleVersion: () => '2.4.4',
         log: () => {},
       },
     },
@@ -223,4 +223,59 @@ test('#createStorageBackend marks the data dir zfs once start succeeds', async (
   await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
   expect(readFileSync(join(ctx.dataDir, 'storage-backend'), 'utf8')).toBe('zfs\n');
+});
+
+test('#createStorageBackend refuses a zfs module with the zfs_uiomove bug by default', async () => {
+  const ctx = await setupTest();
+
+  const zfs = buildStubZfs({ root: 'tank/imp', rootDir: ctx.dataDir });
+
+  const backend = createStorageBackend(
+    loadConfig({ IMP_DATA_DIR: ctx.dataDir, IMP_STORAGE_BACKEND: 'zfs', IMP_ZFS_ROOT: 'tank/imp' }),
+    {
+      zfs: {
+        run: zfs.run,
+        streams: zfs.streams,
+        readMounts: zfs.readMounts,
+        readModuleVersion: () => '2.4.1',
+        log: () => {},
+      },
+    },
+  );
+
+  await expect(
+    backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() }),
+  ).rejects.toThrow(
+    'modules 2.3.7, 2.4.2 and later fix it; upgrade the module, or set IMP_ZFS_ALLOW_UIOMOVE_BUG=1 to start anyway',
+  );
+
+  expect(existsSync(join(ctx.dataDir, 'storage-backend'))).toBe(false);
+});
+
+test('#createStorageBackend starts on a zfs module with the zfs_uiomove bug with IMP_ZFS_ALLOW_UIOMOVE_BUG=1', async () => {
+  const ctx = await setupTest();
+
+  const zfs = buildStubZfs({ root: 'tank/imp', rootDir: ctx.dataDir });
+
+  const backend = createStorageBackend(
+    loadConfig({
+      IMP_DATA_DIR: ctx.dataDir,
+      IMP_STORAGE_BACKEND: 'zfs',
+      IMP_ZFS_ROOT: 'tank/imp',
+      IMP_ZFS_ALLOW_UIOMOVE_BUG: '1',
+    }),
+    {
+      zfs: {
+        run: zfs.run,
+        streams: zfs.streams,
+        readMounts: zfs.readMounts,
+        readModuleVersion: () => '2.4.1',
+        log: () => {},
+      },
+    },
+  );
+
+  await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+
+  expect(backend.readWarnings()).toStrictEqual([expect.toInclude('module 2.4.1 ')]);
 });

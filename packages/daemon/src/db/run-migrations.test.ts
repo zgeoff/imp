@@ -588,7 +588,7 @@ test('#runMigrations adds only the oops boot id column to the imps in the oops b
     SELECT name, type, "notnull", dflt_value FROM pragma_table_info('imps')
   `.execute(db);
 
-  await runMigrations(db);
+  await runMigrationsTo(db, '032_add_imp_oops_boot_id');
 
   const after = await sql<{ name: string; type: string; notnull: number; dflt_value: null }>`
     SELECT name, type, "notnull", dflt_value FROM pragma_table_info('imps')
@@ -619,4 +619,82 @@ test('#runMigrations keeps a kernel oops hold an older impd wrote in the oops bo
   const imp = await findImpByName(db, 'dev');
 
   expect(imp).toMatchObject({ error: 'a kernel oops killed firecracker', oopsBootId: null });
+});
+
+test('#runMigrations adds only the oops hold column to the imps in the oops hold migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '032_add_imp_oops_boot_id');
+
+  const before = await sql<{ name: string; type: string; notnull: number; dflt_value: unknown }>`
+    SELECT name, type, "notnull", dflt_value FROM pragma_table_info('imps')
+  `.execute(db);
+
+  await runMigrations(db);
+
+  const after = await sql<{ name: string; type: string; notnull: number; dflt_value: unknown }>`
+    SELECT name, type, "notnull", dflt_value FROM pragma_table_info('imps')
+  `.execute(db);
+
+  expect(after.rows).toStrictEqual([
+    ...before.rows,
+    { name: 'oops_hold', type: 'INTEGER', notnull: 1, dflt_value: '0' },
+  ]);
+});
+
+test('#runMigrations carries each kernel oops hold into its own column in the oops hold migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '032_add_imp_oops_boot_id');
+
+  // rows as an impd at 032 wrote them: a hold of this boot, one from before
+  // 032 with no boot, another error, and no error
+  await sql`INSERT INTO images (id, name, ref, digest, size_bytes, created_at)
+    VALUES ('img', 'base', 'imp/base:latest', 'sha256:0', 1, 0)`.execute(db);
+
+  await sql`INSERT INTO imps (id, name, image_id, state, vcpus, memory_mib, slot, ip,
+    created_at, last_active_at, error, oops_boot_id)
+    VALUES
+      ('a', 'held', 'img', 'stopped', 1, 512, 0, 'ip0', 0, 0,
+        'a kernel oops killed firecracker', 'boot-1'),
+      ('b', 'held-before-032', 'img', 'sleeping', 1, 512, 1, 'ip1', 0, 0,
+        'a kernel oops killed firecracker', NULL),
+      ('c', 'oom', 'img', 'stopped', 1, 512, 2, 'ip2', 0, 0,
+        'its memory limit killed firecracker', NULL),
+      ('d', 'fine', 'img', 'stopped', 1, 512, 3, 'ip3', 0, 0, NULL, NULL)`.execute(db);
+
+  await runMigrations(db);
+
+  const imps = await Promise.all(
+    ['held', 'held-before-032', 'oom', 'fine'].map((name) => findImpByName(db, name)),
+  );
+
+  expect(
+    imps.map((imp) => ({
+      name: imp?.name,
+      hasOopsHold: imp?.hasOopsHold,
+      error: imp?.error,
+      oopsBootId: imp?.oopsBootId,
+    })),
+  ).toStrictEqual([
+    {
+      name: 'held',
+      hasOopsHold: true,
+      error: 'a kernel oops killed firecracker',
+      oopsBootId: 'boot-1',
+    },
+    {
+      name: 'held-before-032',
+      hasOopsHold: true,
+      error: 'a kernel oops killed firecracker',
+      oopsBootId: null,
+    },
+    {
+      name: 'oom',
+      hasOopsHold: false,
+      error: 'its memory limit killed firecracker',
+      oopsBootId: null,
+    },
+    { name: 'fine', hasOopsHold: false, error: null, oopsBootId: null },
+  ]);
 });

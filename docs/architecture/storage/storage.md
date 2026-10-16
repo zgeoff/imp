@@ -86,8 +86,9 @@ snapshot still needs its blocks.
   cgroup OOM kill lands during a read (openzfs/zfs#15918). impd sends both kills to Firecracker, at
   stop and at each VM's memory cap, so one can land during a read of an imp's disk. With hardened
   usercopy the kernel then oopses, the oops kills Firecracker, and its hold on the disk's dataset
-  lasts until a reboot. impd still starts on an older module, since the bug strikes only on such a
-  kill, but it logs a warning at start and lists the same warning in `/health`.
+  lasts until a reboot. impd refuses to start on an older module unless the host's override is set
+  ([the host](../host.md#what-the-host-gives)). With the override it logs a warning at start and
+  lists the same warning in `/health`.
 
 ## Crash recovery
 

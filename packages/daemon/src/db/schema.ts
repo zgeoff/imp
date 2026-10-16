@@ -114,6 +114,7 @@ export interface Imps {
   name: string;
   next_boot_cause: ColdBootCause | null;
   oops_boot_id: string | null;
+  oops_hold: Generated<number>;
   pid: number | null;
   public_auth: string | null;
   public_hash: string | null;

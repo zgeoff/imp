@@ -144,9 +144,11 @@ test('it finds a VM lost after a kernel oops stopped, and says so', async () => 
   ctx.fake.alive.clear();
 
   const found = await ctx.imps.getImp('dev');
+  const record = await findImpByName(ctx.db, 'dev');
 
   expect(found.state).toBe('stopped');
   expect(found.error).toBe('a kernel oops killed firecracker');
+  expect(record?.hasOopsHold).toBe(true);
 });
 
 test('it gives the kernel oops as the trigger of the state change', async () => {
@@ -469,6 +471,7 @@ test('it starts an imp a kernel oops killed once the host has rebooted', async (
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
   });
 
   writeFileSync(ctx.taintPath, '0\n');
@@ -492,6 +495,7 @@ test('it starts an imp held by an oops of an earlier boot after a new oops in an
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
   });
 
   writeFileSync(ctx.taintPath, '0\n');
@@ -518,6 +522,7 @@ test('it keeps the hold of an imp a kernel oops killed when impd starts with the
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
   });
 
   writeFileSync(ctx.taintPath, '128\n');
@@ -539,6 +544,7 @@ test('it clears the hold of an imp a kernel oops killed when impd starts with fl
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
   });
 
   writeFileSync(ctx.taintPath, '0\n');
@@ -547,7 +553,7 @@ test('it clears the hold of an imp a kernel oops killed when impd starts with fl
 
   const record = await findImpByName(ctx.db, 'dev');
 
-  expect(record?.error).toBeNull();
+  expect(record).toMatchObject({ error: null, hasOopsHold: false });
   expect(ctx.logs).toContain('impd: dev: the host rebooted since a kernel oops held its disk');
 });
 
@@ -584,6 +590,7 @@ test('it clears the hold of an earlier boot when an oops set flag D before impd 
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
     oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
   });
 
@@ -611,6 +618,7 @@ test('it starts an imp held in an earlier boot when an oops set flag D before im
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
     oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
   });
 
@@ -637,6 +645,7 @@ test('it clears the hold of an earlier boot when impd cannot read the taint flag
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
     oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
   });
 
@@ -662,6 +671,7 @@ test('it keeps the record of a hold of this boot when impd starts again with fla
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
     oopsBootId: 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58',
   });
 
@@ -687,6 +697,7 @@ test('it refuses to start an imp held in this boot until the host reboots', asyn
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
     oopsBootId: 'd24f8b63-5e1a-4c09-87b2-3a6f1e0c9d58',
   });
 
@@ -710,6 +721,7 @@ test('it keeps the hold of an earlier boot when impd cannot read the boot id', a
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
     oopsBootId: '0e7c5a91-3d2b-4f86-b1a4-9c8e7d6f5a43',
   });
 
@@ -734,6 +746,7 @@ test('it keeps the record of a hold when impd starts with flag D set', async () 
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
   });
 
   writeFileSync(ctx.taintPath, '128\n');
@@ -760,6 +773,7 @@ test('it keeps every hold when impd starts without the taint file', async () => 
       state: 'stopped',
       pid: null,
       error: 'a kernel oops killed firecracker',
+      hasOopsHold: true,
     });
   }
 
@@ -788,6 +802,7 @@ test('it keeps the hold when impd starts with a taint file it cannot read', asyn
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
   });
 
   // a directory where the file should be: the read fails with EISDIR
@@ -813,6 +828,7 @@ test('it keeps the hold when impd starts with a malformed taint file', async () 
     state: 'stopped',
     pid: null,
     error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
   });
 
   writeFileSync(ctx.taintPath, 'tainted\n');

@@ -368,8 +368,10 @@ test('it answers /health with the reboot a kernel oops needs', async () => {
 test("it answers /health with the zfs_uiomove bug of the host's kernel module", async () => {
   const ctx = await setupTest({
     cgroups: buildStubCpuCgroups().cgroups,
-    createStorage: buildStubZfsStorage('tank/imp', { moduleVersion: '2.3.4-1ubuntu2' })
-      .createStorage,
+    createStorage: buildStubZfsStorage('tank/imp', {
+      moduleVersion: '2.3.4-1ubuntu2',
+      isUiomoveBugAllowed: true,
+    }).createStorage,
   });
 
   const response = await ctx.impd.api.app.handle(new Request('http://impd.test/health'));

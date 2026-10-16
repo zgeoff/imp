@@ -42,7 +42,7 @@ export async function checkLiveness(
 
   const change =
     slept !== null && trigger === KERNEL_OOPS_TRIGGER
-      ? { ...slept, detail: { trigger }, error: trigger, oopsBootId }
+      ? { ...slept, detail: { trigger }, error: trigger, hasOopsHold: true, oopsBootId }
       : slept;
 
   const repaired = await updateImpState(
@@ -56,7 +56,12 @@ export async function checkLiveness(
 
       // a VM gone while it ran is a recovery; a lost snapshot fails the wake
       nextBootCause: lostVm ? 'recovery' : 'wake_fallback',
-      ...(trigger !== null && { detail: { trigger }, error: trigger, oopsBootId }),
+      ...(trigger !== null && {
+        detail: { trigger },
+        error: trigger,
+        hasOopsHold: trigger === KERNEL_OOPS_TRIGGER,
+        oopsBootId,
+      }),
     },
     { state: imp.state, pid: imp.pid },
   );

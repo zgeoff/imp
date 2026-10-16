@@ -361,7 +361,7 @@ test('it keeps what a lost database leaves on ZFS through the hourly pass and im
     root: 'tank/imp',
     run: zfs.run,
     readMounts: zfs.readMounts,
-    readModuleVersion: () => '2.2.2-0ubuntu9',
+    readModuleVersion: () => '2.4.4',
     log: () => {},
   });
 

@@ -430,7 +430,7 @@ export function buildStubZfs(options: FakeZfsOptions) {
 
     if (verb === 'version') {
       return buildSuccess(
-        `zfs-${options.userland ?? '2.2.2-0ubuntu9'}\nzfs-kmod-${options.kernel ?? '2.2.2-0ubuntu9'}\n`,
+        `zfs-${options.userland ?? '2.4.4'}\nzfs-kmod-${options.kernel ?? '2.4.4'}\n`,
       );
     }
 
