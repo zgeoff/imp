@@ -33,6 +33,8 @@ async function runCall(kind: string, send: () => Promise<Response>): Promise<voi
 
     print({ kind, isOk: true, status: response.status, body: await response.text() });
   } catch (error) {
+    process.stderr.write(`${kind}: ${String(error)}\n`);
+
     print({ kind, isOk: false, error: readErrorName(error) });
   }
 }
@@ -47,10 +49,11 @@ async function startProxy(stack: AsyncDisposableStack): Promise<string> {
 
   stack.defer(() => db.destroy());
 
-  const config = loadConfig({
-    IMP_DATA_DIR: dataDir,
-    IMP_API_PORT: new URL(args.origin).port,
-  });
+  // the origin's free port may fall in the imp ports, which a config refuses
+  const config = {
+    ...loadConfig({ IMP_DATA_DIR: dataDir }),
+    apiPort: Number(new URL(args.origin).port),
+  };
 
   // only an imp route wakes an imp; this one routes to the API alone
   const proxy = startWakeProxy({
