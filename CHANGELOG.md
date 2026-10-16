@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.0](https://github.com/zgeoff/impz/compare/v2.0.8...v2.1.0) (2026-10-16)
+
+### Features
+
+- **geo-1059:** enforce impd's zfs module requirement
+  ([#424](https://github.com/zgeoff/impz/issues/424))
+  ([93e4acb](https://github.com/zgeoff/impz/commit/93e4acb13eef83d09fcc9843cb93c1341e39c74a))
+
 ## [2.0.8](https://github.com/zgeoff/impz/compare/v2.0.7...v2.0.8) (2026-10-16)
 
 ### Bug Fixes
