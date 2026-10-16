@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.4](https://github.com/zgeoff/impz/compare/v2.0.3...v2.0.4) (2026-10-16)
+
+
+### Bug Fixes
+
+* **geo-1061:** point dev and e2e scripts at impz's imp-e2e vault ([#407](https://github.com/zgeoff/impz/issues/407)) ([4b1831e](https://github.com/zgeoff/impz/commit/4b1831e5489b8c984559cda5fad0a1076e292bbd))
+
 ## [2.0.3](https://github.com/zgeoff/impz/compare/v2.0.2...v2.0.3) (2026-10-15)
 
 ### Bug Fixes
