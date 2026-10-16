@@ -2,11 +2,14 @@
 
 ## [2.0.8](https://github.com/zgeoff/impz/compare/v2.0.7...v2.0.8) (2026-10-16)
 
-
 ### Bug Fixes
 
-* **geo-1036:** give the feed, wake and state writes one owner each ([#416](https://github.com/zgeoff/impz/issues/416)) ([ed09426](https://github.com/zgeoff/impz/commit/ed09426cd440097af5ba387cac03fbb099fb08c2))
-* **geo-889:** hold only the vm whose thread a kernel oops killed ([#412](https://github.com/zgeoff/impz/issues/412)) ([e641930](https://github.com/zgeoff/impz/commit/e6419300a9310d4f42d2c0d23f583aae58cf0155))
+- **geo-1036:** give the feed, wake and state writes one owner each
+  ([#416](https://github.com/zgeoff/impz/issues/416))
+  ([ed09426](https://github.com/zgeoff/impz/commit/ed09426cd440097af5ba387cac03fbb099fb08c2))
+- **geo-889:** hold only the vm whose thread a kernel oops killed
+  ([#412](https://github.com/zgeoff/impz/issues/412))
+  ([e641930](https://github.com/zgeoff/impz/commit/e6419300a9310d4f42d2c0d23f583aae58cf0155))
 
 ## [2.0.7](https://github.com/zgeoff/impz/compare/v2.0.6...v2.0.7) (2026-10-16)
 
