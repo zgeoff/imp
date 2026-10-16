@@ -18,8 +18,13 @@ async function setupTest() {
   await runGitChecked(['git', '-C', dir, 'config', 'user.email', 'test@example.com']);
   await runGitChecked(['git', '-C', dir, 'config', 'commit.gpgsign', 'false']);
   await mkdir(join(dir, 'packages/api'), { recursive: true });
+  await mkdir(join(dir, 'packages/cli'), { recursive: true });
 
-  return { dir, schemaPath: join(dir, 'packages/api/protocol-schema.json') };
+  return {
+    dir,
+    schemaPath: join(dir, 'packages/api/protocol-schema.json'),
+    outputsPath: join(dir, 'packages/cli/json-output-schema.json'),
+  };
 }
 
 test('it fails a pull request that breaks the protocol without a mark', async () => {
@@ -507,6 +512,158 @@ test('it fails a pull request that removes the protocol schema', async () => {
 
   expect(stderr).toBe(
     'check-breaking-change: the pull request removes packages/api/protocol-schema.json\n',
+  );
+
+  expect(exitCode).toBe(1);
+});
+
+test('it fails a pull request that renames a field of a --json output without a mark', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.schemaPath,
+    JSON.stringify({ procedures: {}, messages: {}, errors: {}, constants: {} }),
+  );
+
+  await writeFile(
+    ctx.outputsPath,
+    JSON.stringify({
+      outputs: {
+        info: {
+          procedure: 'system.info',
+          schema: {
+            type: 'object',
+            properties: { ramBudgetMib: { type: 'integer' } },
+            required: ['ramBudgetMib'],
+            additionalProperties: false,
+          },
+        },
+      },
+    }),
+  );
+
+  await runGitChecked(['git', '-C', ctx.dir, 'add', '.']);
+  await runGitChecked(['git', '-C', ctx.dir, 'commit', '--quiet', '-m', 'feat: add info']);
+
+  const baseOut = await runGitChecked(['git', '-C', ctx.dir, 'rev-parse', 'HEAD']);
+
+  const baseSHA = baseOut.trim();
+
+  await runGitChecked(['git', '-C', ctx.dir, 'switch', '--quiet', '-c', 'rename-budget']);
+
+  await writeFile(
+    ctx.outputsPath,
+    JSON.stringify({
+      outputs: {
+        info: {
+          procedure: 'system.info',
+          schema: {
+            type: 'object',
+            properties: { ramLimitMib: { type: 'integer' } },
+            required: ['ramLimitMib'],
+            additionalProperties: false,
+          },
+        },
+      },
+    }),
+  );
+
+  await runGitChecked([
+    'git',
+    '-C',
+    ctx.dir,
+    'commit',
+    '--quiet',
+    '-am',
+    'feat: rename the budget',
+  ]);
+
+  const headOut = await runGitChecked(['git', '-C', ctx.dir, 'rev-parse', 'HEAD']);
+
+  const headSHA = headOut.trim();
+
+  const proc = Bun.spawn([process.execPath, join(import.meta.dir, 'check-breaking-change.ts')], {
+    cwd: ctx.dir,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: {
+      ...createGitFreeEnv(process.env),
+      BASE_SHA: baseSHA,
+      HEAD_SHA: headSHA,
+      PR_NUMBER: '7',
+      PR_TITLE: 'feat: rename the budget',
+      PR_BODY: '',
+    },
+  });
+
+  const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+
+  expect(stderr).toBe(
+    'check-breaking-change: this pull request breaks the protocol a client of the same major speaks:\n' +
+      '  - impz info --json .ramBudgetMib: may now be missing\n\n' +
+      'Keep the change compatible, or mark it so release-please bumps the major: a `!` after the\n' +
+      "type, as in `feat(#740)!: …`, in the PR title (several commits) or in the commit's subject\n" +
+      '(one commit), or a `BREAKING CHANGE: <what breaks>` footer in a commit message.\n',
+  );
+
+  expect(exitCode).toBe(1);
+});
+
+test('it fails a pull request that removes the --json output schema', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.schemaPath,
+    JSON.stringify({ procedures: {}, messages: {}, errors: {}, constants: {} }),
+  );
+
+  await writeFile(ctx.outputsPath, JSON.stringify({ outputs: {} }));
+  await runGitChecked(['git', '-C', ctx.dir, 'add', '.']);
+  await runGitChecked(['git', '-C', ctx.dir, 'commit', '--quiet', '-m', 'ci: add the schemas']);
+
+  const baseOut = await runGitChecked(['git', '-C', ctx.dir, 'rev-parse', 'HEAD']);
+
+  const baseSHA = baseOut.trim();
+
+  await runGitChecked(['git', '-C', ctx.dir, 'switch', '--quiet', '-c', 'remove-outputs']);
+
+  await runGitChecked([
+    'git',
+    '-C',
+    ctx.dir,
+    'rm',
+    '--quiet',
+    'packages/cli/json-output-schema.json',
+  ]);
+
+  await runGitChecked(['git', '-C', ctx.dir, 'commit', '--quiet', '-m', 'ci: remove the outputs']);
+
+  const headOut = await runGitChecked(['git', '-C', ctx.dir, 'rev-parse', 'HEAD']);
+
+  const headSHA = headOut.trim();
+
+  const proc = Bun.spawn([process.execPath, join(import.meta.dir, 'check-breaking-change.ts')], {
+    cwd: ctx.dir,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: {
+      ...createGitFreeEnv(process.env),
+      BASE_SHA: baseSHA,
+      HEAD_SHA: headSHA,
+      PR_NUMBER: '7',
+      PR_TITLE: 'ci: remove the outputs',
+      PR_BODY: '',
+    },
+  });
+
+  const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+
+  expect(stderr).toBe(
+    'check-breaking-change: this pull request breaks the protocol a client of the same major speaks:\n' +
+      '  - packages/cli/json-output-schema.json: removed\n\n' +
+      'Keep the change compatible, or mark it so release-please bumps the major: a `!` after the\n' +
+      "type, as in `feat(#740)!: …`, in the PR title (several commits) or in the commit's subject\n" +
+      '(one commit), or a `BREAKING CHANGE: <what breaks>` footer in a commit message.\n',
   );
 
   expect(exitCode).toBe(1);

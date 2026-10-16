@@ -4,8 +4,10 @@
 import * as z from 'zod';
 import { ProtocolSchemaSchema } from '../../packages/api/src/protocols/build-protocol-schema';
 import type { ProtocolSchema } from '../../packages/api/src/protocols/build-protocol-schema';
-import { PROTOCOL_SCHEMA_FILE } from '../render-protocol-schema';
-import { collectBreakingChanges } from './collect-breaking-changes';
+import { JsonOutputSchemaSchema } from '../../packages/cli/src/build-json-output-schema';
+import type { JsonOutputSchema } from '../../packages/cli/src/build-json-output-schema';
+import { JSON_OUTPUT_SCHEMA_FILE, PROTOCOL_SCHEMA_FILE } from '../render-protocol-schema';
+import { collectBreakingChanges, collectJsonOutputChanges } from './collect-breaking-changes';
 import { isMarkedBreaking } from './is-marked-breaking';
 
 const EnvSchema = z.object({
@@ -36,7 +38,10 @@ function main(): void {
     process.exit(1);
   }
 
-  const changes = collectBreakingChanges(base, head);
+  const changes = [
+    ...collectBreakingChanges(base, head),
+    ...collectOutputChanges(mergeBase, env.HEAD_SHA),
+  ];
 
   if (changes.length === 0) {
     console.log('check-breaking-change: no breaking change to the protocol');
@@ -80,9 +85,39 @@ function runGit(args: readonly string[]): string {
   return result.stdout.toString();
 }
 
-// the file at a commit; undefined when the commit has none
+// The `--json` outputs' breaks; none from a base before the file. A head
+// without it breaks every reader, so it counts as one change.
+function collectOutputChanges(mergeBase: string, head: string): string[] {
+  const base = loadJsonOutputSchema(mergeBase);
+
+  if (base === undefined) {
+    return [];
+  }
+
+  const after = loadJsonOutputSchema(head);
+
+  if (after === undefined) {
+    return [`${JSON_OUTPUT_SCHEMA_FILE}: removed`];
+  }
+
+  return collectJsonOutputChanges(base, after);
+}
+
 function loadProtocolSchema(commit: string): ProtocolSchema | undefined {
-  const result = Bun.spawnSync(['git', 'show', `${commit}:${PROTOCOL_SCHEMA_FILE}`], {
+  const text = readCommittedFile(commit, PROTOCOL_SCHEMA_FILE);
+
+  return text === undefined ? undefined : ProtocolSchemaSchema.parse(JSON.parse(text));
+}
+
+function loadJsonOutputSchema(commit: string): JsonOutputSchema | undefined {
+  const text = readCommittedFile(commit, JSON_OUTPUT_SCHEMA_FILE);
+
+  return text === undefined ? undefined : JsonOutputSchemaSchema.parse(JSON.parse(text));
+}
+
+// the file at a commit; undefined when the commit has none
+function readCommittedFile(commit: string, path: string): string | undefined {
+  const result = Bun.spawnSync(['git', 'show', `${commit}:${path}`], {
     stderr: 'pipe',
   });
 
@@ -93,10 +128,10 @@ function loadProtocolSchema(commit: string): ProtocolSchema | undefined {
       return undefined;
     }
 
-    throw new Error(`git show ${commit}:${PROTOCOL_SCHEMA_FILE}: ${stderr.trim()}`);
+    throw new Error(`git show ${commit}:${path}: ${stderr.trim()}`);
   }
 
-  return ProtocolSchemaSchema.parse(JSON.parse(result.stdout.toString()));
+  return result.stdout.toString();
 }
 
 if (import.meta.main) {

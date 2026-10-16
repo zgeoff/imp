@@ -2,6 +2,7 @@ import type {
   MessageDirection,
   ProtocolSchema,
 } from '../../packages/api/src/protocols/build-protocol-schema';
+import type { JsonOutputSchema } from '../../packages/cli/src/build-json-output-schema';
 
 type Schema = boolean | Readonly<Record<string, unknown>>;
 
@@ -73,6 +74,21 @@ export function collectBreakingChanges(base: ProtocolSchema, head: ProtocolSchem
     ...collectErrorChanges(base, head),
     ...collectConstantChanges(base, head),
   ];
+}
+
+// The changes from base to head that break a program reading `impz <command>
+// --json`, which reads what impd sends: docs/guides/cli.md#json-output.
+export function collectJsonOutputChanges(base: JsonOutputSchema, head: JsonOutputSchema): string[] {
+  return Object.entries(base.outputs).flatMap(([command, before]) => {
+    const after = head.outputs[command];
+    const label = `impz ${command} --json`;
+
+    if (after === undefined) {
+      return [`${label}: removed`];
+    }
+
+    return collectSchemaChanges(label, 'toClient', before.schema, after.schema);
+  });
 }
 
 function collectProcedureChanges(base: ProtocolSchema, head: ProtocolSchema): string[] {
