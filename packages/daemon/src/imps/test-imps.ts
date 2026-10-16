@@ -50,6 +50,7 @@ import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { Jails } from '../vmm/jail';
 import type { KsmHostStats } from '../vmm/ksm';
+import { readThreadIds } from '../vmm/vm-stats';
 import type { ImpService } from './imp-service';
 import { NO_KERNEL_OOPS, createKernelOopsWatch } from './kernel-oops-watch';
 
@@ -174,9 +175,18 @@ export interface ImpTestOptions {
   readonly createStorage?: (dataDir: string) => StorageBackend;
 
   // files that stand for /proc/sys/kernel/tainted, read on the harness's
-  // clock, and /proc/sys/kernel/random/boot_id; the kernel never oopses
-  // without them
-  readonly kernelFiles?: { readonly taintPath: string; readonly bootIdPath: string };
+  // clock, /proc/sys/kernel/random/boot_id, /dev/kmsg and /proc/self/ns/pid;
+  // the kernel never oopses without them
+  readonly kernelFiles?: {
+    readonly taintPath: string;
+    readonly bootIdPath: string;
+    readonly kmsgPath: string;
+    readonly pidNamespacePath: string;
+  };
+
+  // a dir that stands for /proc, where the sampler reads each VM's threads
+  // from <pid>/task; no VM has a thread without it
+  readonly procRoot?: string;
 
   // CPU limits: none enforced, and 8 cores, by default
   readonly cgroups?: CpuCgroups;
@@ -389,7 +399,13 @@ export async function createImpTest(
               options.kernelFiles.taintPath,
               readClock,
               options.kernelFiles.bootIdPath,
+              {
+                kmsgPath: options.kernelFiles.kmsgPath,
+                pidNamespacePath: options.kernelFiles.pidNamespacePath,
+              },
             ),
+      readThreadIds: (pid) =>
+        options.procRoot === undefined ? null : readThreadIds(pid, options.procRoot),
       ...(frozenAt !== undefined && {
         sleepTiming: {
           now: readClock,

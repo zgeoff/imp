@@ -88,7 +88,8 @@ export async function checkLiveness(
 }
 
 // Why a lost VM died, when impd can tell: its memory limit, read before the
-// cgroup goes, or a kernel oops that impd saw while the VM ran
+// cgroup goes, or a kernel oops that impd saw while the VM ran and that hit
+// its thread or a thread no VM owned (lifecycle.md)
 function findLostVmTrigger(context: ImpContext, imp: Readonly<ImpRecord>): string | null {
   if (context.cgroups.hasOomKillSinceStart(imp.id)) {
     return OOM_KILL_TRIGGER;
@@ -97,7 +98,13 @@ function findLostVmTrigger(context: ImpContext, imp: Readonly<ImpRecord>): strin
   const oopsSeenAt = context.kernelOops.findOopsSeenAt();
   const ranSince = imp.awakeSince?.getTime() ?? 0;
 
-  return oopsSeenAt !== null && ranSince <= oopsSeenAt ? KERNEL_OOPS_TRIGGER : null;
+  if (oopsSeenAt === null || ranSince > oopsSeenAt) {
+    return null;
+  }
+
+  const owners = context.kernelOops.findOopsOwners(context.resources.listThreadOwners);
+
+  return owners === null || owners.has(imp.id) ? KERNEL_OOPS_TRIGGER : null;
 }
 
 // Sleeping when the snapshot on disk is newer than the imp's last activity,

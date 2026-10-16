@@ -49,6 +49,9 @@ interface SamplerReaders {
 
   // one read of smaps_rollup for both
   readonly readMemory: (pid: number, apiSocket: string) => VmMemory;
+
+  // the pid's threads, from /proc/<pid>/task; null when it is gone
+  readonly readThreadIds: (pid: number) => readonly number[] | null;
 }
 
 interface Counters {
@@ -65,6 +68,10 @@ interface Tracked {
   readonly lastAt: number;
   readonly totals: Counters;
   readonly sample: ResourceSample;
+
+  // every thread this Firecracker had at any look: a thread an oops killed
+  // leaves the task list before the process dies
+  readonly threadIds: ReadonlySet<number>;
 }
 
 const ZERO: Counters = { cpuUsec: 0, throttledUsec: 0, rx: 0, tx: 0 };
@@ -84,6 +91,9 @@ export interface ResourceSampler {
 
   // when the sampler last saw the imp's VM; null when it never did
   readonly readLastSeenAt: (impId: string) => Date | null;
+
+  // the imps whose Firecracker had this thread at some look; empty when none
+  readonly listThreadOwners: (threadId: number) => readonly string[];
 
   // drops every imp not in `impIds`: its VM stopped or slept
   readonly keepOnly: (impIds: ReadonlySet<string>) => void;
@@ -111,6 +121,7 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
     const now = readers.now();
     const counters = readCounters(vm);
     const memory = readers.readMemory(vm.pid, vm.apiSocket);
+    const threads = readers.readThreadIds(vm.pid) ?? [];
     const previous = tracked.get(vm.impId);
 
     // a new Firecracker: its counters start here
@@ -122,6 +133,7 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
         lastAt: now,
         totals: ZERO,
         sample: buildSample(now, now, ZERO, memory, undefined),
+        threadIds: new Set(threads),
       };
 
       tracked.set(vm.impId, entry);
@@ -153,6 +165,7 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
       lastAt: now,
       totals,
       sample: buildSample(now, previous.since, totals, memory, cpuPercent),
+      threadIds: new Set([...previous.threadIds, ...threads]),
     };
 
     tracked.set(vm.impId, entry);
@@ -193,6 +206,8 @@ export function createResourceSampler(readers: SamplerReaders): ResourceSampler 
 
       return seen === undefined ? null : new Date(seen.lastAt);
     },
+    listThreadOwners: (threadId) =>
+      [...tracked].filter(([, entry]) => entry.threadIds.has(threadId)).map(([impId]) => impId),
     keepOnly: (impIds) => {
       for (const impId of tracked.keys()) {
         if (!impIds.has(impId)) {

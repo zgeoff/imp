@@ -341,7 +341,10 @@ is set:
   same line on every page, `system.info` returns `rebootReason: "a kernel oops"`, and the
   `imp.host.reboot_needed` gauge reads 1.
 - An imp whose VM ran when impd saw the flag go from clear to set, and was lost after it, shows the
-  error `a kernel oops killed firecracker`. A start or a wake of it fails with
+  error `a kernel oops killed firecracker` when its Firecracker owned the thread the oops killed.
+  impd reads that thread from the oops header in `/dev/kmsg`. Every such imp shows the error when
+  impd runs outside the host's PID namespace, as it does in the imp-host container, when it cannot
+  read `/dev/kmsg`, or when no VM owned the thread. A start or a wake of it fails with
   `PRECONDITION_FAILED`:
   `the host needs a reboot: a kernel oops holds the disk of <name>; reboot the host, then start it`.
 - On ZFS, a reclaim that meets the held dataset logs `impd: zfs: reclaim failed: …` once for that

@@ -5,7 +5,8 @@ import { createResourceSampler } from './resource-sampler';
 // a sampler over counters the test sets, on a clock it moves
 function setupTest() {
   // each reader needs a value to answer before a test sets its own: the
-  // clock at 0, counters a new VM starts from, and no memory figure yet
+  // clock at 0, counters a new VM starts from, and no memory figure or
+  // thread yet
   const state = {
     now: 0,
     cpu: { usageUsec: 0, throttledUsec: 0 } as CpuStat | null,
@@ -13,6 +14,7 @@ function setupTest() {
     net: { rxBytes: 0, txBytes: 0 },
     memory: { ramMib: null as number | null, rssMib: null as number | null },
     memoryReads: 0,
+    threads: [] as number[] | null,
   };
 
   const sampler = createResourceSampler({
@@ -25,6 +27,7 @@ function setupTest() {
 
       return state.memory;
     },
+    readThreadIds: () => state.threads,
   });
 
   return { state, sampler };
@@ -263,4 +266,48 @@ test('#readLastSeenAt answers null for an imp keepOnly dropped', () => {
   ctx.sampler.keepOnly(new Set());
 
   expect(ctx.sampler.readLastSeenAt('a')).toBeNull();
+});
+
+test('#listThreadOwners lists the imp whose VM had the thread at an earlier look', () => {
+  const ctx = setupTest();
+  const vm = { impId: 'a', pid: 10, apiSocket: '/api', tap: 'imp0' };
+
+  ctx.state.threads = [10, 4242];
+
+  ctx.sampler.readVmUsage(vm);
+
+  // the thread is gone from the task list, and the process with it
+  ctx.state.threads = [10];
+
+  ctx.sampler.readVmUsage(vm);
+
+  ctx.state.threads = null;
+
+  ctx.sampler.readVmUsage(vm);
+
+  expect(ctx.sampler.listThreadOwners(4242)).toStrictEqual(['a']);
+});
+
+test('#listThreadOwners lists no imp for a thread no VM had', () => {
+  const ctx = setupTest();
+
+  ctx.state.threads = [10, 4242];
+
+  ctx.sampler.readVmUsage({ impId: 'a', pid: 10, apiSocket: '/api', tap: 'imp0' });
+
+  expect(ctx.sampler.listThreadOwners(7777)).toStrictEqual([]);
+});
+
+test('#listThreadOwners forgets the threads of an earlier Firecracker of the imp', () => {
+  const ctx = setupTest();
+
+  ctx.state.threads = [10, 4242];
+
+  ctx.sampler.readVmUsage({ impId: 'a', pid: 10, apiSocket: '/api', tap: 'imp0' });
+
+  ctx.state.threads = [11, 5151];
+
+  ctx.sampler.readVmUsage({ impId: 'a', pid: 11, apiSocket: '/api', tap: 'imp0' });
+
+  expect(ctx.sampler.listThreadOwners(4242)).toStrictEqual([]);
 });

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, readSync, readlinkSync } from 'node:fs';
 
 // what the record and the log say when a kernel oops killed the VM
 export const KERNEL_OOPS_TRIGGER = 'a kernel oops killed firecracker';
@@ -30,6 +30,13 @@ export interface KernelOopsWatch {
   // the kernel's id for this boot, which a hold records: a hold of another
   // boot's id came before a reboot. Null when impd cannot read it
   readonly findBootId: () => string | null;
+
+  // the imps whose Firecracker owned a thread an oops killed, by the thread
+  // ids `listOwners` gives. Null when an oops names a thread no VM owns, or
+  // impd cannot read the oops from the kernel log: then any VM may hold it
+  readonly findOopsOwners: (
+    listOwners: (threadId: number) => readonly string[],
+  ) => ReadonlySet<string> | null;
 }
 
 // tests and a host without the file: the kernel never oopses
@@ -38,6 +45,22 @@ export const NO_KERNEL_OOPS: KernelOopsWatch = {
   isOopsed: () => false,
   findOopsSeenAt: () => null,
   findBootId: () => null,
+  findOopsOwners: () => null,
+};
+
+// Where the oops's thread comes from: the kernel log, and impd's own PID
+// namespace, whose thread ids match the log's only when it is the host's
+interface KernelLog {
+  readonly kmsgPath: string;
+  readonly pidNamespacePath: string;
+
+  // one read of the log; a test throws the kernel's EPIPE from it
+  readonly readChunk?: (fd: number, buffer: Buffer) => number;
+}
+
+const HOST_KERNEL_LOG: KernelLog = {
+  kmsgPath: '/dev/kmsg',
+  pidNamespacePath: '/proc/self/ns/pid',
 };
 
 // An unreadable or malformed file reads as unknown: it never starts a hold,
@@ -46,6 +69,7 @@ export function createKernelOopsWatch(
   path = '/proc/sys/kernel/tainted',
   now: () => number = Date.now,
   bootIdPath = '/proc/sys/kernel/random/boot_id',
+  kernelLog: KernelLog = HOST_KERNEL_LOG,
 ): KernelOopsWatch {
   const seen: { clear: boolean; oopsedAt: number | null } = { clear: false, oopsedAt: null };
 
@@ -76,6 +100,10 @@ export function createKernelOopsWatch(
 
   const isOopsed = (): boolean => readFlag() === 'set';
 
+  // each oops's owners, by its number, from the first look: the VM it hit
+  // stops and leaves the sampler, but the oops stays its
+  const owners = new Map<number, readonly string[]>();
+
   return {
     readFlag,
     isOopsed,
@@ -84,6 +112,37 @@ export function createKernelOopsWatch(
       boot.id ??= readBootId(bootIdPath);
 
       return boot.id;
+    },
+    findOopsOwners: (listOwners) => {
+      // the log names a thread by its id on the host; inside a container's
+      // PID namespace the sampler's ids are other numbers, which may collide
+      if (!isHostPidNamespace(kernelLog.pidNamespacePath)) {
+        return null;
+      }
+
+      const threads = readKmsgOopsThreads(kernelLog.kmsgPath, kernelLog.readChunk ?? readSync);
+
+      if (threads === null) {
+        return null;
+      }
+
+      const found = new Set<string>();
+
+      for (const [oops, threadId] of threads) {
+        const owned = owners.get(oops) ?? listOwners(threadId);
+
+        owners.set(oops, owned);
+
+        if (owned.length === 0) {
+          return null;
+        }
+
+        for (const impId of owned) {
+          found.add(impId);
+        }
+      }
+
+      return found;
     },
   };
 }
@@ -114,4 +173,195 @@ function readBootId(path: string): string | null {
   }
 
   return /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/v.test(text) ? text : null;
+}
+
+// the kernel's fixed inode for its first PID namespace, the host's
+const HOST_PID_NAMESPACE = 'pid:[4026531836]';
+
+function isHostPidNamespace(path: string): boolean {
+  try {
+    return readlinkSync(path) === HOST_PID_NAMESPACE;
+  } catch {
+    return false;
+  }
+}
+
+// the most a kmsg record holds is about 1 KiB of text and its dictionary
+const KMSG_READ_BYTES = 16_384;
+
+// An oops's first line ends in its number since boot: x86's
+// "Oops: 0000 [#1] SMP", arm64's "Internal error: Oops: 0000000096000004 [#1] SMP"
+const OOPS_HEADER = /: [\da-f]{4,16} \[#(?<oops>\d+)\]/v;
+
+// the task line of a register dump or stack dump; the PID is the thread's
+// id, and kernels from 6.12 put the UID before it
+const OOPS_TASK = /^CPU: \d+ (?:UID: \d+ )?PID: (?<thread>\d+) Comm: /v;
+
+// what arm64 prints between an oops's header and its task line
+const OOPS_MODULES = 'Modules linked in:';
+
+// a warning's first lines; it ends, as an oops does, with an end marker
+const WARNING_CUT = /^-+\[ cut here \]-+$/v;
+const WARNING_HEAD = 'WARNING: ';
+const REPORT_END = '---[ end trace ';
+
+// what the parse knows of the oops it is in
+interface OpenOops {
+  readonly number: number;
+  thread: number | null;
+  isTied: boolean;
+}
+
+// Each oops since boot and the thread it killed, from the kernel log. Null
+// unless the log still holds every oops from the first, each tied to its
+// task line: the kernel drops its oldest records once the log is full.
+function readKmsgOopsThreads(
+  path: string,
+  readChunk: (fd: number, buffer: Buffer) => number,
+): ReadonlyMap<number, number> | null {
+  const messages = readKmsgMessages(path, readChunk);
+
+  if (messages === null) {
+    return null;
+  }
+
+  const threads = new Map<number, number | null>();
+
+  // another CPU's report can print between an oops's lines, so a task line
+  // is the oops's only when it comes first, with no other report around it
+  let open: OpenOops | null = null;
+
+  // warnings of several CPUs can overlap, so each open one counts
+  let openWarnings = 0;
+
+  // records the open oops's thread, or none when no task line ties to it
+  const writeOpenOops = (): void => {
+    if (open !== null) {
+      const tied = open.isTied ? open.thread : null;
+
+      threads.set(open.number, tied);
+
+      open = null;
+    }
+  };
+
+  for (const message of messages) {
+    const header = OOPS_HEADER.exec(message)?.groups?.['oops'];
+    const thread = OOPS_TASK.exec(message)?.groups?.['thread'];
+
+    if (header !== undefined) {
+      // an oops cut short by another one ties to nothing
+      if (open !== null) {
+        open.isTied = false;
+      }
+
+      writeOpenOops();
+
+      open = { number: Number(header), thread: null, isTied: openWarnings === 0 };
+
+      threads.set(open.number, null);
+    } else if (message.startsWith(REPORT_END)) {
+      // with a warning open the marker may end it or the oops, and that oops
+      // ties to nothing either way, so the marker ends a warning first
+      if (openWarnings > 0) {
+        openWarnings -= 1;
+      } else {
+        writeOpenOops();
+      }
+    } else if (WARNING_CUT.test(message) || message.startsWith(WARNING_HEAD)) {
+      if (message.startsWith(WARNING_HEAD)) {
+        openWarnings += 1;
+      }
+
+      if (open !== null) {
+        open.isTied = false;
+      }
+    } else if (open !== null && thread !== undefined) {
+      // a second task line belongs to another report, which makes the
+      // first one uncertain too
+      if (open.thread === null) {
+        open.thread = Number(thread);
+      } else {
+        open.isTied = false;
+      }
+    } else if (open?.thread === null && !message.startsWith(OOPS_MODULES)) {
+      open.isTied = false;
+    }
+  }
+
+  writeOpenOops();
+
+  const found = new Map<number, number>();
+
+  for (let number = 1; number <= threads.size; number += 1) {
+    const thread = threads.get(number);
+
+    if (thread === undefined || thread === null) {
+      return null;
+    }
+
+    found.set(number, thread);
+  }
+
+  return found.size === 0 ? null : found;
+}
+
+// The text of each record in the kernel log, oldest first. /dev/kmsg gives
+// one "<prio>,<seq>,<usec>,<flags>;<text>" record a read and EAGAIN at the
+// end; a dictionary line under a record starts with a space.
+function readKmsgMessages(
+  path: string,
+  readChunk: (fd: number, buffer: Buffer) => number,
+): string[] | null {
+  let fd: number;
+
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  } catch {
+    return null;
+  }
+
+  const buffer = Buffer.alloc(KMSG_READ_BYTES);
+  const chunks: string[] = [];
+
+  try {
+    for (;;) {
+      const count = readKmsgChunk(fd, buffer, readChunk);
+
+      if (count === null) {
+        return null;
+      }
+
+      if (count === 0) {
+        break;
+      }
+
+      chunks.push(buffer.toString('utf8', 0, count));
+    }
+  } finally {
+    closeSync(fd);
+  }
+
+  return chunks
+    .join('')
+    .split('\n')
+    .filter((line) => !line.startsWith(' ') && line.includes(';'))
+    .map((line) => line.slice(line.indexOf(';') + 1));
+}
+
+// bytes read, 0 at the end of the log, null on a failed read. EPIPE says the
+// kernel overwrote records past this read, which may hold a whole oops, so
+// the log read so far no longer proves it holds every oops
+function readKmsgChunk(
+  fd: number,
+  buffer: Buffer,
+  readChunk: (fd: number, buffer: Buffer) => number,
+): number | null {
+  try {
+    return readChunk(fd, buffer);
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? error.code : null;
+
+    return code === 'EAGAIN' ? 0 : null;
+  }
 }
