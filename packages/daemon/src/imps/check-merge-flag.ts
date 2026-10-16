@@ -1,4 +1,4 @@
-import type { ImpContext } from './imp-context';
+import type { ImpHost, ImpMemory } from './imp-context';
 
 // imps whose guest memory KSM cannot merge: the flag did not survive the exec
 export interface MergeFlags {
@@ -25,7 +25,7 @@ export function createMergeFlags(): MergeFlags {
 // (590c03ca6a3f) ksmd can clear the flag during the exec. `impz info` counts
 // such imps; a flag impd cannot read is logged.
 export async function checkMergeFlag(
-  context: ImpContext,
+  context: ImpHost & ImpMemory,
   imp: Readonly<{ id: string; name: string }>,
   pid: number,
 ): Promise<void> {
@@ -58,7 +58,7 @@ export async function checkMergeFlag(
 // impd with IMP_KSM started keeps its merge flag until the imp restarts, and
 // ksmd merges it again whenever it runs; impd says so once, at the adopt.
 export async function checkAdoptedMergeFlag(
-  context: ImpContext,
+  context: ImpHost & ImpMemory,
   imp: Readonly<{ id: string; name: string }>,
   pid: number,
 ): Promise<void> {

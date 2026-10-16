@@ -9,7 +9,7 @@ import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths } from '../storage/data-layout';
 import { resolveCpuSettings } from './cpu-limit';
 import { createImpRecord } from './create-imp-record';
-import type { ImpContext } from './imp-context';
+import type { ImpContext, ImpGuest, ImpHost, ImpVms } from './imp-context';
 import { MIB, buildDiskTooSmallError, growDiskFile, readFileBytes } from './imp-disk';
 import type { ImpLeases } from './imp-leases';
 import { checkLiveness } from './imp-liveness';
@@ -495,7 +495,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 // template's disk) is refused; the default grows to it. A prepareDisk disk
 // keeps its source's size unless a larger one is asked for.
 function resolveDiskBytes(
-  context: ImpContext,
+  context: ImpHost,
   input: CreateImpInput,
   image: ImageRecord,
 ): number | undefined {
@@ -519,7 +519,7 @@ function resolveDiskBytes(
 
 // The host's grow is the cheap one; when it fails or skips an unclean
 // filesystem, the guest's next boot grows it instead.
-async function growStoppedFilesystem(context: ImpContext, name: string, disk: string) {
+async function growStoppedFilesystem(context: ImpHost & ImpVms, name: string, disk: string) {
   try {
     const isGrown = await context.growFilesystem(disk);
 
@@ -536,7 +536,7 @@ async function growStoppedFilesystem(context: ImpContext, name: string, disk: st
 // The disk goes through the backend first: on ZFS a dataset is mounted inside
 // the imp's directory, and rm -r fails on it.
 async function removeImpFiles(
-  context: ImpContext,
+  context: ImpVms & ImpGuest,
   impId: string,
   checkpointIds: readonly string[],
 ): Promise<void> {

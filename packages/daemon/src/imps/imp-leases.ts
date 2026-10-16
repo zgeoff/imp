@@ -10,7 +10,7 @@ import {
   writeLease,
 } from '../db/leases';
 import type { LeaseRecord } from '../db/leases';
-import type { ImpContext } from './imp-context';
+import type { ImpClock, ImpHost } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpPresenter } from './imp-presenter';
@@ -71,7 +71,7 @@ export interface ImpLeases {
 }
 
 interface ImpLeaseParts {
-  readonly context: ImpContext;
+  readonly context: ImpHost & ImpClock;
   readonly lock: ImpLock;
   readonly ops: ImpVmOps;
   readonly presenter: ImpPresenter;

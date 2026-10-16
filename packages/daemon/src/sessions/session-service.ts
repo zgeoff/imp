@@ -4,7 +4,7 @@ import { isAgentError } from '../agent-client/is-agent-error';
 import { buildAgentOutdatedApiError, buildNotFoundError } from '../api-errors';
 import { updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
-import type { ImpContext } from '../imps/imp-context';
+import type { ImpGuest, ImpHost, ImpVms } from '../imps/imp-context';
 import type { ImpLock } from '../imps/imp-lock';
 import type { ImpRuntime } from '../imps/imp-runtime';
 import { findSessionLogImp } from '../session-logs/find-session-log-imp';
@@ -31,7 +31,7 @@ export interface SessionService {
 }
 
 interface SessionServiceParts {
-  readonly context: ImpContext;
+  readonly context: ImpHost & ImpVms & ImpGuest;
   readonly lock: Pick<ImpLock, 'findImp'>;
   readonly requireRunning: ImpRuntime['requireRunning'];
 }

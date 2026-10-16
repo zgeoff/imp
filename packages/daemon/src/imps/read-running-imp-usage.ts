@@ -1,10 +1,12 @@
 import { listImps } from '../db/imps';
-import type { ImpContext } from './imp-context';
+import type { ImpHost, ImpMemory, ImpVms } from './imp-context';
 import type { ResourceDelta } from './resource-sampler';
 
 // One pass of the sampler over every running VM; an imp that is not running
 // any more leaves the cache. Returns what each used since the last pass.
-export async function readRunningImpUsage(context: ImpContext): Promise<ResourceDelta[]> {
+export async function readRunningImpUsage(
+  context: ImpHost & ImpVms & ImpMemory,
+): Promise<ResourceDelta[]> {
   const imps = await listImps(context.db);
 
   const deltas: ResourceDelta[] = [];
@@ -43,7 +45,7 @@ export async function readRunningImpUsage(context: ImpContext): Promise<Resource
 
 // counts the imp's usage from now: at a spawn and at an adopt
 export function startCounting(
-  context: ImpContext,
+  context: ImpVms & ImpMemory,
   imp: Readonly<{ id: string; slot: number }>,
   pid: number,
 ): void {

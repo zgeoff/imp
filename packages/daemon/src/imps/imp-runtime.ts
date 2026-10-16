@@ -42,7 +42,7 @@ import type { BootTemplates } from '../templates/boot-templates';
 import { isJailedFirecracker } from '../vmm/firecracker-process';
 import type { ActivityTracker, ConnectionKind } from './activity-tracker';
 import { checkAdoptedMergeFlag } from './check-merge-flag';
-import type { ImpContext } from './imp-context';
+import type { ImpClock, ImpGuest, ImpHost, ImpMemory, ImpVms } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
 import { createLockFreeSleep } from './lock-free-sleep';
@@ -174,7 +174,7 @@ export interface ImpRuntime {
 }
 
 interface ImpRuntimeParts {
-  readonly context: ImpContext;
+  readonly context: ImpHost & ImpClock & ImpVms & ImpMemory & ImpGuest;
   readonly lock: ImpLock;
   readonly ops: ImpVmOps;
 }
@@ -788,7 +788,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
 // The guest the bundle step ran in is the one the command starts in: the
 // caller holds the lock, and this catches any write that got past it.
-async function requireSameBoot(context: ImpContext, imp: ImpRecord): Promise<void> {
+async function requireSameBoot(context: ImpHost, imp: ImpRecord): Promise<void> {
   const fresh = await findImpById(context.db, imp.id);
 
   if (fresh?.state !== 'running' || fresh.pid !== imp.pid) {
@@ -799,7 +799,7 @@ async function requireSameBoot(context: ImpContext, imp: ImpRecord): Promise<voi
 // A session's output, and NO_SESSION, name the imp's cold boots, read after
 // any boot the open caused, so that boot comes first
 async function withColdBoots(
-  context: ImpContext,
+  context: ImpHost,
   imp: ImpRecord,
   opening: Promise<ExecStream>,
 ): Promise<ExecStream> {
@@ -833,7 +833,7 @@ async function withColdBoots(
 
 // INVALID_STATE for an attach that must not wake the imp; an imp still
 // being created has no boots to name
-async function buildNotAwakeError(context: ImpContext, imp: ImpRecord): Promise<Error> {
+async function buildNotAwakeError(context: ImpHost, imp: ImpRecord): Promise<Error> {
   const error = buildInvalidStateError(imp.state, ['running'], 'attach without a wake to');
 
   if (imp.state === 'creating') {
@@ -850,7 +850,7 @@ async function buildNotAwakeError(context: ImpContext, imp: ImpRecord): Promise<
 }
 
 // an agent from before 0.14.0 reports no inner container
-function updateInner(context: ImpContext, impId: string, inner: InnerStatus | undefined): void {
+function updateInner(context: ImpGuest, impId: string, inner: InnerStatus | undefined): void {
   if (inner === undefined) {
     context.inners.forget(impId);
 
@@ -866,7 +866,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 
 // A VM booted before impd kept cold boots has none on record: its boot is
 // `unknown`, so a client still learns that it ended earlier generations.
-async function writeAdoptedBoot(context: ImpContext, imp: ImpRecord): Promise<void> {
+async function writeAdoptedBoot(context: ImpHost & ImpVms, imp: ImpRecord): Promise<void> {
   try {
     const ping = await sendPing(context.findPaths(imp.id).vsockSocket);
 
@@ -894,7 +894,7 @@ function requireFeature(paths: ImpPaths, feature: AgentFeature): void {
 // a session that just started with log is tapped at once, while the agent's
 // ring still holds its first output
 function startNewLogTap(
-  context: ImpContext,
+  context: ImpVms & ImpGuest,
   imp: Readonly<ImpRecord>,
   stream: Readonly<ExecStream>,
 ) {
@@ -916,10 +916,7 @@ function startNewLogTap(
 
 // Clears the hold an oops of an earlier boot left on an imp, so a new oops
 // in another task never holds it again; the imp keeps its state.
-async function removeStaleOopsHolds(
-  context: ImpContext,
-  imps: readonly ImpRecord[],
-): Promise<void> {
+async function removeStaleOopsHolds(context: ImpHost, imps: readonly ImpRecord[]): Promise<void> {
   for (const imp of imps.filter((listed) => listed.hasOopsHold)) {
     await updateImpState(context.db, imp.id, {
       reason: 'repaired',

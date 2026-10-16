@@ -3,7 +3,7 @@ import type { ImpRecord, ImpStateChange } from '../db/imps';
 import { hasSnapshot, readLoadingMeta, readSnapshotMeta } from '../sleep/snapshot-meta';
 import type { ImpPaths } from '../storage/data-layout';
 import { isImpVm } from '../vmm/firecracker-process';
-import type { ImpContext } from './imp-context';
+import type { ImpHost, ImpMemory, ImpVms } from './imp-context';
 import { KERNEL_OOPS_TRIGGER } from './kernel-oops-watch';
 import { OOM_KILL_TRIGGER } from './oom-kill';
 
@@ -11,7 +11,7 @@ import { OOM_KILL_TRIGGER } from './oom-kill';
 // wrote the snapshot means sleeping. An unlocked caller passes `canRepair`
 // false while the imp is locked, so it never hides a VM a start just booted.
 export async function checkLiveness(
-  context: ImpContext,
+  context: ImpHost & ImpVms & ImpMemory,
   imp: ImpRecord,
   canRepair: boolean,
 ): Promise<ImpRecord> {
@@ -95,7 +95,7 @@ export async function checkLiveness(
 // Why a lost VM died, when impd can tell: its memory limit, read before the
 // cgroup goes, or a kernel oops that impd saw while the VM ran and that hit
 // its thread or a thread no VM owned (lifecycle.md)
-function findLostVmTrigger(context: ImpContext, imp: Readonly<ImpRecord>): string | null {
+function findLostVmTrigger(context: ImpVms & ImpMemory, imp: Readonly<ImpRecord>): string | null {
   if (context.cgroups.hasOomKillSinceStart(imp.id)) {
     return OOM_KILL_TRIGGER;
   }
@@ -129,7 +129,7 @@ function findSleptChange(imp: ImpRecord, paths: ImpPaths): ImpStateChange | null
 
 // A dead VM's awake span ends when anything last saw it alive: impd's last
 // sample or the imp's last activity, not when the repair ran.
-function findLastSeenAlive(context: ImpContext, imp: Readonly<ImpRecord>): Date {
+function findLastSeenAlive(context: ImpMemory, imp: Readonly<ImpRecord>): Date {
   const sampled = context.resources.readLastSeenAt(imp.id)?.getTime() ?? 0;
 
   return new Date(Math.max(sampled, imp.lastActiveAt.getTime()));
