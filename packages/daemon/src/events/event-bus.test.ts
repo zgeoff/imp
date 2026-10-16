@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { createEventBus } from './event-bus';
 
 test('it gives an event to the listeners after one that throws', () => {
@@ -35,8 +35,11 @@ test('it keeps a throwing listener’s error from the publisher', () => {
 });
 
 test('it logs the error of a listener that throws', () => {
-  const log = mock();
-  const bus = createEventBus<string>(log);
+  const logged: string[] = [];
+
+  const bus = createEventBus<string>((message) => {
+    logged.push(message);
+  });
 
   bus.subscribe(() => {
     throw new Error('the listener broke');
@@ -44,9 +47,7 @@ test('it logs the error of a listener that throws', () => {
 
   bus.publish('tick');
 
-  expect(log).toHaveBeenCalledExactlyOnceWith(
-    'impd: events: a listener failed: the listener broke',
-  );
+  expect(logged).toStrictEqual(['impd: events: a listener failed: the listener broke']);
 });
 
 test('it stops giving events to a listener once it unsubscribes', () => {
