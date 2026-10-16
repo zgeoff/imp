@@ -33,11 +33,12 @@ stateDiagram-v2
 
 A create writes the imp's row as `creating`, clones its disk from the image and boots it. A create
 that asks for no start, such as a move's received copy or a restored backup, goes to `stopped` once
-its disk is ready. A create that the governor turns away deletes the row again, so a refused create
-leaves nothing behind. `running` means a VM is up and its agent answered. `sleeping` means the VM is
-gone and a committed memory snapshot is on disk. `stopped` means there is neither, and the next use
-boots the disk cold. `error` holds an imp whose create or boot failed in a way impd could not undo,
-and a start or a stop leaves it.
+its disk is ready. That move belongs to the create alone, so a stop refuses an imp that is still
+`creating`. A create that the governor turns away deletes the row again, so a refused create leaves
+nothing behind. `running` means a VM is up and its agent answered. `sleeping` means the VM is gone
+and a committed memory snapshot is on disk. `stopped` means there is neither, and the next use boots
+the disk cold. `error` holds an imp whose create or boot failed in a way impd could not undo, and a
+start or a stop leaves it.
 
 Anything that needs a VM wakes a sleeping imp and boots a stopped one: an exec, a console, a proxied
 request, an SSH login, a tunnel, a service change, a checkpoint and a lease. A stop frees the imp's

@@ -350,6 +350,11 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           return presenter.toApi(imp);
         }
 
+        // the table's creating → stopped is a create's own, never a stop
+        if (imp.state === 'creating') {
+          throw buildInvalidStateError(imp.state, ['running', 'sleeping', 'error'], 'stop');
+        }
+
         requireTransition(imp.state, 'stopped', 'stop');
 
         await leases.requireUnleased(imp, force);

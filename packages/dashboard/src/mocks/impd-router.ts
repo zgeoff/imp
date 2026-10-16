@@ -149,8 +149,16 @@ export const impdRouter = {
 
       return toCallerImp(options.context.session, started);
     }),
+
+    // an imp still being made is no imp to stop, as impd refuses it
     stop: os.imps.stop.handler(async (options) => {
-      const stopped = await writeImpState(options.input.name, 'stopped', 'stop', 'stopped');
+      const imp = findImp(options.input.name);
+
+      if (imp.state === 'creating') {
+        throw buildInvalidStateError(imp.state, ['running', 'sleeping', 'error'], 'stop');
+      }
+
+      const stopped = await writeImpState(imp.name, 'stopped', 'stop', 'stopped');
 
       return toCallerImp(options.context.session, stopped);
     }),

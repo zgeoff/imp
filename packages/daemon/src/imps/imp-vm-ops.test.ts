@@ -475,6 +475,18 @@ test('it kills the VM of a creating imp that would not stop once a destroy lets 
   expect(ctx.fake.alive.has(pid)).toBeFalse();
 });
 
+test('it refuses a stop of an imp that is still being made', async () => {
+  const ctx = await setupTest();
+  const image = await ctx.images.resolveImage('ubuntu');
+
+  await createImp(ctx.db, buildMockNewImp({ name: 'stuck', imageId: image.id }));
+
+  expect(ctx.client.imps.stop({ name: 'stuck' })).rejects.toMatchObject({
+    code: 'INVALID_STATE',
+    data: { state: 'creating', allowed: ['running', 'sleeping', 'error'] },
+  });
+});
+
 test(
   'it leaves every imp asleep for the next impd when impd stops with a wake under way',
   async () => {
