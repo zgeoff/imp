@@ -5,6 +5,7 @@
     "kernel/out/**",
     ".cache/**",
     "packages/api/protocol-schema.json",
+    "packages/cli/json-output-schema.json",
     "packages/daemon/src/db/schema.ts",
     "packages/daemon/src/agent-client/gen/**"
   ],

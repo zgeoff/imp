@@ -15,6 +15,7 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { invariant } from '@impz/test-utils/invariant';
 import * as z from 'zod';
+import { parseJsonOutput } from '../test-utils/parse-json-output';
 import { runCli } from '../test-utils/start-cli';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
@@ -196,4 +197,16 @@ test('it prints the database copy’s fields in the order a restore script reads
     'createdAt',
     'integrity',
   ]);
+});
+
+test('it prints the database copy as --json output in the shape of the committed schema', async () => {
+  const ctx = await setupTest();
+
+  const result = await runCli({
+    args: ['db', 'copy', 'before-upgrade', '--json'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  expect(result.code).toBe(0);
+  expect(parseJsonOutput('db copy', result.stdout).data).toStrictEqual(JSON.parse(result.stdout));
 });
