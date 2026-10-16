@@ -66,12 +66,14 @@ export async function sendLongCall(
 
   const signal = limit.signal;
 
-  const limited = new Request(request, { signal });
-
-  const sent =
-    call.send === null ? fetch(limited, { ...init, signal, timeout: false }) : call.send(limited);
-
+  // inside the try, so a transport that throws at once still ends the timer
+  // and the listener
   try {
+    const limited = new Request(request, { signal });
+
+    const sent =
+      call.send === null ? fetch(limited, { ...init, signal, timeout: false }) : call.send(limited);
+
     return await Promise.race([sent, expired.promise]);
   } finally {
     cancel();

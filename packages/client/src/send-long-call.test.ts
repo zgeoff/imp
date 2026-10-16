@@ -253,6 +253,25 @@ test('#backups.run ends when its caller aborts in a runtime without AbortSignal.
   await expect(ctx.origin.longGone).toResolve();
 });
 
+test('#backups.run throws the error of a transport that throws at once, and stops its deadline', async () => {
+  const clock = buildStubClock();
+
+  const client = createImpClient({
+    url: 'http://impd.test',
+    token: 'root-token',
+    startTimer: clock.startTimer,
+    fetch: () => {
+      throw new Error('no transport');
+    },
+  });
+
+  const call = client.backups.run();
+
+  await expect(call).rejects.toThrowWithMessage(Error, 'no transport');
+
+  expect(clock.countPending()).toBe(0);
+});
+
 test('#imps.list starts no deadline of its own', async () => {
   const ctx = setupTest();
 
