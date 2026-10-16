@@ -4,7 +4,7 @@ import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';
 import { createImage } from './images';
 import type { ImpWrite } from './imp-write-feed';
-import { createImp } from './imps';
+import { createImp, updateImpState } from './imps';
 import { openDatabase } from './open-database';
 
 test('it publishes each imp write on the feed it was given', async () => {
@@ -23,6 +23,32 @@ test('it publishes each imp write on the feed it was given', async () => {
   const imp = await createImp(db, buildMockNewImp({ imageId: image.id }));
 
   expect(seen).toStrictEqual([{ kind: 'added', imp }]);
+});
+
+test('it commits an imp write whose feed has a listener that throws, and tells the rest', async () => {
+  const writes = createEventBus<ImpWrite>(() => {});
+  const seen: ImpWrite[] = [];
+
+  writes.subscribe(() => {
+    throw new Error('the listener broke');
+  });
+
+  writes.subscribe((write) => {
+    seen.push(write);
+  });
+
+  const db = await openDatabase(':memory:', { writes });
+
+  onTestFinished(() => db.destroy());
+
+  const image = await createImage(db, buildMockNewImage());
+  const imp = await createImp(db, buildMockNewImp({ imageId: image.id }));
+  const stopped = await updateImpState(db, imp.id, { reason: 'stopped', state: 'stopped' });
+
+  expect(seen).toStrictEqual([
+    { kind: 'added', imp },
+    { kind: 'changed', imp: stopped, reason: 'stopped' },
+  ]);
 });
 
 test('it gives each database a feed of its own when none is given', async () => {

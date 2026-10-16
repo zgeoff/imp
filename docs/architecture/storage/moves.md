@@ -104,7 +104,9 @@ the imp while its stream runs. The snapshot's facts, the CPU, the host kernel an
 version, are checked against the target three times: at the prepare, at the receive and in the
 header, and last by the wake's own check, so a snapshot that got past the others still boots cold
 and never faults ([snapshot identity](../lifecycle/sleep-and-wake.md#snapshot-identity)). The
-snapshot's record goes last, and the commit sets the imp `sleeping` only once it reads whole.
+snapshot's record goes last, and the commit sets the imp `sleeping` only once it reads whole. The
+imp's first wake on the target installs the target's broker CA in the guest before the wake returns,
+because until then the guest trusts the source's.
 
 A warm move trusts the source with the target host, not only with the imp. The VM state is
 Firecracker's own format, which the target does not parse, and the paths in it are what the target's

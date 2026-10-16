@@ -30,6 +30,45 @@ test.each<[ImpState, ImpState]>([
   expect(canTransition(from, to)).toBeFalse();
 });
 
+// a caller past the types can pass any string, so the table must refuse it
+test.each<[string, string, string]>([
+  ['constructor', 'name', 'Object'],
+  ['__proto__', 'constructor', 'any'],
+  ['running', 'constructor', 'any'],
+  ['running', '__proto__', 'any'],
+  ['hibernating', 'running', 'any'],
+  ['running', 'hibernating', 'any'],
+  ['running', 'sleeping', 'teleport'],
+  ['running', 'sleeping', 'constructor'],
+])('#canTransition refuses the unknown move %s to %s via %s', (from, to, via) => {
+  const answer: unknown = Reflect.apply(canTransition, undefined, [from, to, via]);
+
+  expect(answer).toBeFalse();
+});
+
+test('#canTransition allows a warm move stopped to sleeping', () => {
+  expect(canTransition('stopped', 'sleeping', 'warm move')).toBeTrue();
+});
+
+test('#canTransition allows a warm move every edge open to any action', () => {
+  expect(canTransition('running', 'sleeping', 'warm move')).toBeTrue();
+});
+
+test.each<[ImpState]>([['creating'], ['error']])(
+  '#canTransition refuses a warm move %s to sleeping',
+  (from) => {
+    expect(canTransition(from, 'sleeping', 'warm move')).toBeFalse();
+  },
+);
+
+test('#findStatesLeadingTo names only running for a sleep', () => {
+  expect(findStatesLeadingTo('sleeping')).toStrictEqual(['running']);
+});
+
+test('#findStatesLeadingTo names running and stopped for a warm move to sleeping', () => {
+  expect(findStatesLeadingTo('sleeping', 'warm move')).toStrictEqual(['running', 'stopped']);
+});
+
 test('#findStatesLeadingTo names every state that can reach running', () => {
   expect(findStatesLeadingTo('running')).toStrictEqual([
     'creating',

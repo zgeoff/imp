@@ -1184,6 +1184,46 @@ test('it runs the CA bundle step again after a reboot', async () => {
   expect(ctx.bundleInstalls).toHaveLength(2);
 });
 
+test('it installs the broker CA within the wake a warm move left it to', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_EXAMPLE' });
+  await ctx.broker.addGrant('dev', 'gh');
+  await ctx.imps.sleepImp('dev');
+
+  // what a warm move's commit leaves: the CA install waits for the first wake
+  await ctx.db.updateTable('imps').set({ trust_pending: 1 }).where('id', '=', imp.id).execute();
+  await ctx.imps.wakeImp('dev');
+
+  expect(ctx.bundleInstalls).toStrictEqual([buildImpPaths(ctx.dataDir, imp.id).vsockSocket]);
+});
+
+test('it clears the pending CA install in the wake that does it', async () => {
+  const ctx = await setupTest();
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  await ctx.imps.sleepImp('dev');
+  await ctx.db.updateTable('imps').set({ trust_pending: 1 }).where('id', '=', imp.id).execute();
+  await ctx.imps.wakeImp('dev');
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(record?.isTrustPending).toBeFalse();
+});
+
+test('it installs no broker CA in a wake with no install pending', async () => {
+  const ctx = await setupTest();
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_EXAMPLE' });
+  await ctx.broker.addGrant('dev', 'gh');
+  await ctx.imps.sleepImp('dev');
+  await ctx.imps.wakeImp('dev');
+
+  expect(ctx.bundleInstalls).toBeEmpty();
+});
+
 test('it refuses an env that replaces a broker variable, and names it', async () => {
   const ctx = await setupTest();
   const imp = await ctx.imps.createImp({ name: 'dev' });

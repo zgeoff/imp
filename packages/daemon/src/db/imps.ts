@@ -11,6 +11,7 @@ import type {
 } from '@impz/api';
 import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
+import { requireTransition } from '../imps/imp-transitions';
 import { readErrorMessage } from '../read-error-message';
 import { ImpClashError } from './imp-clash-error';
 import type { ImpDatabase, ImpQueries } from './open-database';
@@ -376,12 +377,34 @@ export async function countImpsByState(db: ImpDatabase): Promise<Map<ImpState, n
   return new Map(rows.map((row) => [row.state, row.count]));
 }
 
-// Fields the change leaves out keep their value; null clears one.
+// what a compare-and-set state write expects the row to hold
+interface ImpStateExpected {
+  readonly state: ImpState;
+  readonly pid: number | null;
+}
+
+// The one writer of an imp's state; a field the change leaves out keeps its
+// value, null clears one. With `expected` it is a compare-and-set, which
+// gives undefined when something else changed the row first.
 export async function updateImpState(
   db: ImpDatabase,
   id: string,
   change: Readonly<ImpStateChange>,
-): Promise<ImpRecord> {
+): Promise<ImpRecord>;
+
+export async function updateImpState(
+  db: ImpDatabase,
+  id: string,
+  change: Readonly<ImpStateChange>,
+  expected: Readonly<ImpStateExpected>,
+): Promise<ImpRecord | undefined>;
+
+export async function updateImpState(
+  db: ImpDatabase,
+  id: string,
+  change: Readonly<ImpStateChange>,
+  expected?: Readonly<ImpStateExpected>,
+): Promise<ImpRecord | undefined> {
   const values: Updateable<DB['imps']> = { state: change.state };
 
   if (change.error !== undefined) {
@@ -404,52 +427,29 @@ export async function updateImpState(
     values.firecracker_version = change.firecrackerVersion;
   }
 
-  const row = await db
+  let query = db
     .updateTable('imps')
     .set({ ...values, ...buildAwakeValues(change), ...buildBootCauseValues(change) })
-    .where('id', '=', id)
-    .returningAll()
-    .executeTakeFirstOrThrow();
+    .where('id', '=', id);
 
-  return emitChange(db, toImpRecord(row), change);
-}
+  if (expected !== undefined) {
+    // an unlocked repair's move passes the lifecycle table too
+    if (change.state !== expected.state) {
+      requireTransition(expected.state, change.state, `move to ${change.state}`);
+    }
 
-// Compare-and-set: applies the change only while the row still has
-// `expected` state and pid; undefined when something else changed it first.
-export async function updateImpStateIf(
-  db: ImpDatabase,
-  id: string,
-  expected: Readonly<{ state: ImpState; pid: number | null }>,
-  change: Readonly<ImpStateChange>,
-): Promise<ImpRecord | undefined> {
-  const values: Updateable<DB['imps']> = { state: change.state };
+    const pidOperator = expected.pid === null ? 'is' : '=';
 
-  if (change.error !== undefined) {
-    values.error = change.error;
+    query = query.where('state', '=', expected.state).where('pid', pidOperator, expected.pid);
   }
 
-  if (change.oopsBootId !== undefined) {
-    values.oops_boot_id = change.oopsBootId;
-  }
+  const returning = query.returningAll();
 
-  if (change.pid !== undefined) {
-    values.pid = change.pid;
-  }
-
-  if (change.sleptAt !== undefined) {
-    values.slept_at = change.sleptAt === null ? null : change.sleptAt.getTime();
-  }
-
-  const pidOperator = expected.pid === null ? 'is' : '=';
-
-  const row = await db
-    .updateTable('imps')
-    .set({ ...values, ...buildAwakeValues(change), ...buildBootCauseValues(change) })
-    .where('id', '=', id)
-    .where('state', '=', expected.state)
-    .where('pid', pidOperator, expected.pid)
-    .returningAll()
-    .executeTakeFirst();
+  // an unguarded write to a missing row throws, as it always has
+  const row =
+    expected === undefined
+      ? await returning.executeTakeFirstOrThrow()
+      : await returning.executeTakeFirst();
 
   return row === undefined ? undefined : emitChange(db, toImpRecord(row), change);
 }
@@ -525,8 +525,19 @@ export async function updateImpCommitted(
   isWarm = false,
 ): Promise<ImpRecord> {
   const row = await db.transaction().execute(async (trx) => {
-    // a warm move's imp sleeps on the memory it brought, and its first wake
-    // installs this host's broker CA
+    // a warm move's imp sleeps on the memory it brought, along the lifecycle
+    // table's stopped → sleeping, and its first wake installs this host's
+    // broker CA
+    if (isWarm) {
+      const received = await trx
+        .selectFrom('imps')
+        .select('state')
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+
+      requireTransition(received.state, 'sleeping', 'commit a warm move', 'warm move');
+    }
+
     const updated = await trx
       .updateTable('imps')
       .set({

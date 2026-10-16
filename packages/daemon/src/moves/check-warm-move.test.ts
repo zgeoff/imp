@@ -625,17 +625,15 @@ test("it installs the target's broker CA once at the first wake after a warm mov
 
   await ctx.targetApp.client.imps.wake({ name: 'dev' });
 
+  // the wake itself does the install, so it is done when the wake returns
+  const after = await ctx.target.db
+    .selectFrom('imps')
+    .select('trust_pending')
+    .where('id', '=', created.id)
+    .executeTakeFirstOrThrow();
+
   expect(before.trust_pending).toBe(1);
-
-  await waitFor(async () => {
-    const after = await ctx.target.db
-      .selectFrom('imps')
-      .select('trust_pending')
-      .where('id', '=', created.id)
-      .executeTakeFirstOrThrow();
-
-    expect(after.trust_pending).toBe(0);
-  });
+  expect(after.trust_pending).toBe(0);
 });
 
 test('it refuses a system drive the target lacks whose sum is not its name', async () => {
