@@ -2,7 +2,7 @@ import type { StartTimer } from './clock';
 import { startRealTimer } from './start-real-timer';
 
 // when the call gives up, and what it throws then
-export interface RequestDeadline {
+interface RequestDeadline {
   readonly ms: number;
   readonly buildError: () => Error;
 }
