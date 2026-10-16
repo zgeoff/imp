@@ -243,9 +243,13 @@ test('#createStorageBackend refuses a zfs module with the zfs_uiomove bug by def
     },
   );
 
-  await expect(
-    backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() }),
-  ).rejects.toThrow(
+  const failed = await backend
+    .start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() })
+    .catch((error: unknown) => error);
+
+  expect(failed).toBeInstanceOf(Error);
+
+  expect(String(failed)).toInclude(
     'modules 2.3.7, 2.4.2 and later fix it; upgrade the module, or set IMP_ZFS_ALLOW_UIOMOVE_BUG=1 to start anyway',
   );
 

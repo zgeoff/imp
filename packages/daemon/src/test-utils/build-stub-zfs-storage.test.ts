@@ -49,9 +49,11 @@ test('it refuses the kernel module version it was given when that has the zfs_ui
     moduleVersion: '2.2.2-0ubuntu9',
   }).createStorage(ctx.dataDir);
 
-  await expect(
-    storage.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() }),
-  ).rejects.toThrow('module 2.2.2-0ubuntu9 ');
+  const failed = await storage
+    .start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() })
+    .catch((error: unknown) => error);
+
+  expect(String(failed)).toInclude('module 2.2.2-0ubuntu9 ');
 });
 
 test('it starts on a kernel module with the zfs_uiomove bug when the bug is allowed', async () => {

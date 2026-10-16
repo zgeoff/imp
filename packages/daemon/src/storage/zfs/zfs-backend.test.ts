@@ -188,11 +188,14 @@ test.each(['2.2.2-0ubuntu9.5', '2.3.4-1ubuntu2', '2.4.1'])(
       log: ctx.log,
     });
 
-    await expect(
-      backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() }),
-    ).rejects.toThrowWithMessage(
-      Error,
-      `zfs: the zfs kernel module ${version} has the zfs_uiomove short-copy bug (openzfs/zfs#15918): a VM killed during a disk read can oops the kernel and hold its disk until a reboot; modules 2.3.7, 2.4.2 and later fix it; upgrade the module, or set IMP_ZFS_ALLOW_UIOMOVE_BUG=1 to start anyway`,
+    const failed = await backend
+      .start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() })
+      .catch((error: unknown) => error);
+
+    expect(failed).toBeInstanceOf(Error);
+
+    expect(String(failed)).toBe(
+      `Error: zfs: the zfs kernel module ${version} has the zfs_uiomove short-copy bug (openzfs/zfs#15918): a VM killed during a disk read can oops the kernel and hold its disk until a reboot; modules 2.3.7, 2.4.2 and later fix it; upgrade the module, or set IMP_ZFS_ALLOW_UIOMOVE_BUG=1 to start anyway`,
     );
   },
 );
@@ -281,10 +284,12 @@ test('#start mounts nothing on a kernel module with the zfs_uiomove bug', async 
     log: ctx.log,
   });
 
-  await expect(
-    backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() }),
-  ).rejects.toThrow('IMP_ZFS_ALLOW_UIOMOVE_BUG=1');
+  const failed = await backend
+    .start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() })
+    .catch((error: unknown) => error);
 
+  expect(failed).toBeInstanceOf(Error);
+  expect(String(failed)).toInclude('IMP_ZFS_ALLOW_UIOMOVE_BUG=1');
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBeNull();
 });
 
