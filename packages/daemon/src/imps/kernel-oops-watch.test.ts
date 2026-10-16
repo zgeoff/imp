@@ -615,3 +615,41 @@ test('it finds no owners when a stack dump without markers prints a second task 
     ),
   ).toBeNull();
 });
+
+test('it finds no owners when an oops begins while one of two overlapping warnings is open', () => {
+  const ctx = setupTest();
+
+  // warning B ends before the oops; warning A, still open, ends inside it
+  writeFileSync(
+    ctx.kmsgPath,
+    [
+      '4,800,90412300,-;WARNING: CPU: 0 PID: 111 at kernel/sched/core.c:9000 __might_sleep+0x1/0x2',
+      '4,801,90412301,-;WARNING: CPU: 1 PID: 222 at kernel/sched/core.c:9000 __might_sleep+0x1/0x2',
+      '4,802,90412302,-;CPU: 1 PID: 222 Comm: worker-b Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '4,803,90412303,-;---[ end trace 0000000000000000 ]---',
+      '4,814,90412360,-;Oops: 0000 [#1] PREEMPT SMP NOPTI',
+      '4,815,90412361,-;CPU: 0 PID: 111 Comm: worker-a Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '4,816,90412362,-;---[ end trace 0000000000000000 ]---',
+      '4,817,90412365,-;CPU: 2 PID: 4242 Comm: fc_vcpu 0 Tainted: P           O       6.8.0-45-generic #45-Ubuntu',
+      '4,818,90412900,-;---[ end trace 0000000000000000 ]---',
+      '',
+    ].join('\n'),
+  );
+
+  symlinkSync('pid:[4026531836]', ctx.pidNamespacePath);
+
+  const watch = createKernelOopsWatch(ctx.taintPath, Date.now, ctx.bootIdPath, {
+    kmsgPath: ctx.kmsgPath,
+    pidNamespacePath: ctx.pidNamespacePath,
+  });
+
+  expect(
+    watch.findOopsOwners(
+      (thread) =>
+        new Map([
+          [111, ['b']],
+          [4242, ['a']],
+        ]).get(thread) ?? [],
+    ),
+  ).toBeNull();
+});

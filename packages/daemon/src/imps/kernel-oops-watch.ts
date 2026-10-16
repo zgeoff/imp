@@ -201,7 +201,8 @@ const OOPS_TASK = /^CPU: \d+ (?:UID: \d+ )?PID: (?<thread>\d+) Comm: /v;
 const OOPS_MODULES = /^Modules linked in:/v;
 
 // a warning's first lines; it ends, as an oops does, with an end marker
-const WARNING_START = /^(?:-+\[ cut here \]-+$|WARNING: )/v;
+const WARNING_CUT = /^-+\[ cut here \]-+$/v;
+const WARNING_HEAD = /^WARNING: /v;
 const REPORT_END = /^---\[ end trace /v;
 
 // what the parse knows of the oops it is in
@@ -229,7 +230,9 @@ function readKmsgOopsThreads(
   // another CPU's report can print between an oops's lines, so a task line
   // is the oops's only when it comes first, with no other report around it
   let open: OpenOops | null = null;
-  let isWarningOpen = false;
+
+  // warnings of several CPUs can overlap, so each open one counts
+  let openWarnings = 0;
 
   // records the open oops's thread, or none when no task line ties to it
   const writeOpenOops = (): void => {
@@ -254,15 +257,21 @@ function readKmsgOopsThreads(
 
       writeOpenOops();
 
-      open = { number: Number(header), thread: null, isTied: !isWarningOpen };
+      open = { number: Number(header), thread: null, isTied: openWarnings === 0 };
 
       threads.set(open.number, null);
     } else if (REPORT_END.test(message)) {
-      isWarningOpen = false;
-
-      writeOpenOops();
-    } else if (WARNING_START.test(message)) {
-      isWarningOpen = true;
+      // with a warning open the marker may end it or the oops, and that oops
+      // ties to nothing either way, so the marker ends a warning first
+      if (openWarnings > 0) {
+        openWarnings -= 1;
+      } else {
+        writeOpenOops();
+      }
+    } else if (WARNING_CUT.test(message) || WARNING_HEAD.test(message)) {
+      if (WARNING_HEAD.test(message)) {
+        openWarnings += 1;
+      }
 
       if (open !== null) {
         open.isTied = false;
