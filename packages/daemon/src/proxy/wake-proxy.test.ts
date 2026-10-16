@@ -1,4 +1,4 @@
-import { expect, mock, onTestFinished, test } from 'bun:test';
+import { expect, jest, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -593,6 +593,77 @@ test('it passes on an API answer that stays silent past Bun’s idle limit, wher
     { kind: 'long', isOk: true, status: 200, body: 'the long answer' },
   ]);
 }, 30_000);
+
+// fake timers run 400 s of an API that sends nothing: no timer on the
+// proxy's side ends the request; the test above covers Bun's native limit
+test('it passes on an API answer that comes after 400 s of fake time', async () => {
+  const ctx = await setupTest();
+
+  const held = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+
+  onTestFinished(() => {
+    release.resolve(undefined);
+  });
+
+  const api = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    idleTimeout: 0,
+    fetch: async () => {
+      held.resolve(undefined);
+
+      await release.promise;
+
+      return new Response('the long answer');
+    },
+  });
+
+  ctx.stack.defer(() => api.stop(true));
+
+  const proxy = startWakeProxy({
+    config: { ...ctx.config, apiPort: api.port ?? 0 },
+    db: ctx.db,
+    imps: ctx.impd.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+    ports: { proxy: 0, slot: () => 0 },
+  });
+
+  ctx.stack.defer(() => proxy.stop());
+
+  const apex = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  ctx.stack.defer(() => apex.stop(true));
+  jest.useFakeTimers();
+
+  onTestFinished(() => {
+    jest.useRealTimers();
+  });
+
+  // the client's own hop lifts Bun's limit, so only the proxy is under test
+  const call = fetch(`http://127.0.0.1:${String(apex.port)}/rpc/backups/run`, {
+    method: 'POST',
+    body: '{}',
+    timeout: false,
+  });
+
+  await held.promise;
+
+  jest.advanceTimersByTime(400_000);
+  jest.useRealTimers();
+  release.resolve(undefined);
+
+  const response = await call;
+  const text = await response.text();
+
+  expect(response.status).toBe(200);
+  expect(text).toBe('the long answer');
+});
 
 test('it passes the rest of a streamed API answer on once the API sends it', async () => {
   const ctx = await setupTest();

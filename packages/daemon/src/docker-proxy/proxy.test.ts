@@ -1,4 +1,4 @@
-import { expect, onTestFinished, test } from 'bun:test';
+import { expect, jest, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1111,6 +1111,72 @@ test('it passes on a pull and an export that stay silent past Bun’s idle limit
     { kind: 'export', isOk: true, status: 200, body: 'the long answer' },
   ]);
 }, 30_000);
+
+// fake timers run 400 s of an engine that sends nothing: no timer on the
+// proxy's side ends a pull or an export; the test above covers Bun's limit
+test('it passes on a pull and an export the engine answers after 400 s of fake time', async () => {
+  const ctx = await setupTest();
+
+  const proxy = ctx.startProxy({
+    upstreamSocket: ctx.engine.socket,
+    token: 'test-token',
+    hostImage: 'ghcr.io/zgeoff/imp-host:latest',
+    builderImage: null,
+    buildContextMaxBytes: 4 * 1024 ** 2,
+    log: ctx.log,
+  });
+
+  await ctx.engine.addContainer({ id: 'a'.repeat(64), labels: { [PROXY_LABEL]: 'test-token' } });
+
+  const release = Promise.withResolvers<void>();
+  const bothHeld = Promise.withResolvers<void>();
+  const held = { count: 0 };
+
+  onTestFinished(() => {
+    release.resolve();
+  });
+
+  // the pull and the export answer once released
+  ctx.engine.setAnswer(async (_request, seen) => {
+    if (seen.target.startsWith('/v1.55/images/create') || seen.target.endsWith('/export')) {
+      held.count += 1;
+
+      if (held.count === 2) {
+        bothHeld.resolve();
+      }
+
+      await release.promise;
+    }
+
+    return null;
+  });
+
+  jest.useFakeTimers();
+
+  onTestFinished(() => {
+    jest.useRealTimers();
+  });
+
+  const long = [
+    proxy(
+      new Request('http://docker/v1.55/images/create?fromImage=busybox&tag=latest', {
+        method: 'POST',
+      }),
+    ),
+    proxy(new Request('http://docker/v1.55/containers/aaaa/export')),
+  ];
+
+  await bothHeld.promise;
+
+  jest.advanceTimersByTime(400_000);
+  jest.useRealTimers();
+  release.resolve();
+
+  const answered = await Promise.all(long);
+
+  expect(answered.map((response) => response.status)).toStrictEqual([200, 200]);
+  expect(ctx.engine.unexpected).toStrictEqual([]);
+});
 
 test('it answers 502 with the engine failure when the engine is unreachable', async () => {
   const ctx = await setupTest();
