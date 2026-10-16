@@ -22,7 +22,9 @@ import { buildStubExecGuest } from '@impz/daemon/src/test-utils/build-stub-exec-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubExecAgent } from '@impz/daemon/src/test-utils/start-stub-exec-agent';
+import { canUpdateReadOnly } from '@impz/test-utils/can-update-read-only';
 import { invariant } from '@impz/test-utils/invariant';
+import { updateReadOnly } from '@impz/test-utils/update-read-only';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
 import { runCli } from '../test-utils/start-cli';
 
@@ -142,7 +144,14 @@ async function setupTest() {
 
   invariant(app.server?.port);
 
-  return { env, rootToken, db, dataDir, url: `http://127.0.0.1:${String(app.server.port)}` };
+  return {
+    env,
+    rootToken,
+    db,
+    dataDir,
+    stack,
+    url: `http://127.0.0.1:${String(app.server.port)}`,
+  };
 }
 
 test('#login saves the host as current when impd accepts the token', async () => {
@@ -372,6 +381,46 @@ test('#--host sends the saved token over IMP_TOKEN, with a note', async () => {
     code: 0,
   });
 });
+
+test.skipIf(!canUpdateReadOnly())(
+  '#--host reads its saved host when the old token file cannot move, and notes the file it left',
+  async () => {
+    const ctx = await setupTest();
+
+    writeHostConfig(ctx.env, {
+      current: null,
+      hosts: { work: { url: ctx.url, token: ctx.rootToken } },
+    });
+
+    await mkdir(join(ctx.env.XDG_CONFIG_HOME, 'imp'));
+    await writeFile(join(ctx.env.XDG_CONFIG_HOME, 'imp', 'token'), 'file-token\n');
+
+    // released before the stack removes the home it locks
+    const locks = new DisposableStack();
+
+    ctx.stack.defer(() => {
+      locks.dispose();
+    });
+
+    updateReadOnly(locks, join(ctx.env.XDG_CONFIG_HOME, 'imp'));
+
+    const listed = await runCli({ args: ['--host', 'work', 'ls', '--json'], env: ctx.env });
+
+    const note = `impz: cannot move ${join(ctx.env.XDG_CONFIG_HOME, 'imp', 'token')} to ${join(ctx.env.XDG_CONFIG_HOME, 'impz', 'token')}, so it stays there: `;
+
+    expect(listed).toStrictEqual({
+      stdout: '[]\n',
+      stderr: expect.toSatisfy(
+        (text: string) => text.startsWith(note) && /EACCES|EPERM/.test(text),
+      ),
+      code: 0,
+    });
+
+    const leftBehind = await readFile(join(ctx.env.XDG_CONFIG_HOME, 'imp', 'token'), 'utf8');
+
+    expect(leftBehind).toBe('file-token\n');
+  },
+);
 
 test('#--host names the host in a 401 for a saved token impd refuses', async () => {
   const ctx = await setupTest();

@@ -18,11 +18,12 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 const CONFIG_FILES: readonly string[] = ['config.json', 'token'];
 
 // Moves the files the CLI kept in <config>/imp before its rename into `dir`,
-// each only when `dir` lacks it, so a move that failed part way resumes on
-// the next call and never writes over a file impz has.
+// each only when `dir` lacks it, so a failed move resumes on the next call;
+// a file outside `reads` that cannot move is noted and left where it is.
 export function updateLegacyConfig(
   dir: string,
   warn: (line: string) => void = console.error,
+  reads: readonly string[] = CONFIG_FILES,
 ): void {
   const legacyDir = join(dirname(dir), 'imp');
 
@@ -46,11 +47,15 @@ export function updateLegacyConfig(
     const from = join(legacyDir, name);
     const to = join(dir, name);
 
-    if (lstatSync(from).isSymbolicLink()) {
-      symlinkSync(planLinkTarget(readlinkSync(from), realLegacyDir, realDir), to);
-      unlinkSync(from);
-    } else {
-      writeMovedFile(from, to);
+    try {
+      writeMovedEntry(from, to, realLegacyDir, realDir);
+    } catch (error) {
+      if (reads.includes(name)) {
+        throw error;
+      }
+
+      warn(`impz: cannot move ${from} to ${to}, so it stays there: ${String(error)}`);
+      continue;
     }
 
     warn(`impz: moved ${from} to ${to}`);
@@ -61,6 +66,16 @@ export function updateLegacyConfig(
     rmdirSync(legacyDir);
   } catch {
     // not empty, or not ours to remove
+  }
+}
+
+// a symlink as a link that still points at its file, anything else as a file
+function writeMovedEntry(from: string, to: string, legacyDir: string, dir: string): void {
+  if (lstatSync(from).isSymbolicLink()) {
+    symlinkSync(planLinkTarget(readlinkSync(from), legacyDir, dir), to);
+    removeMovedSource(from, to);
+  } else {
+    writeMovedFile(from, to);
   }
 }
 
@@ -80,7 +95,18 @@ function writeMovedFile(from: string, to: string): void {
     copyFileSync(from, temp);
     chmodSync(temp, statSync(from).mode & 0o777);
     renameSync(temp, to);
+    removeMovedSource(from, to);
+  }
+}
+
+// the old file goes once its copy stands; when it cannot go, the copy goes
+// instead, so the next call sees the move undone and tries it again
+function removeMovedSource(from: string, to: string): void {
+  try {
     unlinkSync(from);
+  } catch (error) {
+    unlinkSync(to);
+    throw error;
   }
 }
 
