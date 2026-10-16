@@ -12,6 +12,9 @@ architecture docs covers what a run does.
 - `impz backup restore --all [--merge]` brings back every imp the backup holds: a whole host.
 - `impz backup check [--subset 5%]` reads part of the repository back and verifies it.
 
+`impz backup run`, `restore` and `check` answer when the work ends, and wait up to 24 hours for it,
+however long impd stays silent meanwhile.
+
 `impz new --no-backup` creates an imp that no backup ever holds: neither its disk nor its
 checkpoints reach the repository, for the imp's life. Use it for an imp whose disk holds text you
 must be able to delete for good, such as an agent's transcripts. A fork of it is left out too, and a
