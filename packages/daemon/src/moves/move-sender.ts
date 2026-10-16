@@ -13,7 +13,9 @@ import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { LockedImp } from '../imps/imp-lock';
 import type { Imps } from '../imps/imp-service';
+import type { StartTimer } from '../process/clock';
 import type { StreamedCommand } from '../process/run-stream';
+import { sendLongRequest } from '../process/send-long-request';
 import { readErrorMessage } from '../read-error-message';
 import { encodeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotMeta } from '../sleep/snapshot-meta';
@@ -101,6 +103,9 @@ export interface MoveSenderDeps {
   readonly releaseName: () => Promise<void>;
   readonly fetch?: (request: Request) => Promise<Response>;
 
+  // the timer of each request's deadline to the target; setTimeout by default
+  readonly startPeerDeadline?: StartTimer;
+
   // the most a part carries; MOVE_PART_BYTES, but small in tests
   readonly partBytes?: number;
   readonly now: () => number;
@@ -138,6 +143,14 @@ interface OpenedParts {
   readonly estimateBytes: number | null;
   readonly close: () => Promise<void>;
 }
+
+// The target's time to answer, in place of Bun's 360 s limit on a silent
+// answer: a part and the finish wait on the target's disk, which can take
+// minutes; the offer, the commit and the abort (which removes a copy) less
+const PEER_DEADLINES_MS = {
+  stream: 60 * 60 * 1000,
+  control: 10 * 60 * 1000,
+} as const;
 
 // `zfs send -nP` estimates: the ticket allows this much more
 const ESTIMATE_SLACK = 1.1;
@@ -260,8 +273,6 @@ function buildPublicError(name: string) {
 }
 
 export function createMoveSender(deps: MoveSenderDeps): MoveSender {
-  const fetchPeer = deps.fetch ?? ((request: Request) => fetch(request));
-
   const tasks = new Map<string, SendTask>();
 
   // the last result per imp id, once its task and its row are gone
@@ -479,16 +490,27 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     init: PeerRequest = {},
   ): Promise<Response> => {
     const { extraHeaders, ...rest } = init;
+    const ms = path === MOVE_PATHS.receive ? PEER_DEADLINES_MS.stream : PEER_DEADLINES_MS.control;
 
     // a redirect could send the ticket somewhere else: it fails instead
-    const request = new Request(new URL(path, peer).toString(), {
-      method: 'POST',
-      redirect: 'manual',
-      ...rest,
-      headers: { ...buildTicketHeader(ticket), ...extraHeaders },
-    });
-
-    return fetchPeer(request);
+    return sendLongRequest(
+      new URL(path, peer).toString(),
+      {
+        method: 'POST',
+        redirect: 'manual',
+        ...rest,
+        headers: { ...buildTicketHeader(ticket), ...extraHeaders },
+      },
+      {
+        deadline: {
+          ms,
+          buildError: () =>
+            new Error(`${path}: the target sent no answer in ${String(ms / 60_000)} minutes`),
+        },
+        ...(deps.startPeerDeadline !== undefined && { startTimer: deps.startPeerDeadline }),
+        ...(deps.fetch !== undefined && { send: deps.fetch }),
+      },
+    );
   };
 
   // The commit, then the source's copy goes: whenever the target says the

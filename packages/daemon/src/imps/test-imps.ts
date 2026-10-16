@@ -585,7 +585,13 @@ export function buildTestApp(
   moveOptions: Partial<
     Pick<
       MoveServiceDeps,
-      'fetch' | 'releaseName' | 'onCommitted' | 'partBytes' | 'readWarmHost' | 'readTapMac'
+      | 'fetch'
+      | 'startPeerDeadline'
+      | 'releaseName'
+      | 'onCommitted'
+      | 'partBytes'
+      | 'readWarmHost'
+      | 'readTapMac'
     >
   > = {},
 

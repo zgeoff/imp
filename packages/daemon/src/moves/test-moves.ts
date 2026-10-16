@@ -7,6 +7,7 @@ import { createImage } from '../db/images';
 import { buildTestApp, createImpTest } from '../imps/test-imps';
 import type { ImpTest, ImpTestOptions } from '../imps/test-imps';
 import { deriveSlotAddress } from '../net/addressing';
+import type { StartTimer } from '../process/clock';
 import { buildImagePaths } from '../storage/data-layout';
 import { readWarmHost } from './warm-facts';
 
@@ -38,6 +39,9 @@ type TestApp = ReturnType<typeof buildTestApp>;
 export interface MoveHostsOptions {
   // sees each request the source sends to the target's move routes
   readonly hook?: FetchHook;
+
+  // the timer of the source's deadline on each request to the target
+  readonly startPeerDeadline?: StartTimer;
   readonly partBytes?: number;
 
   // the source's taps' MACs; each slot's own by default
@@ -118,6 +122,9 @@ export async function createMoveHosts(
       options.readTapMac ??
       ((tap) => deriveSlotAddress(Number(tap.slice('imp'.length)), slotPlan).hostMac),
     fetch: (request) => (hook === undefined ? sendToTarget(request) : runHook(request, hook)),
+    ...(options.startPeerDeadline !== undefined && {
+      startPeerDeadline: options.startPeerDeadline,
+    }),
     ...(options.partBytes !== undefined && { partBytes: options.partBytes }),
   });
 

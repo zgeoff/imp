@@ -21,6 +21,7 @@ import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
 import { findFreePorts } from '../test-utils/find-free-ports';
 import { startStubHeaderEcho } from '../test-utils/start-stub-header-echo';
+import { startStubSilentOrigin } from '../test-utils/start-stub-silent-origin';
 import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 
@@ -553,6 +554,45 @@ test('it passes the first line of a streamed API answer on while the API holds t
 
   expect(first.value).toBe('first\n');
 });
+
+// Bun reads its fetch idle limit (360 s by default) only at startup, so the
+// proxy runs in a child Bun with 1 s; the child's plain fetch is the control
+// that the limit expires, after about 8 s on Bun 1.4.2
+test('it passes on an API answer that stays silent past Bun’s idle limit, where a plain fetch gives up', async () => {
+  const ctx = await setupTest();
+
+  const origin = startStubSilentOrigin(ctx.stack);
+
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, '../test-utils/run-idle-limited-requests.ts'),
+      JSON.stringify({ origin: origin.origin, via: 'wake-proxy' }),
+    ],
+    {
+      env: { ...process.env, BUN_CONFIG_HTTP_IDLE_TIMEOUT: '1' },
+      stdout: 'pipe',
+      stderr: 'inherit',
+    },
+  );
+
+  // the child goes first, before the origin it calls
+  ctx.stack.defer(() => {
+    child.kill();
+  });
+
+  const output = await new Response(child.stdout).text();
+
+  const lines = output
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as unknown);
+
+  expect(lines).toIncludeSameMembers([
+    { kind: 'control', isOk: false, error: 'TimeoutError' },
+    { kind: 'long', isOk: true, status: 200, body: 'the long answer' },
+  ]);
+}, 30_000);
 
 test('it passes the rest of a streamed API answer on once the API sends it', async () => {
   const ctx = await setupTest();
