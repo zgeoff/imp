@@ -1,5 +1,13 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canUpdateReadOnly } from './can-update-read-only';
@@ -29,6 +37,19 @@ test.skipIf(!canUpdateReadOnly())('it refuses a new file anywhere in the tree', 
 
   expect(() => {
     writeFileSync(join(ctx.dir, 'tree', 'inner', 'new'), 'x');
+  }).toThrow(expect.objectContaining({ code: expect.toBeOneOf(['EACCES', 'EPERM']) }));
+});
+
+test.skipIf(!canUpdateReadOnly())('it keeps a symlink in the tree from going', () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.dir, 'tree'));
+  writeFileSync(join(ctx.dir, 'target'), 'x');
+  symlinkSync(join(ctx.dir, 'target'), join(ctx.dir, 'tree', 'link'));
+  updateReadOnly(ctx.stack, join(ctx.dir, 'tree'));
+
+  expect(() => {
+    unlinkSync(join(ctx.dir, 'tree', 'link'));
   }).toThrow(expect.objectContaining({ code: expect.toBeOneOf(['EACCES', 'EPERM']) }));
 });
 

@@ -217,6 +217,39 @@ test.skipIf(!canUpdateReadOnly())(
   },
 );
 
+test.skipIf(!canUpdateReadOnly())(
+  'it takes back the link it made when the old symlink cannot go, so a later call moves it',
+  () => {
+    const ctx = setupTest();
+
+    mkdirSync(join(ctx.dir, 'impz'));
+    writeFileSync(join(ctx.dir, 'impz', 'config.json'), '{"current":null,"hosts":{}}\n');
+    mkdirSync(join(ctx.dir, 'imp'));
+    writeFileSync(join(ctx.dir, 'token-source'), 'file-token\n');
+    symlinkSync(join(ctx.dir, 'token-source'), join(ctx.dir, 'imp', 'token'));
+
+    const restore = updateReadOnly(ctx.stack, join(ctx.dir, 'imp'));
+
+    updateLegacyConfig(join(ctx.dir, 'impz'), mock<(line: string) => void>(), ['config.json']);
+
+    const afterFailure = readdirSync(join(ctx.dir, 'impz'));
+
+    restore();
+
+    const warn = mock<(line: string) => void>();
+
+    updateLegacyConfig(join(ctx.dir, 'impz'), warn, ['config.json']);
+
+    expect(afterFailure).toStrictEqual(['config.json']);
+    expect(readlinkSync(join(ctx.dir, 'impz', 'token'))).toBe(join(ctx.dir, 'token-source'));
+    expect(existsSync(join(ctx.dir, 'imp'))).toBeFalse();
+
+    expect(warn.mock.calls).toStrictEqual([
+      [`impz: moved ${join(ctx.dir, 'imp', 'token')} to ${join(ctx.dir, 'impz', 'token')}`],
+    ]);
+  },
+);
+
 test.skipIf(!canUpdateReadOnly())('it rethrows the failed move of a file the caller reads', () => {
   const ctx = setupTest();
 

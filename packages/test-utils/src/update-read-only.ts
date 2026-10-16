@@ -4,8 +4,10 @@ import { existsSync } from 'node:fs';
 // any mode); returns the undo, which `stack` also runs while the tree exists.
 export function updateReadOnly(stack: Readonly<DisposableStack>, path: string): () => void {
   const isRoot = process.getuid?.() === 0;
-  const lock = isRoot ? ['chattr', '-R', '+i', path] : ['chmod', '-R', 'a-w', path];
-  const unlock = isRoot ? ['chattr', '-R', '-i', path] : ['chmod', '-R', 'u+w', path];
+
+  // chattr refuses a symlink, which holds no flags; chmod -R passes over one
+  const lock = isRoot ? buildChattrArgv(path, '+i') : ['chmod', '-R', 'a-w', path];
+  const unlock = isRoot ? buildChattrArgv(path, '-i') : ['chmod', '-R', 'u+w', path];
 
   runChecked(lock);
 
@@ -20,6 +22,10 @@ export function updateReadOnly(stack: Readonly<DisposableStack>, path: string): 
   });
 
   return updateWritable;
+}
+
+function buildChattrArgv(path: string, flag: string): readonly string[] {
+  return ['find', path, '!', '-type', 'l', '-exec', 'chattr', flag, '{}', '+'];
 }
 
 function runChecked(argv: readonly string[]): void {

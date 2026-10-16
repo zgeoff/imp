@@ -73,7 +73,7 @@ export function updateLegacyConfig(
 function writeMovedEntry(from: string, to: string, legacyDir: string, dir: string): void {
   if (lstatSync(from).isSymbolicLink()) {
     symlinkSync(planLinkTarget(readlinkSync(from), legacyDir, dir), to);
-    unlinkSync(from);
+    removeMovedSource(from, to);
   } else {
     writeMovedFile(from, to);
   }
@@ -95,7 +95,18 @@ function writeMovedFile(from: string, to: string): void {
     copyFileSync(from, temp);
     chmodSync(temp, statSync(from).mode & 0o777);
     renameSync(temp, to);
+    removeMovedSource(from, to);
+  }
+}
+
+// the old file goes once its copy stands; when it cannot go, the copy goes
+// instead, so the next call sees the move undone and tries it again
+function removeMovedSource(from: string, to: string): void {
+  try {
     unlinkSync(from);
+  } catch (error) {
+    unlinkSync(to);
+    throw error;
   }
 }
 
