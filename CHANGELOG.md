@@ -2,10 +2,11 @@
 
 ## [2.2.1](https://github.com/zgeoff/impz/compare/v2.2.0...v2.2.1) (2026-10-16)
 
-
 ### Bug Fixes
 
-* **geo-1150:** write only impz's formula to the homebrew tap ([#432](https://github.com/zgeoff/impz/issues/432)) ([2d1c8e1](https://github.com/zgeoff/impz/commit/2d1c8e1d16f9663615962dd18030d6f966bf4dcb))
+- **geo-1150:** write only impz's formula to the homebrew tap
+  ([#432](https://github.com/zgeoff/impz/issues/432))
+  ([2d1c8e1](https://github.com/zgeoff/impz/commit/2d1c8e1d16f9663615962dd18030d6f966bf4dcb))
 
 ## [2.2.0](https://github.com/zgeoff/impz/compare/v2.1.0...v2.2.0) (2026-10-16)
 
