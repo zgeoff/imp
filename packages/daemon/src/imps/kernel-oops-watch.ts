@@ -198,12 +198,12 @@ const OOPS_HEADER = /: [\da-f]{4,16} \[#(?<oops>\d+)\]/v;
 const OOPS_TASK = /^CPU: \d+ (?:UID: \d+ )?PID: (?<thread>\d+) Comm: /v;
 
 // what arm64 prints between an oops's header and its task line
-const OOPS_MODULES = /^Modules linked in:/v;
+const OOPS_MODULES = 'Modules linked in:';
 
 // a warning's first lines; it ends, as an oops does, with an end marker
 const WARNING_CUT = /^-+\[ cut here \]-+$/v;
-const WARNING_HEAD = /^WARNING: /v;
-const REPORT_END = /^---\[ end trace /v;
+const WARNING_HEAD = 'WARNING: ';
+const REPORT_END = '---[ end trace ';
 
 // what the parse knows of the oops it is in
 interface OpenOops {
@@ -260,7 +260,7 @@ function readKmsgOopsThreads(
       open = { number: Number(header), thread: null, isTied: openWarnings === 0 };
 
       threads.set(open.number, null);
-    } else if (REPORT_END.test(message)) {
+    } else if (message.startsWith(REPORT_END)) {
       // with a warning open the marker may end it or the oops, and that oops
       // ties to nothing either way, so the marker ends a warning first
       if (openWarnings > 0) {
@@ -268,8 +268,8 @@ function readKmsgOopsThreads(
       } else {
         writeOpenOops();
       }
-    } else if (WARNING_CUT.test(message) || WARNING_HEAD.test(message)) {
-      if (WARNING_HEAD.test(message)) {
+    } else if (WARNING_CUT.test(message) || message.startsWith(WARNING_HEAD)) {
+      if (message.startsWith(WARNING_HEAD)) {
         openWarnings += 1;
       }
 
@@ -284,7 +284,7 @@ function readKmsgOopsThreads(
       } else {
         open.isTied = false;
       }
-    } else if (open?.thread === null && !OOPS_MODULES.test(message)) {
+    } else if (open?.thread === null && !message.startsWith(OOPS_MODULES)) {
       open.isTied = false;
     }
   }
