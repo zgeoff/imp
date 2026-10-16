@@ -31,20 +31,22 @@
   rather than flagged, since a signal during `zpool create` runs the trap only once the create has
   finished: cleanup destroys the pool only when `zpool status -P` lists this run's `pool.img` as its
   vdev, matching the whole path even when it holds spaces, and removes `pool.img` only when no pool
-  lists it; when `zpool` cannot answer, the file stays and the run fails. So a failed `zpool create`
-  destroys no pool, and a pool that will not go keeps its file and fails the run. A `pool.img` that
-  is a symlink is refused too. The tests run in the background, so TERM (exit 143) or INT (130)
-  stops them before cleanup. It reads the module's version from `IMP_ZFS_MODULE_VERSION_FILE`
-  (default `/sys/module/zfs/version`). `scripts/test-zfs.test.ts` runs the script against stub `id`,
-  `mount`, `umount` and `bun` on `PATH` (`scripts/test-utils/create-stub-bin.ts`), a `zfs` that
-  prints its version and can fail a create (`create-stub-zfs.ts`), and a `zpool` that keeps its
-  pools in a state file (`create-stub-zpool.ts`), in a temp root: the refusals for a user other than
-  root, a missing module and a missing `zpool`, a normal release, a work dir made with its parents,
-  the collisions (a symlinked `pool.img` included), a failed `zfs create`, a failed `zpool create`,
-  a failed destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with
-  spaces, and SIGTERM during the create and mid-run. For the create, the `zpool` stub writes a
-  marker and holds until the test writes a release file (or fails after 30 s), so the test sends
-  SIGTERM after the marker and before the release, inside the create.
+  lists it; when `zpool` cannot answer, the file stays and the run fails. So a `zpool create` that
+  fails before it makes the pool leaves no pool to destroy, one that fails after it made the pool
+  still has the pool destroyed, and a pool that will not go keeps its file and fails the run. A
+  `pool.img` that is a symlink is refused too. The tests run in the background, so TERM (exit 143)
+  or INT (130) stops them before cleanup. It reads the module's version from
+  `IMP_ZFS_MODULE_VERSION_FILE` (default `/sys/module/zfs/version`). `scripts/test-zfs.test.ts` runs
+  the script against stub `id`, `mount`, `umount` and `bun` on `PATH`
+  (`scripts/test-utils/create-stub-bin.ts`), a `zfs` that prints its version and can fail a create
+  (`create-stub-zfs.ts`), and a `zpool` that keeps its pools in a state file
+  (`create-stub-zpool.ts`), in a temp root: the refusals for a user other than root, a missing
+  module and a missing `zpool`, a normal release, a work dir made with its parents, the collisions
+  (a symlinked `pool.img` included), a failed `zfs create`, a failed `zpool create`, a failed
+  destroy, a pool that still uses the file, a failed `zpool` query, a work dir path with spaces, and
+  SIGTERM during the create and mid-run. For the create, the `zpool` stub writes a marker and holds
+  until the test writes a release file (or fails after 30 s), so the test sends SIGTERM after the
+  marker and before the release, inside the create.
 - **`scripts/zfs-host-test.sh`** runs `test-zfs.sh` (unless `IMP_ZFS_TEST_UNIT=0`), then starts a
   dev instance `imp-zfs` (port offset `IMP_DEV_PORT_OFFSET`, default 300) with
   `IMP_STORAGE_BACKEND=zfs` on a second sparse pool `impbench<pid>` of `IMP_ZFS_BENCH_GIB`
