@@ -47,7 +47,13 @@ async function setupTest(options: Readonly<{ isShared?: boolean }> = {}) {
     source: {
       dataDir: sourceSet.dataDir,
       createStorage: (dir) => {
-        const backend = createZfsBackend({ dataDir: dir, root: sourceSet.root, log: () => {} });
+        // the host's own module, whatever its version: no VM runs here
+        const backend = createZfsBackend({
+          dataDir: dir,
+          root: sourceSet.root,
+          log: () => {},
+          isUiomoveBugAllowed: true,
+        });
 
         backends.push(backend);
 
@@ -57,7 +63,12 @@ async function setupTest(options: Readonly<{ isShared?: boolean }> = {}) {
     target: {
       dataDir: targetSet.dataDir,
       createStorage: (dir) => {
-        const backend = createZfsBackend({ dataDir: dir, root: targetSet.root, log: () => {} });
+        const backend = createZfsBackend({
+          dataDir: dir,
+          root: targetSet.root,
+          log: () => {},
+          isUiomoveBugAllowed: true,
+        });
 
         backends.push(backend);
 

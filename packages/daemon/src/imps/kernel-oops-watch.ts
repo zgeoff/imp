@@ -1,5 +1,9 @@
 import { closeSync, constants, openSync, readFileSync, readSync, readlinkSync } from 'node:fs';
 
+// The oops hold is frozen: impd refuses a zfs module with the bug behind the
+// oops (docs/architecture/host.md), so the hold takes no new edge cases; a
+// host with IMP_ZFS_ALLOW_UIOMOVE_BUG=1 gets what is here.
+
 // what the record and the log say when a kernel oops killed the VM
 export const KERNEL_OOPS_TRIGGER = 'a kernel oops killed firecracker';
 

@@ -45,7 +45,6 @@ import { checkAdoptedMergeFlag } from './check-merge-flag';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
-import { KERNEL_OOPS_TRIGGER } from './kernel-oops-watch';
 import { createLockFreeSleep } from './lock-free-sleep';
 import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
 import { startCounting } from './read-running-imp-usage';
@@ -919,11 +918,12 @@ async function removeStaleOopsHolds(
   context: ImpContext,
   imps: readonly ImpRecord[],
 ): Promise<void> {
-  for (const imp of imps.filter((listed) => listed.error === KERNEL_OOPS_TRIGGER)) {
+  for (const imp of imps.filter((listed) => listed.hasOopsHold)) {
     await updateImpState(context.db, imp.id, {
       reason: 'repaired',
       state: imp.state,
       error: null,
+      hasOopsHold: false,
       oopsBootId: null,
     });
 

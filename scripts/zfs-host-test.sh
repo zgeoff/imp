@@ -12,7 +12,9 @@
 # in /var/tmp); no disk is touched, and both pools go when it ends. Run it as
 # a user with sudo and docker, on a host with KVM and the zfs module loaded
 # (sudo modprobe zfs). The module must be OpenZFS 2.x, the host image's
-# major version; a minor skew only warns. Needs the guest kernel and system
+# major version; a minor skew only warns. impd runs with
+# IMP_ZFS_ALLOW_UIOMOVE_BUG=1 unless the env sets it, since the runner's
+# Ubuntu 24.04 module has the zfs_uiomove bug (docs/architecture/host.md). Needs the guest kernel and system
 # drive that scripts/dev/dev.sh needs.
 #
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
@@ -97,6 +99,7 @@ export IMP_DEV_PORT_OFFSET=${IMP_DEV_PORT_OFFSET:-300}
 export IMP_DEV_DATA=$work/data
 export IMP_STORAGE_BACKEND=zfs
 export IMP_ZFS_ROOT=$pool/imp
+export IMP_ZFS_ALLOW_UIOMOVE_BUG=${IMP_ZFS_ALLOW_UIOMOVE_BUG:-1}
 
 # what this run made, so cleanup releases that and nothing else; the pool is
 # proven by its vdev instead, since a signal during its create runs the trap

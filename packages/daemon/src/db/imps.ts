@@ -39,6 +39,9 @@ export interface ImpRecord {
   readonly holdUntil: Date | null;
   readonly error: string | null;
 
+  // whether a kernel oops holds the imp's disk until the host reboots
+  readonly hasOopsHold: boolean;
+
   // the kernel's boot id when a kernel oops began to hold the imp's disk;
   // null without a hold, and on a hold from before impd recorded it
   readonly oopsBootId: string | null;
@@ -125,6 +128,11 @@ export interface ImpStateChange {
   readonly detail?: ImpEventDetail;
   readonly state: ImpState;
   readonly error?: string | null;
+
+  // set with the error it comes with: an error write without it ends the
+  // hold, as a new error replaced the hold's text before the hold had its
+  // own column
+  readonly hasOopsHold?: boolean;
   readonly oopsBootId?: string | null;
   readonly pid?: number | null;
   readonly sleptAt?: Date | null;
@@ -409,6 +417,10 @@ export async function updateImpState(
 
   if (change.error !== undefined) {
     values.error = change.error;
+  }
+
+  if (change.error !== undefined || change.hasOopsHold !== undefined) {
+    values.oops_hold = change.hasOopsHold === true ? 1 : 0;
   }
 
   if (change.oopsBootId !== undefined) {
@@ -744,6 +756,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     sleptAt: toDate(row.slept_at),
     holdUntil: toDate(row.hold_until),
     error: row.error,
+    hasOopsHold: row.oops_hold === 1,
     oopsBootId: row.oops_boot_id,
     pid: row.pid,
     firecrackerVersion: row.firecracker_version,

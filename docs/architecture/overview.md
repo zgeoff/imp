@@ -130,9 +130,11 @@ and the imp boots cold.
   included, so the order cannot drift. It also refuses a Node import in the contract or the client,
   because the client runs in browsers and in Node alike; a query builder outside the daemon's
   database module; and production code that imports test support.
-- **More than one host.** Each host is its own impd with its own data. A move takes an imp from one
-  to another over the tailnet, with marks on both copies that keep exactly one live
-  ([moves](./storage/moves.md)).
+- **One impd per host, permanently.** impd keeps one database connection and every imp's lock in its
+  own memory, so a second impd on the same data would break both, and impd has no standby or
+  failover. That rules out high availability on purpose. impd scales out instead: each host is its
+  own impd with its own data, and a move takes an imp from one host to another over the tailnet,
+  with marks on both copies that keep exactly one live ([moves](./storage/moves.md)).
 
 ## The docs
 

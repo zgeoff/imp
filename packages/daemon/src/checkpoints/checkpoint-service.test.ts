@@ -107,7 +107,7 @@ async function setupTest(options: SetupOptions) {
         run: zfs.run,
         streams: zfs.streams,
         readMounts: zfs.readMounts,
-        readModuleVersion: () => '2.2.2-0ubuntu9',
+        readModuleVersion: () => '2.4.4',
         log: () => {},
       }),
   };

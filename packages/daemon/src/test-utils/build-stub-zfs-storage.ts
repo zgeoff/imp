@@ -9,9 +9,11 @@ import type { StubZfs } from './build-stub-zfs';
 // writes a disk file wherever a clone or a received stream would have left one.
 export function buildStubZfsStorage(
   root: string,
-  options: Readonly<{ moduleVersion?: string }> = {},
+
+  // isUiomoveBugAllowed sets IMP_ZFS_ALLOW_UIOMOVE_BUG=1
+  options: Readonly<{ moduleVersion?: string; isUiomoveBugAllowed?: boolean }> = {},
 ) {
-  const moduleVersion = options.moduleVersion ?? '2.2.2-0ubuntu9';
+  const moduleVersion = options.moduleVersion ?? '2.4.4';
   const made: { pool: StubZfs | null } = { pool: null };
 
   const createStorage = (dataDir: string): StorageBackend => {
@@ -27,6 +29,7 @@ export function buildStubZfsStorage(
       readMounts: zfs.readMounts,
       readModuleVersion: () => moduleVersion,
       log: () => {},
+      isUiomoveBugAllowed: options.isUiomoveBugAllowed === true,
     });
 
     const writeDisk = (impId: string) => {

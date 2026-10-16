@@ -26,6 +26,7 @@ export function buildMockImpRecord(overrides: ImpRecordOverrides = {}): ImpRecor
     sleptAt: null,
     holdUntil: null,
     error: null,
+    hasOopsHold: false,
     oopsBootId: null,
     pid: faker.number.int({ min: 2, max: 4_194_304 }),
     firecrackerVersion: 'v1.17.0',

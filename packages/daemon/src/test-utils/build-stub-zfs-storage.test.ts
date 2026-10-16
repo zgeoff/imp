@@ -32,22 +32,37 @@ test('it makes the storage on a pool under the root it was given', async () => {
   expect(zfs.readPool().listDatasets()).toContain('tank/imp');
 });
 
-test('it starts on the kernel module version it was given', async () => {
+test('it starts on a kernel module with the zfs_uiomove fix by default', async () => {
   const ctx = await setupTest();
 
-  const storage = buildStubZfsStorage('tank/imp', { moduleVersion: '2.4.4' }).createStorage(
-    ctx.dataDir,
-  );
+  const storage = buildStubZfsStorage('tank/imp').createStorage(ctx.dataDir);
 
   await storage.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
   expect(storage.readWarnings()).toStrictEqual([]);
 });
 
-test('it starts on an Ubuntu 24.04 kernel module by default', async () => {
+test('it refuses the kernel module version it was given when that has the zfs_uiomove bug', async () => {
   const ctx = await setupTest();
 
-  const storage = buildStubZfsStorage('tank/imp').createStorage(ctx.dataDir);
+  const storage = buildStubZfsStorage('tank/imp', {
+    moduleVersion: '2.2.2-0ubuntu9',
+  }).createStorage(ctx.dataDir);
+
+  const failed = await storage
+    .start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() })
+    .catch((error: unknown) => error);
+
+  expect(String(failed)).toInclude('module 2.2.2-0ubuntu9 ');
+});
+
+test('it starts on a kernel module with the zfs_uiomove bug when the bug is allowed', async () => {
+  const ctx = await setupTest();
+
+  const storage = buildStubZfsStorage('tank/imp', {
+    moduleVersion: '2.2.2-0ubuntu9',
+    isUiomoveBugAllowed: true,
+  }).createStorage(ctx.dataDir);
 
   await storage.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 

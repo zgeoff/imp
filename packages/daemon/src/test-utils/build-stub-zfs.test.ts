@@ -901,7 +901,7 @@ test('#buildStubZfs prints the default userland and kernel versions', async () =
 
   expect(result).toStrictEqual({
     exitCode: 0,
-    stdout: 'zfs-2.2.2-0ubuntu9\nzfs-kmod-2.2.2-0ubuntu9\n',
+    stdout: 'zfs-2.4.4\nzfs-kmod-2.4.4\n',
     stderr: '',
   });
 });

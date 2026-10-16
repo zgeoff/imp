@@ -19,7 +19,7 @@ interface StorageBoundaries {
   readonly xfsReserveFileBytes?: number;
 
   // `zfs`, its streams, the mount table and the module's version
-  readonly zfs?: Omit<ZfsBackendDeps, 'dataDir' | 'root'>;
+  readonly zfs?: Omit<ZfsBackendDeps, 'dataDir' | 'root' | 'isUiomoveBugAllowed'>;
 }
 
 // The marker is written once start succeeds: on ZFS, start checks that the
@@ -54,7 +54,12 @@ function buildBackend(config: Config, boundaries: Readonly<StorageBoundaries>): 
     throw new Error('IMP_STORAGE_BACKEND=zfs needs IMP_ZFS_ROOT');
   }
 
-  return createZfsBackend({ ...boundaries.zfs, dataDir: config.dataDir, root: config.zfsRoot });
+  return createZfsBackend({
+    ...boundaries.zfs,
+    dataDir: config.dataDir,
+    root: config.zfsRoot,
+    isUiomoveBugAllowed: config.isUiomoveBugAllowed,
+  });
 }
 
 // Refuses a data dir another backend wrote.

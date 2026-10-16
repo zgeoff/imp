@@ -109,6 +109,10 @@ export interface ZfsBackendDeps {
   readonly readModuleVersion?: () => string | null;
   readonly log?: (message: string) => void;
 
+  // IMP_ZFS_ALLOW_UIOMOVE_BUG=1: start on a module with the zfs_uiomove bug,
+  // with a warning; start refuses one by default
+  readonly isUiomoveBugAllowed?: boolean;
+
   // whether the host's kernel has oopsed (imps/kernel-oops-watch.ts); never
   // by default
   readonly isKernelOopsed?: () => boolean;
@@ -319,7 +323,15 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       log(`impd: zfs: warning: the userland is ${userland} but the kernel module is ${kernel}`);
     }
 
-    // impd still starts: the bug needs a kill during a disk read to strike
+    // the oops this bug causes holds a disk until a reboot, so a host needs
+    // the fix (docs/architecture/host.md); the override only warns
+    if (hasUiomoveBug(kernel) && deps.isUiomoveBugAllowed !== true) {
+      throw new Error(
+        `zfs: ${formatUiomoveWarning(kernel)}; upgrade the module, or set ` +
+          'IMP_ZFS_ALLOW_UIOMOVE_BUG=1 to start anyway',
+      );
+    }
+
     host.warnings = hasUiomoveBug(kernel) ? [formatUiomoveWarning(kernel)] : [];
 
     for (const warning of host.warnings) {

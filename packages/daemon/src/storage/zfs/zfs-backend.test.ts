@@ -58,7 +58,7 @@ function setupTest() {
       run: fake.run,
       streams: fake.streams,
       readMounts: fake.readMounts,
-      readModuleVersion: () => '2.2.2-0ubuntu9',
+      readModuleVersion: () => '2.4.4',
       log,
     });
 
@@ -74,7 +74,7 @@ function setupTest() {
     run: peerFake.run,
     streams: peerFake.streams,
     readMounts: peerFake.readMounts,
-    readModuleVersion: () => '2.2.2-0ubuntu9',
+    readModuleVersion: () => '2.4.4',
     log: () => {},
   });
 
@@ -94,11 +94,14 @@ function setupTest() {
       run: CommandRunner = runCommand,
       poolLog: (message: string) => void = () => {},
     ) => {
+      // the pool is the host's own module, whatever its version: these
+      // tests kill no VM during a disk read
       const backend = createZfsBackend({
         dataDir: dataset.dataDir,
         root: dataset.root,
         run,
         log: poolLog,
+        isUiomoveBugAllowed: true,
       });
 
       stack.defer(() => backend.waitForReclaim());
@@ -144,7 +147,7 @@ test('#start refuses a userland and kernel module of different major versions', 
     backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() }),
   ).rejects.toThrowWithMessage(
     Error,
-    'zfs: the userland is 2.2.2-0ubuntu9 but the kernel module is 3.0.0-1; they must match in major version',
+    'zfs: the userland is 2.4.4 but the kernel module is 3.0.0-1; they must match in major version',
   );
 });
 
@@ -156,7 +159,7 @@ test('#start warns about a minor version skew and goes on', async () => {
     root: 'tank/imp',
     run: ctx.fake.run,
     readMounts: ctx.fake.readMounts,
-    readModuleVersion: () => '2.3.1-1',
+    readModuleVersion: () => '2.3.7',
     log: ctx.log,
   });
 
@@ -165,14 +168,14 @@ test('#start warns about a minor version skew and goes on', async () => {
   await backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
   expect(ctx.log).toHaveBeenCalledWith(
-    'impd: zfs: warning: the userland is 2.2.2-0ubuntu9 but the kernel module is 2.3.1-1',
+    'impd: zfs: warning: the userland is 2.4.4 but the kernel module is 2.3.7',
   );
 
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBe('tank/imp/mem');
 });
 
 test.each(['2.2.2-0ubuntu9.5', '2.3.4-1ubuntu2', '2.4.1'])(
-  '#start warns that the kernel module %s has the zfs_uiomove short-copy bug',
+  '#start refuses the kernel module %s, which has the zfs_uiomove short-copy bug',
   async (version) => {
     const ctx = setupTest();
 
@@ -183,6 +186,33 @@ test.each(['2.2.2-0ubuntu9.5', '2.3.4-1ubuntu2', '2.4.1'])(
       readMounts: ctx.fake.readMounts,
       readModuleVersion: () => version,
       log: ctx.log,
+    });
+
+    const failed = await backend
+      .start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() })
+      .catch((error: unknown) => error);
+
+    expect(failed).toBeInstanceOf(Error);
+
+    expect(String(failed)).toBe(
+      `Error: zfs: the zfs kernel module ${version} has the zfs_uiomove short-copy bug (openzfs/zfs#15918): a VM killed during a disk read can oops the kernel and hold its disk until a reboot; modules 2.3.7, 2.4.2 and later fix it; upgrade the module, or set IMP_ZFS_ALLOW_UIOMOVE_BUG=1 to start anyway`,
+    );
+  },
+);
+
+test.each(['2.2.2-0ubuntu9.5', '2.3.4-1ubuntu2', '2.4.1'])(
+  '#start warns that the kernel module %s has the zfs_uiomove short-copy bug when the bug is allowed',
+  async (version) => {
+    const ctx = setupTest();
+
+    const backend = createZfsBackend({
+      dataDir: ctx.dataDir,
+      root: 'tank/imp',
+      run: ctx.fake.run,
+      readMounts: ctx.fake.readMounts,
+      readModuleVersion: () => version,
+      log: ctx.log,
+      isUiomoveBugAllowed: true,
     });
 
     ctx.stack.defer(() => backend.waitForReclaim());
@@ -218,7 +248,7 @@ test.each(['2.3.7', '2.4.2', '2.4.4', '2.5.0-1'])(
   },
 );
 
-test('#start logs the zfs_uiomove warning and still mounts the storage', async () => {
+test('#start logs the zfs_uiomove warning and still mounts the storage when the bug is allowed', async () => {
   const ctx = setupTest();
 
   const backend = createZfsBackend({
@@ -228,6 +258,7 @@ test('#start logs the zfs_uiomove warning and still mounts the storage', async (
     readMounts: ctx.fake.readMounts,
     readModuleVersion: () => '2.3.4-1ubuntu2',
     log: ctx.log,
+    isUiomoveBugAllowed: true,
   });
 
   ctx.stack.defer(() => backend.waitForReclaim());
@@ -239,6 +270,27 @@ test('#start logs the zfs_uiomove warning and still mounts the storage', async (
   );
 
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBe('tank/imp/mem');
+});
+
+test('#start mounts nothing on a kernel module with the zfs_uiomove bug', async () => {
+  const ctx = setupTest();
+
+  const backend = createZfsBackend({
+    dataDir: ctx.dataDir,
+    root: 'tank/imp',
+    run: ctx.fake.run,
+    readMounts: ctx.fake.readMounts,
+    readModuleVersion: () => '2.3.4-1ubuntu2',
+    log: ctx.log,
+  });
+
+  const failed = await backend
+    .start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() })
+    .catch((error: unknown) => error);
+
+  expect(failed).toBeInstanceOf(Error);
+  expect(String(failed)).toInclude('IMP_ZFS_ALLOW_UIOMOVE_BUG=1');
+  expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBeNull();
 });
 
 test('#start refuses a host whose zfs kernel module is not loaded', () => {
@@ -268,7 +320,7 @@ test('#start refuses a data dir that is not the root dataset', () => {
     root: 'tank/other',
     run: ctx.fake.run,
     readMounts: ctx.fake.readMounts,
-    readModuleVersion: () => '2.2.2',
+    readModuleVersion: () => '2.4.4',
   });
 
   expect(
@@ -2565,7 +2617,7 @@ test('#removeImpDisk logs a busy dataset once while a kernel oops holds it, not 
     root: 'tank/imp',
     run: ctx.fake.run,
     readMounts: ctx.fake.readMounts,
-    readModuleVersion: () => '2.2.2-0ubuntu9',
+    readModuleVersion: () => '2.4.4',
     log: ctx.log,
     isKernelOopsed: () => true,
   });

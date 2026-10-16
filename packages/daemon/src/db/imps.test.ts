@@ -61,6 +61,7 @@ test('#createImp returns a creating imp with the defaults for what it leaves out
     sleptAt: null,
     holdUntil: null,
     error: null,
+    hasOopsHold: false,
     oopsBootId: null,
     pid: null,
     firecrackerVersion: null,
@@ -570,6 +571,44 @@ test('#updateImpState keeps the fields the change leaves out', async () => {
     sleptAt: new Date('2026-10-02T00:00:00Z'),
     firecrackerVersion: 'v1.17.0',
   });
+});
+
+test('#updateImpState keeps the oops hold through a change that writes no error', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
+  });
+
+  const slept = await updateImpState(ctx.db, imp.id, { reason: 'repaired', state: 'sleeping' });
+
+  expect(slept).toMatchObject({ hasOopsHold: true, error: 'a kernel oops killed firecracker' });
+});
+
+test('#updateImpState ends the oops hold with an error write that does not set it', async () => {
+  const ctx = await createTestDatabase();
+  const image = await createImage(ctx.db, buildMockNewImage());
+  const imp = await createImp(ctx.db, buildMockNewImp({ imageId: image.id }));
+
+  await updateImpState(ctx.db, imp.id, {
+    reason: 'repaired',
+    state: 'stopped',
+    error: 'a kernel oops killed firecracker',
+    hasOopsHold: true,
+  });
+
+  const failed = await updateImpState(ctx.db, imp.id, {
+    reason: 'failed',
+    state: 'error',
+    error: 'boot timed out',
+  });
+
+  expect(failed).toMatchObject({ hasOopsHold: false, error: 'boot timed out' });
 });
 
 test('#updateImpState emits the change with its reason', async () => {
