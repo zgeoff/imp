@@ -661,7 +661,7 @@ test('it fails the job, moving nothing, when the newest release cannot be read',
   );
 });
 
-test('it writes the formula of a tag from before the rename to imp.rb, the file its class names', () => {
+test('it leaves the formula of a tag from before the rename, class Imp, out of the tap', () => {
   const ctx = setupTest();
 
   const step = parseReleaseWorkflow(
@@ -675,13 +675,8 @@ test('it writes the formula of a tag from before the rename to imp.rb, the file 
   const runGit = (...args: readonly string[]) =>
     Bun.spawnSync(['git', ...args], { env: gitEnv }).stdout.toString();
 
-  // the tap as it is: a formula for each name, imp's from before the rename
+  // the tap as it is: impz's formula only
   mkdirSync(join(ctx.dir, 'seed', 'Formula'), { recursive: true });
-
-  writeFileSync(
-    join(ctx.dir, 'seed', 'Formula', 'imp.rb'),
-    'class Imp < Formula\n  version "1.5.0"\nend\n',
-  );
 
   writeFileSync(
     join(ctx.dir, 'seed', 'Formula', 'impz.rb'),
@@ -740,12 +735,12 @@ test('it writes the formula of a tag from before the rename to imp.rb, the file 
   expect(result.exitCode).toBe(0);
 
   expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'log', '-1', '--format=%s', 'main')).toBe(
-    'imp 1.6.0\n',
+    'seed\n',
   );
 
-  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'show', 'main:Formula/imp.rb')).toBe(
-    'class Imp < Formula\n  version "1.6.0"\nend\n',
-  );
+  expect(
+    runGit('--git-dir', join(ctx.dir, 'tap.git'), 'ls-tree', '--name-only', 'main', 'Formula/'),
+  ).toBe('Formula/impz.rb\n');
 
   expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'show', 'main:Formula/impz.rb')).toBe(
     'class Impz < Formula\n  version "2.0.0"\nend\n',
@@ -766,13 +761,8 @@ test('it writes the formula of a tag after the rename to impz.rb with the genera
   const runGit = (...args: readonly string[]) =>
     Bun.spawnSync(['git', ...args], { env: gitEnv }).stdout.toString();
 
-  // the tap as it is: a formula for each name, imp's from before the rename
+  // the tap as it is: impz's formula only
   mkdirSync(join(ctx.dir, 'seed', 'Formula'), { recursive: true });
-
-  writeFileSync(
-    join(ctx.dir, 'seed', 'Formula', 'imp.rb'),
-    'class Imp < Formula\n  version "1.6.0"\nend\n',
-  );
 
   writeFileSync(
     join(ctx.dir, 'seed', 'Formula', 'impz.rb'),
@@ -840,9 +830,9 @@ test('it writes the formula of a tag after the rename to impz.rb with the genera
     'class Impz < Formula\n',
   );
 
-  expect(runGit('--git-dir', join(ctx.dir, 'tap.git'), 'show', 'main:Formula/imp.rb')).toBe(
-    'class Imp < Formula\n  version "1.6.0"\nend\n',
-  );
+  expect(
+    runGit('--git-dir', join(ctx.dir, 'tap.git'), 'ls-tree', '--name-only', 'main', 'Formula/'),
+  ).toBe('Formula/impz.rb\n');
 });
 
 test('it fails the job, moving no formula, when the generator prints no formula class', () => {
