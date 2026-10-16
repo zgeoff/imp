@@ -7,6 +7,16 @@ interface RequestDeadline {
   readonly buildError: () => Error;
 }
 
+// the request, as the move sender makes one
+export interface LongRequestInit {
+  readonly method: string;
+  readonly redirect?: Request['redirect'];
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body?: string | ReadableStream<Uint8Array>;
+  readonly duplex?: 'half';
+  readonly signal?: AbortSignal;
+}
+
 export interface LongRequestOptions {
   // from the start of the call to the answer's headers; null leaves the
   // caller's signal as the only end
@@ -24,7 +34,7 @@ export interface LongRequestOptions {
 // throws the deadline's error, even when the transport ignores the abort.
 export async function sendLongRequest(
   url: string,
-  init: Readonly<RequestInit>,
+  init: LongRequestInit,
   options: Readonly<LongRequestOptions>,
 ): Promise<Response> {
   const send = options.send ?? ((request: Request) => fetch(request, { timeout: false }));
@@ -39,9 +49,7 @@ export async function sendLongRequest(
   const expired = Promise.withResolvers<never>();
 
   const signal =
-    init.signal === undefined || init.signal === null
-      ? expiry.signal
-      : AbortSignal.any([init.signal, expiry.signal]);
+    init.signal === undefined ? expiry.signal : AbortSignal.any([init.signal, expiry.signal]);
 
   const startTimer = options.startTimer ?? startRealTimer;
 

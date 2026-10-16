@@ -16,6 +16,11 @@ export const LONG_CALL_DEADLINES_MS: ReadonlyMap<string, number> = new Map([
   ['moves.resume', HOUR_MS],
 ]);
 
+// what oRPC's link passes a fetch beside the request
+export interface CallInit {
+  readonly redirect?: Request['redirect'];
+}
+
 interface LongCall {
   // the procedure, as `backups.run`
   readonly procedure: string;
@@ -30,7 +35,7 @@ interface LongCall {
 // and at the deadline the request aborts with a TimeoutError that names it.
 export async function sendLongCall(
   request: Request,
-  init: Readonly<RequestInit>,
+  init: Readonly<CallInit>,
   call: Readonly<LongCall>,
 ): Promise<Response> {
   const expiry = new AbortController();

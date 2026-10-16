@@ -10,7 +10,7 @@ interface SilentOriginOptions {
 // up, and any other path until then, so its answer outlasts the client's idle
 // limit that the control's end proves expired.
 export function startStubSilentOrigin(
-  stack: AsyncDisposableStack,
+  stack: Readonly<AsyncDisposableStack>,
   options: Readonly<SilentOriginOptions> = {},
 ) {
   const controlPath = options.controlPath ?? '/control';

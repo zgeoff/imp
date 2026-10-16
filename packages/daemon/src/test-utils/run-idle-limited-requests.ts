@@ -40,7 +40,7 @@ async function runCall(kind: string, send: () => Promise<Response>): Promise<voi
 }
 
 // the wake proxy's own listener, its route impd's API at `origin`
-async function startProxy(stack: AsyncDisposableStack): Promise<string> {
+async function startProxy(stack: Readonly<AsyncDisposableStack>): Promise<string> {
   const dataDir = await mkdtemp(join(tmpdir(), 'idle-limited-proxy-'));
 
   stack.defer(() => rm(dataDir, { recursive: true, force: true }));

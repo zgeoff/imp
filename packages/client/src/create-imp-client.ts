@@ -21,7 +21,7 @@ import { requireAwake } from './require-awake';
 import type { RequireAwakeOptions } from './require-awake';
 import { resolveImpdUrl } from './resolve-impd-url';
 import { LONG_CALL_DEADLINES_MS, sendLongCall } from './send-long-call';
-import type { StartTimer } from './send-long-call';
+import type { CallInit, StartTimer } from './send-long-call';
 import { UnknownProcedureError } from './unknown-procedure-error';
 
 type RpcClient = ContractRouterClient<ImpContract>;
@@ -88,7 +88,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
   const customFetch = options.fetch;
   const startTimer = options.startTimer ?? startRealTimer;
 
-  const sendCall = (request: Request, init: RequestInit): Promise<Response> =>
+  const sendCall = (request: Request, init: Readonly<CallInit>): Promise<Response> =>
     customFetch === undefined ? fetch(request, init) : customFetch(request);
 
   const link = new RPCLink({
