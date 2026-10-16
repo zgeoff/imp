@@ -1,0 +1,1431 @@
+{
+  "outputs": {
+    "info": {
+      "procedure": "system.info",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "ramBudgetMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ramUsedMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ramReservedMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ramCommittedMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ramSleepingMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "awakeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "impCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "sessionCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "bootStatus": {
+            "type": "object",
+            "properties": {
+              "coldBoots": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "outdated": {
+                "type": "object",
+                "properties": {
+                  "firecracker": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "kernel": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "agent": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "ipv6": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "firecracker",
+                  "kernel",
+                  "agent"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "coldBoots",
+              "outdated"
+            ],
+            "additionalProperties": false
+          },
+          "firecrackerVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "guestKernel": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "systemDrive": {
+            "type": "object",
+            "properties": {
+              "sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "storage": {
+            "type": "object",
+            "properties": {
+              "backend": {
+                "type": "string",
+                "enum": [
+                  "xfs",
+                  "zfs"
+                ]
+              },
+              "usedBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "availableBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "reserveBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "pendingBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "isLow": {
+                "type": "boolean"
+              },
+              "impDiskBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "backend",
+              "usedBytes",
+              "availableBytes",
+              "reserveBytes",
+              "pendingBytes",
+              "isLow",
+              "impDiskBytes"
+            ],
+            "additionalProperties": false
+          },
+          "tailscale": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "state": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hostname": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ip": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "names": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "live": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "failed": {
+                        "readOnly": true,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9-]{0,30}$"
+                            },
+                            "error": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "error"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "live",
+                      "failed"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "enabled",
+              "state",
+              "hostname",
+              "ip",
+              "names"
+            ],
+            "additionalProperties": false
+          },
+          "ksm": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "sharedMib": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "profitMib": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "zeroMib": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "headroomMib": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "unmergeable": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "running",
+                  "sharedMib",
+                  "profitMib",
+                  "zeroMib",
+                  "headroomMib",
+                  "unmergeable"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rebootReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpu": {
+            "type": "object",
+            "properties": {
+              "hostCpus": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "limitsEnforced": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "hostCpus",
+              "limitsEnforced"
+            ],
+            "additionalProperties": false
+          },
+          "defaults": {
+            "type": "object",
+            "properties": {
+              "memoryMib": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "image": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "memoryMib",
+              "image"
+            ],
+            "additionalProperties": false
+          },
+          "egress": {
+            "type": "object",
+            "properties": {
+              "isEnforced": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "isEnforced"
+            ],
+            "additionalProperties": false
+          },
+          "public": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ip": {
+                    "type": "string",
+                    "format": "ipv4",
+                    "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$"
+                  },
+                  "imps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "records": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "isOk": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "isOk",
+                          "error",
+                          "at"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "ip",
+                  "imps",
+                  "records"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "https": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "domain": {
+                    "type": "string"
+                  },
+                  "dnsToken": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "isOk": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "isOk",
+                          "error",
+                          "at"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "domain",
+                  "dnsToken"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "sessionOffsets": {
+                "type": "boolean"
+              },
+              "leases": {
+                "type": "boolean"
+              },
+              "grantableTokens": {
+                "type": "boolean"
+              },
+              "secretRebind": {
+                "type": "boolean"
+              },
+              "tokenUpdate": {
+                "type": "boolean"
+              },
+              "tokenImageAdd": {
+                "type": "boolean"
+              },
+              "databaseCopy": {
+                "type": "boolean"
+              },
+              "imageBuildStream": {
+                "type": "boolean"
+              },
+              "imageOpStream": {
+                "type": "boolean"
+              },
+              "imageBuilds": {
+                "type": "boolean"
+              },
+              "execRequire": {
+                "type": "boolean"
+              },
+              "oauthGrants": {
+                "type": "boolean"
+              },
+              "secretFilesGc": {
+                "type": "boolean"
+              },
+              "sessionLog": {
+                "type": "boolean"
+              },
+              "publicEgress": {
+                "type": "boolean"
+              },
+              "oauthSecrets": {
+                "type": "boolean"
+              },
+              "secretUpstream": {
+                "type": "boolean"
+              },
+              "backupOptOut": {
+                "type": "boolean"
+              },
+              "brokerRefusals": {
+                "type": "boolean"
+              },
+              "grantFilters": {
+                "type": "boolean"
+              },
+              "readOnlyFiles": {
+                "type": "boolean"
+              },
+              "execDropSysAdmin": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sessionOffsets",
+              "leases"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "version",
+          "ramBudgetMib",
+          "ramUsedMib",
+          "ramReservedMib",
+          "ramCommittedMib",
+          "awakeCount",
+          "impCount",
+          "sessionCount",
+          "bootStatus",
+          "firecrackerVersion",
+          "guestKernel",
+          "systemDrive",
+          "storage",
+          "tailscale"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "info <name>": {
+      "procedure": "imps.get",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,30}$"
+          },
+          "image": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,30}$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "creating",
+              "running",
+              "sleeping",
+              "stopped",
+              "error"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "user",
+              "builder"
+            ]
+          },
+          "vcpus": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "memoryMib": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "maxMemoryMib": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "pluggedMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "backup": {
+            "type": "boolean"
+          },
+          "diskMib": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "diskUsage": {
+            "type": "object",
+            "properties": {
+              "exclusiveBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sharedBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "measuredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "isPartial": {
+                "type": "boolean"
+              },
+              "isUpperBound": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "exclusiveBytes",
+              "sharedBytes",
+              "measuredAt",
+              "isPartial",
+              "isUpperBound"
+            ],
+            "additionalProperties": false
+          },
+          "ip": {
+            "type": "string",
+            "format": "ipv4",
+            "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$"
+          },
+          "slot": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "port": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "httpPort": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "public": {
+            "type": "object",
+            "properties": {
+              "auth": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "token",
+                  "basic"
+                ]
+              }
+            },
+            "required": [
+              "auth"
+            ],
+            "additionalProperties": false
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastActiveAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ramMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "rssMib": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "sleptAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "holdUntil": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "leases": {
+            "type": "object",
+            "properties": {
+              "leases": {
+                "readOnly": true,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,30}$"
+                    },
+                    "owner": {
+                      "type": "object",
+                      "properties": {
+                        "principal": {
+                          "type": "string"
+                        },
+                        "display": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "principal",
+                        "display",
+                        "label"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "until": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "owner",
+                    "until"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "otherCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "leases",
+              "otherCount"
+            ],
+            "additionalProperties": false
+          },
+          "error": {
+            "type": "string"
+          },
+          "sessions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "coldBootReason": {
+            "type": "string"
+          },
+          "agentSilentSince": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "inner": {
+            "type": "object",
+            "properties": {
+              "up": {
+                "type": "boolean"
+              },
+              "restarts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "up",
+              "restarts"
+            ],
+            "additionalProperties": false
+          },
+          "outdated": {
+            "readOnly": true,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "firecracker",
+                "kernel",
+                "agent",
+                "impd",
+                "ipv6"
+              ]
+            }
+          },
+          "cpu": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "weight": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "limit",
+              "weight"
+            ],
+            "additionalProperties": false
+          },
+          "resources": {
+            "type": "object",
+            "properties": {
+              "wakeCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "awakeMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sample": {
+                "type": "object",
+                "properties": {
+                  "measuredAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "since": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "cpuPercent": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cpuThrottledMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "netRxBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "netTxBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "measuredAt",
+                  "since",
+                  "cpuThrottledMs",
+                  "netRxBytes",
+                  "netTxBytes"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "wakeCount",
+              "awakeMs"
+            ],
+            "additionalProperties": false
+          },
+          "move": {
+            "type": "string",
+            "enum": [
+              "sending",
+              "moved",
+              "receiving"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "image",
+          "state",
+          "vcpus",
+          "memoryMib",
+          "diskMib",
+          "ip",
+          "slot",
+          "port",
+          "httpPort",
+          "url",
+          "createdAt",
+          "lastActiveAt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ls": {
+      "procedure": "imps.list",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,30}$"
+            },
+            "image": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,30}$"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "creating",
+                "running",
+                "sleeping",
+                "stopped",
+                "error"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "user",
+                "builder"
+              ]
+            },
+            "vcpus": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "memoryMib": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxMemoryMib": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "pluggedMib": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "backup": {
+              "type": "boolean"
+            },
+            "diskMib": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "diskUsage": {
+              "type": "object",
+              "properties": {
+                "exclusiveBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "sharedBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "measuredAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "isPartial": {
+                  "type": "boolean"
+                },
+                "isUpperBound": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "exclusiveBytes",
+                "sharedBytes",
+                "measuredAt",
+                "isPartial",
+                "isUpperBound"
+              ],
+              "additionalProperties": false
+            },
+            "ip": {
+              "type": "string",
+              "format": "ipv4",
+              "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$"
+            },
+            "slot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "port": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "httpPort": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "public": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "token",
+                    "basic"
+                  ]
+                }
+              },
+              "required": [
+                "auth"
+              ],
+              "additionalProperties": false
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "lastActiveAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ramMib": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rssMib": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "sleptAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "holdUntil": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "leases": {
+              "type": "object",
+              "properties": {
+                "leases": {
+                  "readOnly": true,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{0,30}$"
+                      },
+                      "owner": {
+                        "type": "object",
+                        "properties": {
+                          "principal": {
+                            "type": "string"
+                          },
+                          "display": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "principal",
+                          "display",
+                          "label"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "until": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "owner",
+                      "until"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "otherCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "leases",
+                "otherCount"
+              ],
+              "additionalProperties": false
+            },
+            "error": {
+              "type": "string"
+            },
+            "sessions": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "coldBootReason": {
+              "type": "string"
+            },
+            "agentSilentSince": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "inner": {
+              "type": "object",
+              "properties": {
+                "up": {
+                  "type": "boolean"
+                },
+                "restarts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "lastError": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "up",
+                "restarts"
+              ],
+              "additionalProperties": false
+            },
+            "outdated": {
+              "readOnly": true,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "firecracker",
+                  "kernel",
+                  "agent",
+                  "impd",
+                  "ipv6"
+                ]
+              }
+            },
+            "cpu": {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "weight": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "limit",
+                "weight"
+              ],
+              "additionalProperties": false
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "wakeCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "awakeMs": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "sample": {
+                  "type": "object",
+                  "properties": {
+                    "measuredAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "since": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "cpuPercent": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cpuThrottledMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "netRxBytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "netTxBytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "measuredAt",
+                    "since",
+                    "cpuThrottledMs",
+                    "netRxBytes",
+                    "netTxBytes"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "wakeCount",
+                "awakeMs"
+              ],
+              "additionalProperties": false
+            },
+            "move": {
+              "type": "string",
+              "enum": [
+                "sending",
+                "moved",
+                "receiving"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "image",
+            "state",
+            "vcpus",
+            "memoryMib",
+            "diskMib",
+            "ip",
+            "slot",
+            "port",
+            "httpPort",
+            "url",
+            "createdAt",
+            "lastActiveAt"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "db copy": {
+      "procedure": "system.copyDatabase",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "lastMigration": {
+            "type": "string"
+          },
+          "impVersion": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "integrity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sizeBytes",
+          "lastMigration",
+          "impVersion",
+          "createdAt",
+          "integrity"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

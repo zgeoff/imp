@@ -1,7 +1,244 @@
 import { expect, test } from 'bun:test';
-import { collectBreakingChanges } from './collect-breaking-changes';
+import { collectBreakingChanges, collectJsonOutputChanges } from './collect-breaking-changes';
 
-test('it finds nothing between a schema and itself', () => {
+test('#collectJsonOutputChanges reports a field that a command’s output drops', () => {
+  const base = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { version: { type: 'string' }, ramBudgetMib: { type: 'integer' } },
+          required: ['version', 'ramBudgetMib'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const head = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { ramBudgetMib: { type: 'integer' } },
+          required: ['ramBudgetMib'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual([
+    'impz info --json .version: may now be missing',
+  ]);
+});
+
+test('#collectJsonOutputChanges reports a field that a command’s output renames', () => {
+  const base = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { ramBudgetMib: { type: 'integer' } },
+          required: ['ramBudgetMib'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const head = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { ramLimitMib: { type: 'integer' } },
+          required: ['ramLimitMib'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual([
+    'impz info --json .ramBudgetMib: may now be missing',
+  ]);
+});
+
+test('#collectJsonOutputChanges reports an optional field that a command’s output drops', () => {
+  const base = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { version: { type: 'string' }, ramSleepingMib: { type: 'integer' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const head = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: { version: { type: 'string' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual([
+    'impz info --json .ramSleepingMib: removed',
+  ]);
+});
+
+test('#collectJsonOutputChanges reports an optional field that a command’s output renames', () => {
+  const base = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: {
+            storage: {
+              type: 'object',
+              properties: { usedBytes: { type: 'integer' }, isLow: { type: 'boolean' } },
+              required: ['usedBytes'],
+              additionalProperties: false,
+            },
+          },
+          required: ['storage'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const head = {
+    outputs: {
+      info: {
+        procedure: 'system.info',
+        schema: {
+          type: 'object',
+          properties: {
+            storage: {
+              type: 'object',
+              properties: { usedBytes: { type: 'integer' }, isFull: { type: 'boolean' } },
+              required: ['usedBytes'],
+              additionalProperties: false,
+            },
+          },
+          required: ['storage'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual([
+    'impz info --json .storage.isLow: removed',
+  ]);
+});
+
+test('#collectBreakingChanges passes an optional output field that a procedure drops', () => {
+  const base = {
+    procedures: {
+      'system.info': {
+        input: { type: 'object' },
+        output: {
+          type: 'object',
+          properties: { version: { type: 'string' }, ramSleepingMib: { type: 'integer' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  const head = {
+    procedures: {
+      'system.info': {
+        input: { type: 'object' },
+        output: {
+          type: 'object',
+          properties: { version: { type: 'string' } },
+          required: ['version'],
+          additionalProperties: false,
+        },
+        stream: false,
+      },
+    },
+    messages: {},
+    errors: {},
+    constants: {},
+  };
+
+  expect(collectBreakingChanges(base, head)).toStrictEqual([]);
+});
+
+test('#collectJsonOutputChanges passes a field that a command’s output adds', () => {
+  const base = {
+    outputs: {
+      'db copy': {
+        procedure: 'system.copyDatabase',
+        schema: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const head = {
+    outputs: {
+      'db copy': {
+        procedure: 'system.copyDatabase',
+        schema: {
+          type: 'object',
+          properties: { path: { type: 'string' }, sizeBytes: { type: 'integer' } },
+          required: ['path', 'sizeBytes'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual([]);
+});
+
+test('#collectJsonOutputChanges reports a command that head no longer covers', () => {
+  const base = {
+    outputs: {
+      ls: { procedure: 'imps.list', schema: { type: 'array' } },
+      info: { procedure: 'system.info', schema: { type: 'object' } },
+    },
+  };
+
+  const head = {
+    outputs: { info: { procedure: 'system.info', schema: { type: 'object' } } },
+  };
+
+  expect(collectJsonOutputChanges(base, head)).toStrictEqual(['impz ls --json: removed']);
+});
+
+test('#collectBreakingChanges finds nothing between a schema and itself', () => {
   const schema = {
     procedures: {
       'imps.get': {
@@ -32,7 +269,7 @@ test('it finds nothing between a schema and itself', () => {
   expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
 });
 
-test('it reports a procedure that head removes', () => {
+test('#collectBreakingChanges reports a procedure that head removes', () => {
   const base = {
     procedures: {
       'imps.get': { input: { type: 'object' }, output: { type: 'object' }, stream: false },
@@ -55,7 +292,7 @@ test('it reports a procedure that head removes', () => {
   expect(collectBreakingChanges(base, head)).toStrictEqual(['procedure imps.get: removed']);
 });
 
-test('it passes a procedure that head adds', () => {
+test('#collectBreakingChanges passes a procedure that head adds', () => {
   const base = {
     procedures: {},
     messages: {},
@@ -75,7 +312,7 @@ test('it passes a procedure that head adds', () => {
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it reports a procedure that turns into an event stream', () => {
+test('#collectBreakingChanges reports a procedure that turns into an event stream', () => {
   const base = {
     procedures: {
       'imps.events': { input: { type: 'object' }, output: { type: 'object' }, stream: false },
@@ -99,7 +336,7 @@ test('it reports a procedure that turns into an event stream', () => {
   ]);
 });
 
-test('it reports an input property that becomes required', () => {
+test('#collectBreakingChanges reports an input property that becomes required', () => {
   const base = {
     procedures: {
       'imps.create': {
@@ -131,7 +368,7 @@ test('it reports an input property that becomes required', () => {
   ]);
 });
 
-test('it passes a new optional input property', () => {
+test('#collectBreakingChanges passes a new optional input property', () => {
   const base = {
     procedures: {
       'imps.create': {
@@ -164,7 +401,7 @@ test('it passes a new optional input property', () => {
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it reports an input property that impd no longer names', () => {
+test('#collectBreakingChanges reports an input property that impd no longer names', () => {
   const base = {
     procedures: {
       'imps.create': {
@@ -217,7 +454,7 @@ test.each([
     ['procedure imps.create input .vcpus: lower bound >= 1 → > 1'],
   ],
   ['an exclusive minimum below the old minimum', { minimum: undefined, exclusiveMinimum: 0 }, []],
-])('it judges %s on an input number', (_label, bounds, expected) => {
+])('#collectBreakingChanges judges %s on an input number', (_label, bounds, expected) => {
   const base = {
     procedures: {
       'imps.create': {
@@ -271,7 +508,7 @@ test.each([
     ['procedure secrets.add input .value: pattern none → "^[a-z]+$"'],
   ],
   ['a format', { format: 'email' }, ['procedure secrets.add input .value: format none → "email"']],
-])('it judges %s on an input string', (_label, constraints, expected) => {
+])('#collectBreakingChanges judges %s on an input string', (_label, constraints, expected) => {
   const base = {
     procedures: {
       'secrets.add': {
@@ -304,7 +541,7 @@ test.each([
   expect(collectBreakingChanges(base, head)).toStrictEqual(expected);
 });
 
-test('it reports a value that an input enum drops', () => {
+test('#collectBreakingChanges reports a value that an input enum drops', () => {
   const base = {
     procedures: {
       'imps.create': {
@@ -339,7 +576,7 @@ test('it reports a value that an input enum drops', () => {
   ]);
 });
 
-test('it passes a value that an input enum adds', () => {
+test('#collectBreakingChanges passes a value that an input enum adds', () => {
   const base = {
     procedures: {
       'imps.create': {
@@ -372,7 +609,7 @@ test('it passes a value that an input enum adds', () => {
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it reports an input that turns from a string into an enum', () => {
+test('#collectBreakingChanges reports an input that turns from a string into an enum', () => {
   const base = {
     procedures: {
       'imps.create': {
@@ -404,7 +641,7 @@ test('it reports an input that turns from a string into an enum', () => {
   ]);
 });
 
-test('it reports an output property that may now be missing', () => {
+test('#collectBreakingChanges reports an output property that may now be missing', () => {
   const base = {
     procedures: {
       'imps.get': {
@@ -446,7 +683,7 @@ test('it reports an output property that may now be missing', () => {
   ]);
 });
 
-test('it passes an output property that head adds', () => {
+test('#collectBreakingChanges passes an output property that head adds', () => {
   const base = {
     procedures: {
       'imps.get': {
@@ -486,7 +723,7 @@ test('it passes an output property that head adds', () => {
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it reports an output that may now be null', () => {
+test('#collectBreakingChanges reports an output that may now be null', () => {
   const base = {
     procedures: {
       'imps.get': {
@@ -529,7 +766,7 @@ test('it reports an output that may now be null', () => {
   ]);
 });
 
-test('it passes a value that an output enum adds', () => {
+test('#collectBreakingChanges passes a value that an output enum adds', () => {
   const base = {
     procedures: {
       'imps.get': {
@@ -567,7 +804,7 @@ test('it passes a value that an output enum adds', () => {
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it passes a variant that an output union adds', () => {
+test('#collectBreakingChanges passes a variant that an output union adds', () => {
   const base = {
     procedures: {},
     messages: {
@@ -622,7 +859,7 @@ test('it passes a variant that an output union adds', () => {
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it reports a variant of an output union whose field changes type', () => {
+test('#collectBreakingChanges reports a variant of an output union whose field changes type', () => {
   const base = {
     procedures: {},
     messages: {
@@ -684,7 +921,7 @@ test('it reports a variant of an output union whose field changes type', () => {
   ]);
 });
 
-test('it reports a variant that a union impd reads drops', () => {
+test('#collectBreakingChanges reports a variant that a union impd reads drops', () => {
   const base = {
     procedures: {},
     messages: {
@@ -738,7 +975,7 @@ test('it reports a variant that a union impd reads drops', () => {
   ]);
 });
 
-test('it reports a message that changes direction or goes', () => {
+test('#collectBreakingChanges reports a message that changes direction or goes', () => {
   const base = {
     procedures: {},
     messages: {
@@ -762,7 +999,7 @@ test('it reports a message that changes direction or goes', () => {
   ]);
 });
 
-test('it reports an error code that goes, a changed status and changed data', () => {
+test('#collectBreakingChanges reports an error code that goes, a changed status and changed data', () => {
   const base = {
     procedures: {},
     messages: {},
@@ -797,7 +1034,7 @@ test('it reports an error code that goes, a changed status and changed data', ()
   ]);
 });
 
-test('it reports a constant that changes or goes', () => {
+test('#collectBreakingChanges reports a constant that changes or goes', () => {
   const base = {
     procedures: {},
     messages: {},
@@ -822,7 +1059,7 @@ test('it reports a constant that changes or goes', () => {
   ]);
 });
 
-test('it reports a change to a keyword it does not read one by one', () => {
+test('#collectBreakingChanges reports a change to a keyword it does not read one by one', () => {
   const base = {
     procedures: {
       'sessions.readLog': {
@@ -862,7 +1099,7 @@ test('it reports a change to a keyword it does not read one by one', () => {
   ]);
 });
 
-test('it compares a recursive schema through its $ref', () => {
+test('#collectBreakingChanges compares a recursive schema through its $ref', () => {
   const base = {
     procedures: {
       'files.tree': {
@@ -918,7 +1155,7 @@ test('it compares a recursive schema through its $ref', () => {
   ]);
 });
 
-test('it reports a record whose values narrow', () => {
+test('#collectBreakingChanges reports a record whose values narrow', () => {
   const base = {
     procedures: {
       'imps.update': {
@@ -960,7 +1197,7 @@ test('it reports a record whose values narrow', () => {
   ]);
 });
 
-test('it reports a changed field of an output variant whose enum also changes', () => {
+test('#collectBreakingChanges reports a changed field of an output variant whose enum also changes', () => {
   const base = {
     procedures: {},
     messages: {
@@ -1024,7 +1261,7 @@ test('it reports a changed field of an output variant whose enum also changes', 
   ]);
 });
 
-test('it reports a changed field of an output variant when a shared version field moves', () => {
+test('#collectBreakingChanges reports a changed field of an output variant when a shared version field moves', () => {
   const base = {
     procedures: {},
     messages: {
@@ -1094,7 +1331,7 @@ test('it reports a changed field of an output variant when a shared version fiel
   ]);
 });
 
-test('it reports an output variant that impd no longer sends under its tag', () => {
+test('#collectBreakingChanges reports an output variant that impd no longer sends under its tag', () => {
   const base = {
     procedures: {},
     messages: {
@@ -1150,7 +1387,7 @@ test('it reports an output variant that impd no longer sends under its tag', () 
   ]);
 });
 
-test('it finds nothing between an intersection and itself', () => {
+test('#collectBreakingChanges finds nothing between an intersection and itself', () => {
   const schema = {
     procedures: {
       'imps.rename': {
@@ -1177,7 +1414,7 @@ test('it finds nothing between an intersection and itself', () => {
   expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
 });
 
-test('it reports an input intersection whose one side narrows', () => {
+test('#collectBreakingChanges reports an input intersection whose one side narrows', () => {
   const base = {
     procedures: {
       'imps.rename': {
@@ -1219,7 +1456,7 @@ test('it reports an input intersection whose one side narrows', () => {
   ]);
 });
 
-test('it reports a property that both sides of an output intersection name and one widens', () => {
+test('#collectBreakingChanges reports a property that both sides of an output intersection name and one widens', () => {
   const base = {
     procedures: {
       'imps.get': {
@@ -1277,7 +1514,7 @@ test('it reports a property that both sides of an output intersection name and o
   ]);
 });
 
-test('it finds nothing between an intersection of objects and itself, open in the input and closed in the output', () => {
+test('#collectBreakingChanges finds nothing between an intersection of objects and itself, open in the input and closed in the output', () => {
   const schema = {
     procedures: {
       'imps.label': {
@@ -1314,7 +1551,7 @@ test('it finds nothing between an intersection of objects and itself, open in th
   expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
 });
 
-test('it finds nothing between an intersection of two recursive schemas and itself', () => {
+test('#collectBreakingChanges finds nothing between an intersection of two recursive schemas and itself', () => {
   const schema = {
     procedures: {
       'files.chain': {
@@ -1337,7 +1574,7 @@ test('it finds nothing between an intersection of two recursive schemas and itse
   expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
 });
 
-test('it finds nothing between an intersection of an object and a record of enums and itself', () => {
+test('#collectBreakingChanges finds nothing between an intersection of an object and a record of enums and itself', () => {
   const schema = {
     procedures: {
       'imps.label': {
@@ -1359,7 +1596,7 @@ test('it finds nothing between an intersection of an object and a record of enum
   expect(collectBreakingChanges(schema, structuredClone(schema))).toStrictEqual([]);
 });
 
-test('it passes an input intersection of enums that turns into the values both parts take', () => {
+test('#collectBreakingChanges passes an input intersection of enums that turns into the values both parts take', () => {
   const base = {
     procedures: {
       'imps.tag': {
@@ -1389,7 +1626,7 @@ test('it passes an input intersection of enums that turns into the values both p
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it passes an input enum value that the other part of the intersection refused', () => {
+test('#collectBreakingChanges passes an input enum value that the other part of the intersection refused', () => {
   const base = {
     procedures: {
       'imps.tag': {
@@ -1419,7 +1656,7 @@ test('it passes an input enum value that the other part of the intersection refu
   expect(collectBreakingChanges(base, head)).toStrictEqual([]);
 });
 
-test('it passes a changed input property that a closed part of the intersection refused', () => {
+test('#collectBreakingChanges passes a changed input property that a closed part of the intersection refused', () => {
   const base = {
     procedures: {
       'imps.label': {

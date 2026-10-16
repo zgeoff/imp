@@ -3,7 +3,8 @@ name: Breaking change
 # From 1.0 a client accepts any impd of its own major, and release-please
 # bumps the major only for a `!` or a BREAKING CHANGE footer. This check fails
 # a pull request whose change to the protocol (packages/api/protocol-schema.json)
-# breaks a client of the same major and is not marked so
+# or to the CLI's --json output (packages/cli/json-output-schema.json) breaks a
+# reader of the same major and is not marked so
 # (scripts/ci/check-breaking-change.ts). Its own workflow, so that editing the
 # title or the body reruns only this check. The job's name is a required status
 # check in .github/rulesets/main.json: rename both together.

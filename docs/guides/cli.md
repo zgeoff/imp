@@ -76,3 +76,16 @@ A signal to the CLI (Ctrl-C without `-t`, SIGTERM, SIGHUP) goes to the command, 
 where it detaches; a second one ends the session with 128 + n, so the CLI stops even when the
 command ignores it or impd stopped answering. A signal before the command starts ends the session at
 once, also with 128 + n. With `-t`, Ctrl-C is a key the command reads.
+
+## JSON output
+
+A program that reads impz, rather than a person, reads the `--json` output of the commands in
+`packages/cli/json-output-schema.json`, such as `impz info --json` and `impz db copy --json`. That
+file holds one JSON Schema per command, and the schema is the contract: within one major version,
+each field in it keeps its name and type, and a required field stays present. The breaking-change
+check fails a pull request that removes or renames such a field, or drops a command from the file,
+unless the change is marked to ship as a new major
+([breaking changes](../runbooks/releasing.md#breaking-changes)). A command prints the answer of the
+impd it talks to, so a newer impd can add fields that the schema does not hold, and a reader passes
+over a field it does not know. The `--json` output of any other command or mode, such as
+`impz ls --all --json`, can change in any release.

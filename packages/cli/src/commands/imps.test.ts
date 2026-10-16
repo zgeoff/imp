@@ -12,6 +12,7 @@ import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { writeHostConfig } from '../host-store';
 import { buildStubTimeouts } from '../test-utils/build-stub-timeouts';
+import { parseJsonOutput } from '../test-utils/parse-json-output';
 import { runCli } from '../test-utils/start-cli';
 import { startImpdHost } from '../test-utils/start-impd-host';
 import { startStubNewerImpd } from '../test-utils/start-stub-newer-impd';
@@ -681,6 +682,29 @@ test('#ls lists the current host alone without --all', async () => {
     stderr: '',
     code: 0,
   });
+});
+
+test('#ls prints --json output in the shape of the committed schema', async () => {
+  const ctx = await setupTest();
+  const box = await startImpdHost(ctx.stack, { env: {} });
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(box.db, image);
+
+  await box.client.imps.create({ name: 'db' });
+
+  writeHostConfig(ctx.home, {
+    current: 'box',
+    hosts: { box: { url: box.url, token: box.rootToken } },
+  });
+
+  const listed = await runCli({ args: ['ls', '--json'], env: ctx.home });
+
+  expect(listed.code).toBe(0);
+  expect(parseJsonOutput('ls', listed.stdout).data).toStrictEqual(JSON.parse(listed.stdout));
 });
 
 test('#ls marks an awake imp whose inner container is down', async () => {

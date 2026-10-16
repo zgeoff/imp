@@ -7,6 +7,7 @@ import { buildImagePaths, buildImpPaths } from '@impz/daemon/src/storage/data-la
 import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
 import { startStubInnerAgent } from '@impz/daemon/src/test-utils/start-stub-inner-agent';
 import { writeHostConfig } from '../host-store';
+import { parseJsonOutput } from '../test-utils/parse-json-output';
 import { runCli } from '../test-utils/start-cli';
 import { startImpdHost } from '../test-utils/start-impd-host';
 
@@ -97,4 +98,42 @@ test('it shows impd itself without a name', async () => {
   const shown = await runCli({ args: ['info'], env: ctx.home });
 
   expect(shown.stdout).toStartWith('version     ');
+});
+
+test('it prints impd’s --json output in the shape of the committed schema', async () => {
+  const ctx = await setupTest();
+  const box = await startImpdHost(ctx.stack, { env: {} });
+
+  writeHostConfig(ctx.home, {
+    current: 'box',
+    hosts: { box: { url: box.url, token: box.rootToken } },
+  });
+
+  const shown = await runCli({ args: ['info', '--json'], env: ctx.home });
+
+  expect(shown.code).toBe(0);
+  expect(parseJsonOutput('info', shown.stdout).data).toStrictEqual(JSON.parse(shown.stdout));
+});
+
+test('it prints an imp’s --json output in the shape of the committed schema', async () => {
+  const ctx = await setupTest();
+  const box = await startImpdHost(ctx.stack, { env: {} });
+
+  const image = buildMockNewImage({ name: 'base', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(box.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(box.db, image);
+
+  await box.client.imps.create({ name: 'web' });
+
+  writeHostConfig(ctx.home, {
+    current: 'box',
+    hosts: { box: { url: box.url, token: box.rootToken } },
+  });
+
+  const shown = await runCli({ args: ['info', 'web', '--json'], env: ctx.home });
+
+  expect(shown.code).toBe(0);
+  expect(parseJsonOutput('info <name>', shown.stdout).data).toStrictEqual(JSON.parse(shown.stdout));
 });

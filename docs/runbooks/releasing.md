@@ -40,6 +40,13 @@ breaks no request, and it would miss a tighter bound, which a TypeScript type do
 check cannot see a zod refinement, or what a transform in an output returns, because JSON Schema
 cannot express either.
 
+The same check guards the `--json` output that other programs read from the CLI, which
+`packages/cli/json-output-schema.json` holds as JSON Schema per command. `bun run render:protocol`
+writes that file too. The check reads it by the rule for what impd sends, because a reader of the
+output reads what impd answered, with one rule more: dropping an optional field breaks the output,
+because a script reads a field by its name. [JSON output](../guides/cli.md#json-output) covers what
+a reader can rely on.
+
 To mark a change, put a `!` after the type, as in `feat(#412)!: drop imps.get`, or add a
 `BREAKING CHANGE: <what breaks>` footer to a commit message. The repository squash-merges, and
 GitHub takes the subject of a pull request with one commit from that commit, so the `!` goes in the
