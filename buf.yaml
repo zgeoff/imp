@@ -1,8 +1,13 @@
 # The agent protocol's schema (proto/imp/agent/v1/agent.proto); `bun run
-# gen:proto` lints it and writes the code and the reference from it.
+# gen:proto` lints it and writes the code and the reference from it. CI runs
+# `buf breaking` with the rules below against main, and fails a change that
+# breaks the wire format, binary or JSON.
 version: v2
 modules:
   - path: proto
 lint:
   use:
     - STANDARD
+breaking:
+  use:
+    - WIRE_JSON
