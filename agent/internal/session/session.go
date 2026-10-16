@@ -41,6 +41,25 @@ const stdinQueue = 4
 // attach to.
 var errOver = errors.New("the session is over")
 
+// phase is where a session stands. The pump moves it between the first
+// three while the process runs; run and the EXIT's delivery move it on.
+type phase int
+
+const (
+	// the process runs and the pump reads freely
+	phaseRunning phase = iota
+	// the pump holds its next read for a tap, so a caller can see the hold
+	// rather than guess when it began
+	phaseHeldForTap
+	// a pump gave up waiting for a tap, and reads on unheld until one attaches
+	phaseTapless
+	// the process exited and its output drained; each new viewer gets the
+	// EXIT until one has it written
+	phaseExited
+	// the EXIT was written to a viewer: nothing is left to attach to
+	phaseOver
+)
+
 // session is one program on a pty that outlives its connections. One pump
 // reads the pty into the screen, the raw ring, the attached viewer, if any,
 // and impd's taps of a logged session; it never waits on any of them.
@@ -76,21 +95,15 @@ type session struct {
 	taps     map[*viewer]struct{}
 	tapStart map[*viewer]uint64
 	tapped   uint64
-	// tapless is set once a pump gave up waiting for a tap, until one attaches
-	tapless bool
-	// heldForTap is set while the pump holds its next read for a tap, so a
-	// caller can see the hold rather than guess when it began
-	heldForTap bool
+	phase    phase
 	// tapProgress wakes a waiting pump when a tap wrote output out
 	tapProgress chan struct{}
 	// tapWait is the package's, as the session started
 	tapWait    time.Duration
 	cols, rows uint16
-	exit       *proto.Exit
-	// delivered is set once the EXIT was written to a viewer; the session is
-	// then over. Until then each new viewer gets the EXIT.
-	delivered bool
-	// onDelivered runs once delivered is set.
+	// exit is set as the phase reaches phaseExited
+	exit *proto.Exit
+	// onDelivered runs once the phase reaches phaseOver.
 	onDelivered func()
 }
 
@@ -156,6 +169,7 @@ func (s *session) run() {
 	exit := proto.ExitOf(st.Code, int(st.Signal))
 	s.mu.Lock()
 	s.exit = exit
+	s.phase = phaseExited
 	if s.viewer != nil {
 		s.deliverExit(s.viewer)
 	}
@@ -216,18 +230,21 @@ func (s *session) waitForTap() {
 	expired := false
 	for {
 		s.mu.Lock()
-		if s.untapped()+readSize <= ringSize || s.tapless {
-			s.heldForTap = false
+		if s.phase == phaseTapless {
+			s.mu.Unlock()
+			return
+		}
+		if s.untapped()+readSize <= ringSize {
+			s.phase = phaseRunning
 			s.mu.Unlock()
 			return
 		}
 		if expired {
-			s.tapless = true
-			s.heldForTap = false
+			s.phase = phaseTapless
 			s.mu.Unlock()
 			return
 		}
-		s.heldForTap = true
+		s.phase = phaseHeldForTap
 		s.mu.Unlock()
 		select {
 		case <-s.tapProgress:
@@ -271,13 +288,15 @@ func (s *session) tap(t *viewer, resume *proto.ResumeFrom) *proto.Error {
 	if len(data) > 0 {
 		t.push(frame{typ: proto.TypeStdout, payload: data})
 	}
-	if s.exit != nil {
+	if s.hasExited() {
 		t.stop(s.exitFrame(nil), false)
 		return nil
 	}
 	s.taps[t] = struct{}{}
 	s.tapStart[t] = uint64(out.Offset)
-	s.tapless = false
+	if s.phase == phaseTapless {
+		s.phase = phaseRunning
+	}
 	return nil
 }
 
@@ -311,7 +330,7 @@ func (s *session) exitFrame(written func()) *frame {
 func (s *session) attach(v *viewer, cols, rows uint16, created bool, resume *proto.ResumeFrom, previous *proto.Previous) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.delivered {
+	if s.phase == phaseOver {
 		return errOver
 	}
 	out, data, err := s.place(resume)
@@ -330,7 +349,7 @@ func (s *session) attach(v *viewer, cols, rows uint16, created bool, resume *pro
 	if len(data) > 0 {
 		v.push(frame{typ: proto.TypeStdout, payload: data})
 	}
-	if s.exit != nil {
+	if s.hasExited() {
 		s.deliverExit(v)
 		return nil
 	}
@@ -421,7 +440,7 @@ func (s *session) resize(v *viewer, cols, rows uint16) {
 }
 
 func (s *session) resizeLocked(cols, rows uint16) {
-	if s.exit != nil {
+	if s.hasExited() {
 		return
 	}
 	_ = pty.SetWinsize(s.master, cols, rows)
@@ -438,7 +457,7 @@ func (s *session) deliverExit(v *viewer) {
 
 func (s *session) markDelivered() {
 	s.mu.Lock()
-	s.delivered = true
+	s.phase = phaseOver
 	s.mu.Unlock()
 	if s.onDelivered != nil {
 		s.onDelivered()
@@ -458,7 +477,7 @@ func (s *session) detach(v *viewer) {
 func (s *session) signal(v *viewer, sig syscall.Signal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.viewer == v && s.exit == nil {
+	if s.viewer == v && !s.hasExited() {
 		_ = s.proc.Signal(sig)
 	}
 }
@@ -510,7 +529,7 @@ func (s *session) info() *proto.SessionInfo {
 		BootId:              s.bootID,
 		End:                 float64(s.raw.End()),
 	}
-	if s.exit != nil {
+	if s.hasExited() {
 		info.State = proto.SessionExited
 	}
 	if s.log {
@@ -532,12 +551,18 @@ func (s *session) ended() *proto.Previous {
 func (s *session) exited() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.exit != nil
+	return s.hasExited()
+}
+
+// hasExited reports whether the process exited, its EXIT delivered or not.
+// The caller holds mu.
+func (s *session) hasExited() bool {
+	return s.phase >= phaseExited
 }
 
 // over reports whether a viewer got the EXIT: nothing is left to attach to.
 func (s *session) over() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.delivered
+	return s.phase == phaseOver
 }
