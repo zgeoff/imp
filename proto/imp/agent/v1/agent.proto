@@ -80,7 +80,7 @@ message Request {
   // agent.accept: the listener a CONNECTION frame came on.
   optional string listener = 17;
   // agent.accept: the id the CONNECTION frame named.
-  optional uint32 connection = 118;
+  optional uint32 connection = 18;
 
   // grow: the disk's new size in bytes.
   optional double disk_bytes = 19;
