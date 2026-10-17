@@ -38,12 +38,42 @@ let
     ];
   };
   # The unit passes IMP_HOST_ADDRESSES from its probe file with a bare -e;
-  # here imp-host-env.sh writes it into the env file, which docker reads.
+  # here imp-host-env.sh writes it into the env file.
   addressesLine = [
     "-e"
     "IMP_HOST_ADDRESSES"
   ];
-  sharedLines = lib.filter (line: line != addressesLine) hostArgs.lines;
+  # The unit's --env-file is on the system disk, and docker keeps every value
+  # it reads in the container's config there too. Here imp-host-env.sh writes
+  # the file to tmpfs, and the container gets it as a read-only mount that
+  # host/entrypoint exports from.
+  envFileLine = [
+    "--env-file"
+    "/etc/imp/imp-host.env"
+  ];
+  envFile = "/run/imp-host/env";
+  envFileInContainer = "/run/imp/env";
+  sharedLines =
+    lib.throwIfNot (lib.elem envFileLine hostArgs.lines)
+      "services.imp: deploy/imp-host.args.json has no --env-file /etc/imp/imp-host.env line, which the module moves to tmpfs"
+      (
+        lib.concatMap (
+          line:
+          if line == addressesLine then
+            [ ]
+          else if line == envFileLine then
+            [
+              [
+                "-v"
+                "${envFile}:${envFileInContainer}:ro"
+                "-e"
+                "IMP_ENV_FILE=${envFileInContainer}"
+              ]
+            ]
+          else
+            [ line ]
+        ) hostArgs.lines
+      );
   sharedArgs = lib.concatMap (
     word:
     if lib.hasPrefix "$" word then
@@ -136,6 +166,24 @@ let
     exec ${pkgs.bash}/bin/bash ${./imp-host-dns-token.sh} ${lib.escapeShellArg cfg.dnsApiTokenFile} ${dnsStageDir}
   '';
   runArgs = privileges ++ probedArgs ++ sharedArgs ++ secretArgs ++ dnsArgs ++ [ cfg.image ];
+  # The keys docker run sets with -e KEY=value. host/entrypoint exports the
+  # env file over the container's env, so imp-host-env.sh leaves these keys
+  # out of it, and they keep their -e values as they would over --env-file.
+  containerKeys =
+    let
+      args = sharedArgs ++ secretArgs ++ dnsArgs;
+    in
+    lib.concatLists (
+      lib.imap1 (
+        i: word:
+        let
+          next = lib.elemAt args i;
+        in
+        lib.optional (word == "-e" && i < lib.length args && lib.hasInfix "=" next) (
+          lib.head (lib.splitString "=" next)
+        )
+      ) args
+    );
 
   # imp-docker-proxy (deploy/imp-docker-proxy.service): the only Docker
   # socket imp-host sees. It closes the Docker socket path only: imp-host
@@ -222,6 +270,9 @@ let
       lib.optionalString (cfg.backupPasswordFile != null) (stagedPath "backup-password")
     }
     export IMP_BACKUP_IN_CONTAINER=${containerPath "backup-password"}
+    export IMP_CONTAINER_KEYS=${lib.escapeShellArg (lib.concatStringsSep " " containerKeys)}
+    export IMP_ENV_OUT=${envFile}
+    install -d -m 0700 /run/imp-host
     exec ${pkgs.bash}/bin/bash ${./imp-host-env.sh} ${../lib/host-env.sh}
   '';
 

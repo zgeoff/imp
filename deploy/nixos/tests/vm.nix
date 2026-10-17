@@ -4,8 +4,10 @@
 # /dev/kvm.
 #
 # host: a ZFS pool on a second disk and a stand-in image that runs the real
-#   host/scripts/tailscale-up.sh against a fake tailscale. It checks the env
-#   file, the kernel settings, that the host has no imp rules, and the three
+#   host/scripts/tailscale-up.sh against a fake tailscale, after
+#   host/scripts/load-env-file.sh exports the env file as host/entrypoint
+#   does. It checks the env file, that its secrets stay off the disk, the
+#   kernel settings, that the host has no imp rules, and the three
 #   ways the node comes up: a first join with the key file, a restart from
 #   good saved state with no key used, and a join again when the saved node
 #   needs a login (the control plane deleted it). With ipv6.enable, as the
@@ -25,6 +27,7 @@
 let
   fakeKey = "fake-authkey-for-the-vm-test";
   fakeBackupPassword = "fake-backup-password-for-the-vm-test";
+  fakeAwsSecret = "fake-aws-secret-for-the-vm-test";
   stateDir = "/var/lib/imp/tailscale";
 
   # Stands in for tailscaled: a socket, and its name in ps.
@@ -64,6 +67,7 @@ let
     extraCommands = ''
       mkdir -p lib/imp
       cp ${../../../host/scripts/tailscale-up.sh} lib/imp/tailscale-up.sh
+      cp ${../../../host/scripts/load-env-file.sh} lib/imp/load-env-file.sh
       chmod 755 lib/imp/tailscale-up.sh
       # stands in for imp-docker-proxy: a socket where the proxy's would be
       mkdir -p usr/local/bin
@@ -75,7 +79,7 @@ let
       Cmd = [
         "/bin/bash"
         "-c"
-        "mkdir -p ${stateDir}; /lib/imp/tailscale-up.sh >${stateDir}/up.out 2>&1; echo $? >${stateDir}/up.rc; exec sleep infinity"
+        ". /lib/imp/load-env-file.sh \"$IMP_ENV_FILE\"; mkdir -p ${stateDir}; /lib/imp/tailscale-up.sh >${stateDir}/up.out 2>&1; echo $? >${stateDir}/up.rc; exec sleep infinity"
       ];
       Labels."imp.tailscale-keyless" = "1";
     };
@@ -134,8 +138,12 @@ pkgs.testers.runNixOSTest {
       # A store file would do in a test, but the module takes paths outside it.
       environment.etc."imp-test/authkey".text = fakeKey;
       environment.etc."imp-test/backup-password".text = fakeBackupPassword;
-      environment.etc."imp-test/imp-host.env".text =
-        "IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp\n";
+      environment.etc."imp-test/imp-host.env".text = ''
+        IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp
+        AWS_ACCESS_KEY_ID=fake-aws-key-id-for-the-vm-test
+        AWS_SECRET_ACCESS_KEY=${fakeAwsSecret}
+        DOCKER_HOST=unix:///nowhere.sock
+      '';
       # 3 GiB is below what the formula needs, so imp-host refuses to start
       # until ramBudgetMiB is set; the test switches to this.
       specialisation.budget.configuration.services.imp.ramBudgetMiB = 1024;
@@ -230,6 +238,7 @@ pkgs.testers.runNixOSTest {
           host.wait_until_succeeds("journalctl -u imp-host --no-pager | grep -q 'below the 512 MiB floor: RAM'", timeout=60)
           host.succeed("journalctl -u imp-host --no-pager | grep -q 'Set services.imp.ramBudgetMiB'")
           host.wait_until_succeeds("systemctl show -p Result --value imp-host | grep -qx start-limit-hit", timeout=120)
+          host.succeed("test ! -e /run/imp-host/env")
           host.succeed("test ! -e /etc/imp/imp-host.env")
 
       with subtest("with ramBudgetMiB, imp-host starts and joins with the key file"):
@@ -242,20 +251,41 @@ pkgs.testers.runNixOSTest {
           assert "--hostname=imp-vm" in joins[0], joins
 
       with subtest("the env file holds the module's settings, readable by root alone"):
-          assert host.succeed("stat -c %a /etc/imp/imp-host.env").strip() == "600"
-          env = host.succeed("cat /etc/imp/imp-host.env").splitlines()
+          assert host.succeed("stat -c %a /run/imp-host/env").strip() == "600"
+          env = host.succeed("cat /run/imp-host/env").splitlines()
           wanted = ["IMP_HOST_FIREWALL=none", "IMP_STORAGE_BACKEND=zfs", "IMP_ZFS_ROOT=tank/imp",
                     "IMP_TAILSCALE_HOSTNAME=imp-vm", "IMP_HOST_IMAGE=imp-host-stub:test"]
           # every missing line at once, not only the first
           missing = [line for line in wanted if line not in env]
           assert missing == [], missing
           # the formula refused this host (above); ramBudgetMiB is what runs
-          host.succeed("grep -qx IMP_RAM_BUDGET_MIB=1024 /etc/imp/imp-host.env")
+          host.succeed("grep -qx IMP_RAM_BUDGET_MIB=1024 /run/imp-host/env")
+
+      with subtest("the env file's secrets: in tmpfs and the container's processes, never on the disk"):
+          assert host.succeed("findmnt -n -o FSTYPE --target /run/imp-host/env").strip() == "tmpfs"
+          assert host.succeed("stat -c %a /run/imp-host").strip() == "700"
+          host.succeed("test ! -e /etc/imp/imp-host.env")
+          mounts = host.succeed("docker container inspect -f '{{range .Mounts}}{{.Source}}:{{.Destination}}:{{.RW}} {{end}}' imp-host")
+          assert "/run/imp-host/env:/run/imp/env:false" in mounts, mounts
+          docker_env = host.succeed("docker container inspect -f '{{json .Config.Env}}' imp-host")
+          assert "AWS_" not in docker_env, docker_env
+          assert "IMP_BACKUP_REPOSITORY" not in docker_env, docker_env
+          # the system disk: /etc (but the test's own secrets file), /var and /root
+          host.fail("grep -rqF --exclude-dir=imp-test ${fakeAwsSecret} /etc /var /root")
+          assert "${fakeAwsSecret}" not in host.succeed("journalctl -b --no-pager")
+          # the stand-in's last process, as impd under host/entrypoint, has the file's values
+          host.wait_until_succeeds("docker exec imp-host pgrep -fx 'sleep infinity'", timeout=60)
+          environ = host.succeed("docker exec imp-host sh -c 'tr \"\\\\0\" \"\\\\n\" </proc/$(pgrep -fx \"sleep infinity\")/environ'").splitlines()
+          assert "AWS_SECRET_ACCESS_KEY=${fakeAwsSecret}" in environ, [line.split("=")[0] for line in environ]
+          assert "IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp" in environ, [line.split("=")[0] for line in environ]
+          # an -e value wins over the secrets file, as it would over --env-file
+          assert "DOCKER_HOST=unix:///run/imp-docker/docker.sock" in environ, [line for line in environ if line.startswith("DOCKER_HOST=")]
+          host.fail("grep -q '^DOCKER_HOST=' /run/imp-host/env")
 
       with subtest("the backup password: a file in the container, never a value"):
-          host.succeed("grep -qx IMP_BACKUP_PASSWORD_FILE=/run/imp/backup-password /etc/imp/imp-host.env")
-          host.succeed("grep -qx IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp /etc/imp/imp-host.env")
-          assert "${fakeBackupPassword}" not in host.succeed("cat /etc/imp/imp-host.env")
+          host.succeed("grep -qx IMP_BACKUP_PASSWORD_FILE=/run/imp/backup-password /run/imp-host/env")
+          host.succeed("grep -qx IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp /run/imp-host/env")
+          assert "${fakeBackupPassword}" not in host.succeed("cat /run/imp-host/env")
           assert "${fakeBackupPassword}" not in host.succeed("docker container inspect imp-host")
           assert "${fakeBackupPassword}" not in host.succeed("journalctl -b --no-pager")
           assert host.succeed("docker exec imp-host cat /run/imp/backup-password").strip() == "${fakeBackupPassword}"
@@ -282,7 +312,7 @@ pkgs.testers.runNixOSTest {
           host.succeed("grep -qx 1073741824 /sys/module/zfs/parameters/zfs_arc_max")
 
       with subtest("ipv6: imp-host runs on br-imphost, with an IPv6 default route"):
-          host.succeed("grep -qx IMP_HOST_IPV6=on /etc/imp/imp-host.env")
+          host.succeed("grep -qx IMP_HOST_IPV6=on /run/imp-host/env")
           info = host.succeed("docker network inspect -f '{{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.name\"}}' imp-host").strip()
           assert info == "true br-imphost", info
           nets = json.loads(host.succeed("docker container inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
@@ -362,14 +392,14 @@ pkgs.testers.runNixOSTest {
       with subtest("ipv6 off, then on again, on a running host"):
           host.succeed("/run/booted-system/specialisation/noipv6/bin/switch-to-configuration test")
           start_imp_host()
-          host.succeed("grep -qx IMP_HOST_IPV6=off /etc/imp/imp-host.env")
+          host.succeed("grep -qx IMP_HOST_IPV6=off /run/imp-host/env")
           networks = host.succeed("docker network ls --format '{{.Name}}'").split()
           assert "imp-host" not in networks, networks
           nets = json.loads(host.succeed("docker container inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
           assert list(nets) == ["bridge"], list(nets)
           host.succeed("/run/booted-system/specialisation/budget/bin/switch-to-configuration test")
           start_imp_host()
-          host.succeed("grep -qx IMP_HOST_IPV6=on /etc/imp/imp-host.env")
+          host.succeed("grep -qx IMP_HOST_IPV6=on /run/imp-host/env")
           info = host.succeed("docker network inspect -f '{{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.name\"}}' imp-host").strip()
           assert info == "true br-imphost", info
           nets = json.loads(host.succeed("docker container inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
@@ -448,7 +478,7 @@ pkgs.testers.runNixOSTest {
           assert len(ups()) == 4, ups()
 
       with subtest("the key is never in the env, argv, the log or the store's env file"):
-          assert "TAILSCALE_AUTHKEY" not in host.succeed("cat /etc/imp/imp-host.env")
+          assert "TAILSCALE_AUTHKEY" not in host.succeed("cat /run/imp-host/env")
           assert "${fakeKey}" not in host.succeed("docker container inspect -f '{{.Config.Env}}' imp-host")
           assert "${fakeKey}" not in host.succeed("cat ${stateDir}/fake-up.log ${stateDir}/up.out")
           assert "${fakeKey}" not in host.succeed("journalctl -b --no-pager")
@@ -457,7 +487,7 @@ pkgs.testers.runNixOSTest {
           host.succeed("rm /etc/imp-test/backup-password")
           start_imp_host()
           host.succeed("journalctl -u imp-host --no-pager | grep -q 'backup-password is missing or empty; backups stay off'")
-          host.succeed("grep -qx IMP_BACKUP_REPOSITORY= /etc/imp/imp-host.env")
-          assert "IMP_BACKUP_PASSWORD_FILE" not in host.succeed("cat /etc/imp/imp-host.env")
+          host.succeed("grep -qx IMP_BACKUP_REPOSITORY= /run/imp-host/env")
+          assert "IMP_BACKUP_PASSWORD_FILE" not in host.succeed("cat /run/imp-host/env")
     '';
 }

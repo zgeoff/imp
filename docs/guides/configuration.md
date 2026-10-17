@@ -3,7 +3,8 @@
 impz reads environment variables in three places: impd, the host container scripts, and the CLI.
 There is no config file. A server keeps the variables in an env file, `/etc/imp/imp-host.env`
 ([`deploy/imp-host.env.example`](../../deploy/imp-host.env.example)), which the systemd unit and the
-compose file pass to the container. An empty variable counts as unset.
+compose file pass to the container. The [NixOS module](./nixos.md#the-env-file) writes its env file
+to tmpfs and mounts it into the container instead. An empty variable counts as unset.
 
 ## impd
 
@@ -167,6 +168,7 @@ before anything starts.
 | `IMP_TAILSCALE_STATE_DIR`    | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                                                                       |
 | `IMP_DNS`                    | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet.                                                                                   |
 | `IMP_DAEMON`                 | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd the supervisor runs: a `.ts` file under bun, else a binary. The release image sets `/usr/local/bin/impd`.                                          |
+| `IMP_ENV_FILE`               | none                               | `entrypoint`       | A docker `--env-file` whose lines the entrypoint exports before anything else, over the image's env. The NixOS module mounts its env file here.             |
 
 **NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, a comma-separated list. `dev.sh` does
 not pass `IMP_DNS`, so the dev instance uses the defaults.

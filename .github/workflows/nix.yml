@@ -15,6 +15,7 @@ on:
       - package.json
       - deploy/**
       - host/scripts/tailscale-up.sh
+      - host/scripts/load-env-file.sh
       - scripts/ci/check-kvm.sh
       - .github/workflows/nix.yml
 
@@ -50,6 +51,7 @@ jobs:
             package.json
             deploy/**
             host/scripts/tailscale-up.sh
+            host/scripts/load-env-file.sh
             scripts/ci/check-kvm.sh
             .github/workflows/nix.yml
             .github/actions/paths-changed/**

@@ -371,6 +371,50 @@ test('it copies the secrets file in, where a later line replaces an earlier one'
   );
 });
 
+test('it leaves out the keys docker run sets with -e, indented or not, whichever file sets them', () => {
+  const ctx = setupTest();
+  const ip = createStubBin(ctx.dir, 'ip');
+
+  writeFileSync(join(ctx.dir, 'settings'), 'IMP_HOST_FIREWALL=none\nIMP_ENV_FILE=/elsewhere\n');
+  writeFileSync(join(ctx.dir, 'meminfo'), `MemTotal: ${String(64_000 * 1024)} kB\n`);
+
+  writeFileSync(
+    join(ctx.dir, 'secrets'),
+    'AWS_SECRET_ACCESS_KEY=fake-secret\n  DOCKER_HOST=unix:///nowhere.sock\n',
+  );
+
+  const result = Bun.spawnSync(
+    [
+      'bash',
+      new URL('imp-host-env.sh', import.meta.url).pathname,
+      new URL('../lib/host-env.sh', import.meta.url).pathname,
+    ],
+    {
+      env: {
+        PATH: `${ip.bin}:${process.env['PATH'] ?? ''}`,
+        IMP_SETTINGS: join(ctx.dir, 'settings'),
+        IMP_STORAGE: 'xfs',
+        IMP_RAM_BUDGET: '',
+        IMP_ARC_MAX: '',
+        IMP_SECRETS: join(ctx.dir, 'secrets'),
+        IMP_CONTAINER_KEYS: 'IMP_ENV_FILE DOCKER_HOST IMP_TAILSCALE_AUTHKEY_FILE',
+        IMP_ENV_OUT: join(ctx.dir, 'imp-host.env'),
+        IMP_MEMINFO: join(ctx.dir, 'meminfo'),
+        IMP_BACKUP_STAGED: '',
+        IMP_BACKUP_IN_CONTAINER: '/run/imp/backup-password',
+      },
+    },
+  );
+
+  expect(result.exitCode).toBe(0);
+
+  expect(readFileSync(join(ctx.dir, 'imp-host.env'), 'utf8')).toBe(
+    '# Written by imp-host-env.sh (the NixOS module) at each start; edits are lost.\n' +
+      'IMP_HOST_FIREWALL=none\nAWS_SECRET_ACCESS_KEY=fake-secret\n' +
+      'IMP_RAM_BUDGET_MIB=54400\nIMP_HOST_ADDRESSES=\n',
+  );
+});
+
 test('it refuses a secrets file it cannot read, writing nothing', () => {
   const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');

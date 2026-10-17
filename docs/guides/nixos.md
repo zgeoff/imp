@@ -61,9 +61,9 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
 - **`imp-host.service`:** runs the image with the arguments in
   [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json), the same file
   [`deploy/imp-host.service`](../../deploy/imp-host.service) comes from. Before each start it writes
-  `/etc/imp/imp-host.env` (0600). `imp-host-image.service` loads `imageArchive`, or pulls `image`
-  when the image is missing, before each start of either container. With ZFS, it needs
-  `imp-zfs-dataset.service`.
+  [the env file](#the-env-file) to `/run/imp-host/env` (0600). `imp-host-image.service` loads
+  `imageArchive`, or pulls `image` when the image is missing, before each start of either container.
+  With ZFS, it needs `imp-zfs-dataset.service`.
 - **`imp-docker-proxy.service`:** the only Docker socket imp-host sees, from the `proxy` section of
   the same file ([the Docker socket](../architecture/host.md#the-docker-socket)). imp-host wants it
   and starts after it; a proxy that stops fails image work only. It closes the Docker socket path
@@ -179,8 +179,13 @@ A reinstall keeps the pool, and the imps and node state in it:
 
 ## The env file
 
-`/etc/imp/imp-host.env` is written again at each start of `imp-host`, so edit the module's options,
-not the file:
+The module writes the env file to `/run/imp-host/env`, in tmpfs, and mounts it read-only into the
+container at `/run/imp/env`. The container's entrypoint exports it before impd starts. Docker never
+reads the values, so neither the file nor Docker's container config puts a copy of a secret on the
+system disk. The keys that the module passes with `docker run -e`, such as `DOCKER_HOST`, stay out
+of the file, so those values win as they would over `--env-file`.
+
+The file is written again at each start of `imp-host`, so edit the module's options, not the file:
 
 - `settings`: any [variable](./configuration.md) but the module's own keys (`IMP_HOST_IMAGE`,
   `IMP_STORAGE_BACKEND`, `IMP_ZFS_ROOT`, `IMP_HOST_FIREWALL`, `IMP_HOST_IPV6`, `IMP_HOST_SUBNET6`),
@@ -284,12 +289,13 @@ docker exec imp-host impz rm check
   runs the cases alone.
 - `vm` boots two NixOS VMs with the module, as `e2e/test-bootstrap.sh --stub` does for
   `bootstrap.sh`. One has a ZFS pool on a second disk and a stand-in image that runs the real
-  `tailscale-up.sh` against a fake `tailscale`. It checks the env file, the kernel settings, that
-  the host has no imp firewall rules, and the three ways the node comes up: a first join with the
-  key, a restart from good state with no key, and a join again when the saved node needs a login.
-  The other has `hostFirewall = "own"`: SSH connects through the imp table, and another port does
-  not. It needs KVM, with nesting, and boots no imp. Its script waits on conditions, never a fixed
-  delay, and each scenario that changes the running host restores it and checks the restore.
+  `tailscale-up.sh` against a fake `tailscale`. It checks the env file, that its secrets reach the
+  container's processes but never the system disk or Docker's config, the kernel settings, that the
+  host has no imp firewall rules, and the three ways the node comes up: a first join with the key, a
+  restart from good state with no key, and a join again when the saved node needs a login. The other
+  has `hostFirewall = "own"`: SSH connects through the imp table, and another port does not. It
+  needs KVM, with nesting, and boots no imp. Its script waits on conditions, never a fixed delay,
+  and each scenario that changes the running host restores it and checks the restore.
 
 Without Nix on the machine, run them in a container, with `/dev/kvm` and no `--privileged`; the
 store stays in a Docker volume:
