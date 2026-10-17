@@ -3728,7 +3728,7 @@ test.skipIf(readZfsTestPool() === null)(
 
 // the disk budget counts back a build tree's blocks from `available`, which
 // loses what the dataset takes but is the pool's: the txg that commits the
-// tree may also shrink blocks outside the dataset, such as its space maps
+// tree may also shrink blocks outside the dataset, such as the pool's metadata
 test.skipIf(readZfsTestPool() === null)(
   'it shows a tree no more blocks than its dataset has taken',
   async () => {
@@ -3758,7 +3758,6 @@ test.skipIf(readZfsTestPool() === null)(
     // no sync between writes: each sample may fall inside an open txg; a
     // margin is what the dataset has taken less what the tree shows, in order
     const margins: number[] = [];
-    const diagOutside: number[] = [];
 
     for (let chunk = 0; chunk < 16; chunk += 1) {
       writeSync(fd, randomBytes(16 * 1024 ** 2));
@@ -3767,13 +3766,7 @@ test.skipIf(readZfsTestPool() === null)(
       const usage = await pool.backend.readUsage();
 
       margins.push(usage.usedBytes - before.usedBytes - treeBytes);
-
-      diagOutside.push(
-        before.availableBytes - usage.availableBytes - (usage.usedBytes - before.usedBytes),
-      );
     }
-
-    console.log(`GEO-1226 diag: margins=${margins.join(',')} outside=${diagOutside.join(',')}`);
 
     expect(margins).toSatisfyAll((margin: number) => margin >= 0);
   },
