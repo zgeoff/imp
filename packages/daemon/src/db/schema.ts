@@ -8,6 +8,22 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export interface Account {
+  accessToken: string | null;
+  accessTokenExpiresAt: string | null;
+  accountId: string;
+  createdAt: string;
+  id: string;
+  idToken: string | null;
+  password: string | null;
+  providerId: string;
+  refreshToken: string | null;
+  refreshTokenExpiresAt: string | null;
+  scope: string | null;
+  updatedAt: string;
+  userId: string;
+}
+
 export interface ApiAudit {
   actor: ApiActor;
   actor_name: string | null;
@@ -165,11 +181,93 @@ export interface Networks {
   name: string;
 }
 
+export interface OauthAccessToken {
+  authorizationCodeId: string | null;
+  clientId: string;
+  confirmation: string | null;
+  createdAt: string;
+  expiresAt: string;
+  id: string;
+  referenceId: string | null;
+  refreshId: string | null;
+  requestedUserInfoClaims: string | null;
+  resources: string | null;
+  revoked: string | null;
+  scopes: string;
+  sessionId: string | null;
+  token: string;
+  userId: string | null;
+}
+
+export interface OauthClient {
+  applicationType: string | null;
+  backchannelLogoutSessionRequired: number | null;
+  backchannelLogoutUri: string | null;
+  clientCredentialsScopes: string | null;
+  clientDiscoveryId: string | null;
+  clientId: string;
+  clientSecret: string | null;
+  contacts: string | null;
+  createdAt: string | null;
+  disabled: number | null;
+  dpopBoundAccessTokens: number | null;
+  enableEndSession: number | null;
+  grantTypes: string | null;
+  icon: string | null;
+  id: string;
+  jwks: string | null;
+  jwksUri: string | null;
+  metadata: string | null;
+  name: string | null;
+  policy: string | null;
+  postLogoutRedirectUris: string | null;
+  redirectUris: string;
+  referenceId: string | null;
+  requirePKCE: number | null;
+  responseTypes: string | null;
+  scopes: string | null;
+  skipConsent: number | null;
+  softwareId: string | null;
+  softwareStatement: string | null;
+  softwareVersion: string | null;
+  subjectType: string | null;
+  tokenEndpointAuthMethod: string | null;
+  tos: string | null;
+  updatedAt: string | null;
+  uri: string | null;
+  userId: string | null;
+}
+
+export interface OauthClientAssertion {
+  expiresAt: string;
+  id: string;
+}
+
+export interface OauthClientResource {
+  clientId: string;
+  createdAt: string | null;
+  id: string;
+  metadata: string | null;
+  resourceId: string;
+}
+
 export interface OauthClients {
   created_at: number;
   id: string;
   name: string;
   redirect_uris: string;
+}
+
+export interface OauthConsent {
+  clientId: string;
+  createdAt: string;
+  id: string;
+  referenceId: string | null;
+  requestedUserInfoClaims: string | null;
+  resources: string | null;
+  scopes: string;
+  updatedAt: string;
+  userId: string | null;
 }
 
 export interface OauthGrants {
@@ -181,6 +279,45 @@ export interface OauthGrants {
   resource: string;
   scope: Scope;
   token_id: string;
+}
+
+export interface OauthRefreshToken {
+  authorizationCodeId: string | null;
+  authTime: string | null;
+  clientId: string;
+  confirmation: string | null;
+  createdAt: string;
+  expiresAt: string;
+  id: string;
+  referenceId: string | null;
+  requestedUserInfoClaims: string | null;
+  resources: string | null;
+  revoked: string | null;
+  rotatedAt: string | null;
+  rotationReplayExpiresAt: string | null;
+  rotationReplayResponse: string | null;
+  scopes: string;
+  sessionId: string | null;
+  token: string;
+  userId: string;
+}
+
+export interface OauthResource {
+  accessTokenTtl: number | null;
+  allowedScopes: string | null;
+  createdAt: string | null;
+  customClaims: string | null;
+  disabled: number | null;
+  dpopBoundAccessTokensRequired: number | null;
+  id: string;
+  identifier: string;
+  metadata: string | null;
+  name: string;
+  policyVersion: number | null;
+  refreshTokenTtl: number | null;
+  signingAlgorithm: string | null;
+  signingKeyId: string | null;
+  updatedAt: string | null;
 }
 
 export interface OauthTokens {
@@ -208,6 +345,17 @@ export interface Secrets {
   value_file: Generated<string>;
 }
 
+export interface Session {
+  createdAt: string;
+  expiresAt: string;
+  id: string;
+  ipAddress: string | null;
+  token: string;
+  updatedAt: string;
+  userAgent: string | null;
+  userId: string;
+}
+
 export interface Tokens {
   created_at: number;
   grantable: Generated<string>;
@@ -228,7 +376,30 @@ export interface TokenSshKeys {
   token_id: string;
 }
 
+export interface User {
+  createdAt: string;
+  email: string;
+  emailVerified: number;
+  id: string;
+  image: string | null;
+  imps: string | null;
+  lastUsedAt: string | null;
+  name: string;
+  tokenId: string;
+  updatedAt: string;
+}
+
+export interface Verification {
+  createdAt: string;
+  expiresAt: string;
+  id: string;
+  identifier: string;
+  updatedAt: string;
+  value: string;
+}
+
 export interface DB {
+  account: Account;
   api_audit: ApiAudit;
   broker_audit: BrokerAudit;
   broker_sessions: BrokerSessions;
@@ -245,8 +416,18 @@ export interface DB {
   oauth_clients: OauthClients;
   oauth_grants: OauthGrants;
   oauth_tokens: OauthTokens;
+  oauthAccessToken: OauthAccessToken;
+  oauthClient: OauthClient;
+  oauthClientAssertion: OauthClientAssertion;
+  oauthClientResource: OauthClientResource;
+  oauthConsent: OauthConsent;
+  oauthRefreshToken: OauthRefreshToken;
+  oauthResource: OauthResource;
   secret_file_removals: SecretFileRemovals;
   secrets: Secrets;
+  session: Session;
   token_ssh_keys: TokenSshKeys;
   tokens: Tokens;
+  user: User;
+  verification: Verification;
 }

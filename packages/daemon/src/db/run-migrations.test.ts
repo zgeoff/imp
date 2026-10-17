@@ -2,6 +2,9 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mcp } from '@better-auth/mcp';
+import type { BetterAuthPlugin } from 'better-auth';
+import { getMigrations } from 'better-auth/db/migration';
 import { sql } from 'kysely';
 import invariant from 'tiny-invariant';
 import { createSecretFiles } from '../broker/secret-files';
@@ -697,4 +700,90 @@ test('#runMigrations carries each kernel oops hold into its own column in the oo
     },
     { name: 'fine', hasOopsHold: false, error: null, oopsBootId: null },
   ]);
+});
+
+test('#runMigrations adds only better-auth’s tables in the better-auth migration', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrationsTo(db, '033_add_imp_oops_hold');
+
+  const before = await sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name
+  `.execute(db);
+
+  await runMigrations(db);
+
+  const after = await sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name
+  `.execute(db);
+
+  expect(after.rows.map((row) => row.name)).toIncludeSameMembers([
+    ...before.rows.map((row) => row.name),
+    'user',
+    'session',
+    'account',
+    'verification',
+    'oauthClient',
+    'oauthResource',
+    'oauthClientResource',
+    'oauthRefreshToken',
+    'oauthAccessToken',
+    'oauthConsent',
+    'oauthClientAssertion',
+  ]);
+});
+
+test('#runMigrations refuses a second OAuth client with a name another holds', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrations(db);
+
+  await sql`
+    INSERT INTO "oauthClient" ("id", "clientId", "name", "redirectUris")
+    VALUES ('c1', 'impc_one', 'conn', '[]')
+  `.execute(db);
+
+  expect(
+    sql`
+      INSERT INTO "oauthClient" ("id", "clientId", "name", "redirectUris")
+      VALUES ('c2', 'impc_two', 'conn', '[]')
+    `.execute(db),
+  ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed: oauthClient\.name/u);
+});
+
+test('#runMigrations leaves better-auth no table or column to add', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrations(db);
+
+  const options = {
+    baseURL: 'http://127.0.0.1:7071',
+    basePath: '/',
+    secret: 'a-test-secret-of-at-least-32-characters',
+    database: { db, type: 'sqlite' as const },
+    telemetry: { enabled: false },
+    logger: { disabled: true },
+    user: {
+      additionalFields: {
+        tokenId: { type: 'string' as const, required: true, input: false },
+        imps: { type: 'string' as const, required: false, input: false },
+        lastUsedAt: { type: 'date' as const, required: false, input: false },
+      },
+    },
+    plugins: [
+      // oxlint-disable-next-line no-unsafe-type-assertion -- a BetterAuthPlugin at runtime; only its endpoint option types disagree with the stricter compiler settings
+      mcp({
+        loginPage: '/login',
+        consentPage: '/consent',
+        scopes: ['read', 'exec', 'manage', 'offline_access'],
+        disableJwtPlugin: true,
+        resource: 'http://127.0.0.1:7071/mcp',
+      }) as BetterAuthPlugin,
+    ],
+  };
+
+  const pending = await getMigrations(options);
+
+  expect(pending.toBeCreated).toStrictEqual([]);
+  expect(pending.toBeAdded).toStrictEqual([]);
 });
