@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.4.0](https://github.com/zgeoff/impz/compare/v2.3.0...v2.4.0) (2026-10-17)
+
+### Features
+
+- **geo-1060:** add better-auth's tables to impd's database
+  ([#437](https://github.com/zgeoff/impz/issues/437))
+  ([318c03d](https://github.com/zgeoff/impz/commit/318c03de24f5404925f91424da15a7fd5e0f3872))
+- **geo-1060:** run the public mcp route's oauth on better-auth
+  ([#438](https://github.com/zgeoff/impz/issues/438))
+  ([94fc23d](https://github.com/zgeoff/impz/commit/94fc23d04703887e82213b8a3de6e05d2dcbfc02))
+
+### Bug Fixes
+
+- **geo-1213:** keep imp-host's env file in tmpfs, off the system disk
+  ([#451](https://github.com/zgeoff/impz/issues/451))
+  ([43afedb](https://github.com/zgeoff/impz/commit/43afedb737515aaf5ebd7a668ee13d2e606a459e))
+- **geo-1220:** refresh an oauth secret when its granted host answers 401
+  ([#450](https://github.com/zgeoff/impz/issues/450))
+  ([8bf1d0e](https://github.com/zgeoff/impz/commit/8bf1d0e1770cef9b3ab8799d325427b22d2e5f18))
+
 ## [2.3.0](https://github.com/zgeoff/impz/compare/v2.2.1...v2.3.0) (2026-10-16)
 
 ### Features
