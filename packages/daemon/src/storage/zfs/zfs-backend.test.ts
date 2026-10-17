@@ -3726,9 +3726,11 @@ test.skipIf(readZfsTestPool() === null)(
   120_000,
 );
 
-// the disk budget counts back a build tree's blocks against this reading
+// the disk budget counts back a build tree's blocks from `available`, which
+// loses what the dataset takes but is the pool's: the txg that commits the
+// tree may also shrink blocks outside the dataset, such as the pool's metadata
 test.skipIf(readZfsTestPool() === null)(
-  'it shows a tree no more blocks than the pool has taken from its available bytes',
+  'it shows a tree no more blocks than its dataset has taken',
   async () => {
     const ctx = setupTest();
 
@@ -3754,7 +3756,7 @@ test.skipIf(readZfsTestPool() === null)(
     });
 
     // no sync between writes: each sample may fall inside an open txg; a
-    // margin is what the pool has taken less what the tree shows, in order
+    // margin is what the dataset has taken less what the tree shows, in order
     const margins: number[] = [];
 
     for (let chunk = 0; chunk < 16; chunk += 1) {
@@ -3763,7 +3765,7 @@ test.skipIf(readZfsTestPool() === null)(
       const treeBytes = await countTreeBytes(tree);
       const usage = await pool.backend.readUsage();
 
-      margins.push(before.availableBytes - usage.availableBytes - treeBytes);
+      margins.push(usage.usedBytes - before.usedBytes - treeBytes);
     }
 
     expect(margins).toSatisfyAll((margin: number) => margin >= 0);
