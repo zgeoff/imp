@@ -1,5 +1,6 @@
 import { isArgsValidationError } from 'gunshi';
 import type { ArgsValidationError } from 'gunshi';
+import { P, match } from 'ts-pattern';
 
 // The line for a command line gunshi refused, such as an unknown flag or a
 // missing argument. `command` is the path of the command it was for.
@@ -27,48 +28,45 @@ function formatArgError(error: Readonly<ArgsValidationError>): string {
   const values = error.values;
   const flag = readDisplayName(values['displayName'], values['name']);
 
-  switch (error.code) {
-    case 'err:arg:invalid-choice': {
+  return match(error.code)
+    .with('err:arg:invalid-choice', () => {
       const choices: unknown = values['choiceValues'];
       const list = Array.isArray(choices) ? choices.map(String).join(', ') : '';
 
       return `${flag} must be one of ${list}`;
-    }
-    case 'err:arg:invalid-type': {
-      return `${flag} must be a whole number, not ${String(values['actual'])}`;
-    }
-    case 'err:arg:custom-parse': {
+    })
+    .with(
+      'err:arg:invalid-type',
+      () => `${flag} must be a whole number, not ${String(values['actual'])}`,
+    )
+    .with('err:arg:custom-parse', () => {
       const reason = values['reason'];
       const why = typeof reason === 'string' ? reason : error.message;
 
       return formatParseFailure(flag, why);
-    }
-    case 'err:arg:conflict': {
+    })
+    .with('err:arg:conflict', () => {
       const other = readDisplayName(values['conflictDisplayName'], values['conflictName']);
 
       return `${flag} does not go with ${other}`;
-    }
-    case 'err:arg:required-positional': {
-      return `missing ${flag.toUpperCase()} (see --help)`;
-    }
-    case 'err:arg:required-option': {
-      return `${flag} is required (see --help)`;
-    }
-    case 'err:arg:missing-value': {
-      return flag === '--host'
+    })
+    .with('err:arg:required-positional', () => `missing ${flag.toUpperCase()} (see --help)`)
+    .with('err:arg:required-option', () => `${flag} is required (see --help)`)
+    .with('err:arg:missing-value', () =>
+      flag === '--host'
         ? '--host needs a saved host name (see impz host ls)'
-        : `${flag} needs a value`;
-    }
-    case undefined:
-    case 'err:arg:unknown-option':
-    case 'err:arg:unexpected-value':
-    case 'err:arg:invalid-default': {
-      return `${error.message} (see --help)`;
-    }
-    default: {
-      return error.code satisfies never;
-    }
-  }
+        : `${flag} needs a value`,
+    )
+    .with(
+      P.union(
+        undefined,
+        'err:arg:unknown-option',
+        'err:arg:unexpected-value',
+        'err:arg:invalid-default',
+      ),
+      () => `${error.message} (see --help)`,
+    )
+    .exhaustive();
 }
 
 // gunshi's integer bounds as a sentence, else the parser's own message under

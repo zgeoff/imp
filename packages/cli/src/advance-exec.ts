@@ -1,5 +1,6 @@
 import { constants } from 'node:os';
 import type { ExecOutcome } from '@impz/client';
+import { match } from 'ts-pattern';
 import type { CliConfig } from './cli-config';
 import { formatUnauthorized } from './run-action';
 
@@ -65,43 +66,36 @@ export interface ExecTransition {
 // two alone: an outcome either ends the CLI with its exit code or, for a
 // session that is only away, tries it again after a pause.
 export function advanceExec(machine: Readonly<ExecMachine>, event: ExecEvent): ExecTransition {
-  switch (event.kind) {
-    case 'started': {
-      return {
-        machine: { ...machine, started: true, reattachUntil: null, tries: 0 },
-        step: { kind: 'attached', wasAway: machine.reattachUntil !== null },
-      };
-    }
-    case 'taken_over': {
-      return {
-        machine,
-        step: {
-          kind: 'stop',
-          code: TAKEN_OVER_CODE,
-          message: `another client attached to ${formatSession(machine)}`,
-        },
-      };
-    }
-    case 'outcome': {
-      if (!canReattach(machine, event.outcome, event.now)) {
-        const result = buildOutcomeResult(event.outcome, machine.config, formatSession(machine));
+  return match<ExecEvent, ExecTransition>(event)
+    .with({ kind: 'started' }, () => ({
+      machine: { ...machine, started: true, reattachUntil: null, tries: 0 },
+      step: { kind: 'attached', wasAway: machine.reattachUntil !== null },
+    }))
+    .with({ kind: 'taken_over' }, () => ({
+      machine,
+      step: {
+        kind: 'stop',
+        code: TAKEN_OVER_CODE,
+        message: `another client attached to ${formatSession(machine)}`,
+      },
+    }))
+    .with({ kind: 'outcome' }, (ended) => {
+      if (!canReattach(machine, ended.outcome, ended.now)) {
+        const result = buildOutcomeResult(ended.outcome, machine.config, formatSession(machine));
 
         return { machine, step: { kind: 'stop', ...result } };
       }
 
       const tries = machine.tries + 1;
       const delayMs = Math.min(machine.firstDelayMs * 2 ** (tries - 1), REATTACH_MAX_DELAY_MS);
-      const reattachUntil = machine.reattachUntil ?? event.now + machine.windowMs;
+      const reattachUntil = machine.reattachUntil ?? ended.now + machine.windowMs;
 
       return {
         machine: { ...machine, reattachUntil, tries },
         step: { kind: 'reattach', delayMs, isFirst: machine.reattachUntil === null },
       };
-    }
-    default: {
-      return event satisfies never;
-    }
-  }
+    })
+    .exhaustive();
 }
 
 // `session main (impz attach box main)`: the session, and how to get back
@@ -142,13 +136,13 @@ function buildOutcomeResult(
   config: CliConfig,
   session: string,
 ): OutcomeResult {
-  switch (outcome.kind) {
-    case 'exit': {
-      if (outcome.code !== null) {
-        return { code: outcome.code, message: null };
+  return match<ExecOutcome, OutcomeResult>(outcome)
+    .with({ kind: 'exit' }, (exit) => {
+      if (exit.code !== null) {
+        return { code: exit.code, message: null };
       }
 
-      const signal = readSignalNumber(outcome.signal);
+      const signal = readSignalNumber(exit.signal);
 
       if (signal === 0) {
         return {
@@ -158,51 +152,52 @@ function buildOutcomeResult(
       }
 
       return { code: 128 + signal, message: null };
-    }
-    case 'failed': {
-      const prefix = outcome.code === null ? '' : `${outcome.code}: `;
-      const code = pickFailedCode(outcome.code);
-      const hint = outcome.code === 'INNER_DOWN' ? INNER_DOWN_HINT : '';
+    })
+    .with({ kind: 'failed' }, (failed) => {
+      const prefix = failed.code === null ? '' : `${failed.code}: `;
+      const code = pickFailedCode(failed.code);
+      const hint = failed.code === 'INNER_DOWN' ? INNER_DOWN_HINT : '';
 
-      return { code, message: `${prefix}${outcome.message}${hint}` };
-    }
-    case 'detached': {
-      if (outcome.reason === 'taken_over') {
+      return { code, message: `${prefix}${failed.message}${hint}` };
+    })
+    .with({ kind: 'detached' }, (detached) => {
+      if (detached.reason === 'taken_over') {
         return { code: TAKEN_OVER_CODE, message: `another client attached to ${session}` };
       }
 
       const why =
-        outcome.reason === 'slow' ? 'this terminal fell behind' : 'the connection was lost';
+        detached.reason === 'slow' ? 'this terminal fell behind' : 'the connection was lost';
 
       return { code: IMP_FAILED_CODE, message: `detached, ${why}: ${session}` };
-    }
-    case 'unauthorized': {
-      return { code: IMP_FAILED_CODE, message: formatUnauthorized(config) };
-    }
-    case 'unreachable': {
-      return {
-        code: IMP_FAILED_CODE,
-        message: `cannot reach impd at ${config.url} (${outcome.detail})`,
-      };
-    }
-    case 'closed': {
-      return { code: IMP_FAILED_CODE, message: `exec connection closed (${outcome.reason})` };
-    }
-    case 'bad_message': {
-      return { code: IMP_FAILED_CODE, message: `bad message from impd: ${outcome.detail}` };
-    }
-    case 'local_error': {
-      break;
-    }
-  }
+    })
+    .with({ kind: 'unauthorized' }, () => ({
+      code: IMP_FAILED_CODE,
+      message: formatUnauthorized(config),
+    }))
+    .with({ kind: 'unreachable' }, (unreachable) => ({
+      code: IMP_FAILED_CODE,
+      message: `cannot reach impd at ${config.url} (${unreachable.detail})`,
+    }))
+    .with({ kind: 'closed' }, (closed) => ({
+      code: IMP_FAILED_CODE,
+      message: `exec connection closed (${closed.reason})`,
+    }))
+    .with({ kind: 'bad_message' }, (bad) => ({
+      code: IMP_FAILED_CODE,
+      message: `bad message from impd: ${bad.detail}`,
+    }))
+    .with({ kind: 'local_error' }, (local) => buildLocalErrorResult(local.error))
+    .exhaustive();
+}
 
-  // a callback threw; a reader such as `head` that went away is quiet, as
-  // for a local command
-  if (isBrokenPipe(outcome.error)) {
+// a callback threw; a reader such as `head` that went away is quiet, as for
+// a local command
+function buildLocalErrorResult(error: unknown): OutcomeResult {
+  if (isBrokenPipe(error)) {
     return { code: BROKEN_PIPE_CODE, message: null };
   }
 
-  const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+  const message = error instanceof Error ? error.message : String(error);
 
   return { code: IMP_FAILED_CODE, message };
 }
