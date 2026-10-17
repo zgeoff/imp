@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.1](https://github.com/zgeoff/impz/compare/v2.4.0...v2.4.1) (2026-10-17)
+
+### Bug Fixes
+
+- **deps:** update module github.com/moby/buildkit to v0.31.1 [security]
+  ([#461](https://github.com/zgeoff/impz/issues/461))
+  ([c7af091](https://github.com/zgeoff/impz/commit/c7af091ff1760c20e387327d299f1711605982da))
+
 ## [2.4.0](https://github.com/zgeoff/impz/compare/v2.3.0...v2.4.0) (2026-10-17)
 
 ### Features
