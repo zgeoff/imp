@@ -1,12 +1,12 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
-import { invariant } from '@impz/test-utils/invariant';
 import {
   Client,
   StreamableHTTPClientTransport,
   UnauthorizedError,
 } from '@modelcontextprotocol/client';
 import type { OAuthClientProvider, OAuthTokens } from '@modelcontextprotocol/client';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
