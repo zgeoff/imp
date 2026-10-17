@@ -73,7 +73,7 @@ export async function readZfsOwner(options: Readonly<ZfsOwnerOptions>): Promise<
     return null;
   }
 
-  const vdevs = status.stdout.split('\n').map((line) => line.trim().split(/\s+/)[0]);
+  const vdevs = status.stdout.split('\n').map((line) => line.trim().split(/\s+/u)[0]);
 
   return vdevs.includes(owner.vdev) ? owner : null;
 }

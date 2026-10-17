@@ -817,6 +817,6 @@ test('it removes the cloned disk and rethrows when the image row fails to write'
 
   const creating = ctx.impd.templates.createTemplate('dev', 'tools');
 
-  expect(creating).rejects.toThrowWithMessage(Error, /template rows refused/);
+  expect(creating).rejects.toThrowWithMessage(Error, /template rows refused/u);
   expect(readdirSync(join(ctx.dataDir, 'images'))).toStrictEqual(['base']);
 });

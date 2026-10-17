@@ -108,7 +108,7 @@ export const UNKNOWN_VERSION = 'unknown';
 function readVersionOutput(bin: string, flag: string): string {
   try {
     const result = Bun.spawnSync([bin, flag], { stdout: 'pipe', stderr: 'ignore' });
-    const match = /v\d+\.\d+\.\d+/.exec(result.stdout.toString());
+    const match = /v\d+\.\d+\.\d+/u.exec(result.stdout.toString());
 
     return match?.[0] ?? UNKNOWN_VERSION;
   } catch {

@@ -72,7 +72,7 @@ test('it grows an elastic guest under a gradual allocation, shrinks it once the 
   expect(filled.trim()).toBe('filled');
   expect(totalGrown - totalBefore).toBeGreaterThanOrEqual(400);
   expect(pluggedGrown).toBeGreaterThanOrEqual(512);
-  expect(listed).toMatch(new RegExp(`${name}.*\\d+/1024 MiB`));
+  expect(listed).toMatch(new RegExp(`${name}.*\\d+/1024 MiB`, 'u'));
 
   await runShellInImp(name, 'rm -f /mnt/fill/*');
 

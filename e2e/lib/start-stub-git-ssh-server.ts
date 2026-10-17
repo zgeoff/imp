@@ -26,7 +26,7 @@ export interface StubGitSshServer {
   readonly stop: () => Promise<void>;
 }
 
-const RECEIVE_PACK = /^git-receive-pack '\/?repo\.git'$/;
+const RECEIVE_PACK = /^git-receive-pack '\/?repo\.git'$/u;
 
 function runReceivePack(channel: ServerChannel, repo: string): void {
   const child = spawn('git', ['receive-pack', repo], {

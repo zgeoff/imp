@@ -85,11 +85,11 @@ test('it rejects a read of a missing file, as the real FIEMAP read does', async 
 
   expect(
     fiemap.readFileExtents(join(ctx.dir, 'gone.ext4'), Number.POSITIVE_INFINITY),
-  ).rejects.toThrowWithMessage(Error, /^ENOENT: no such file or directory/);
+  ).rejects.toThrowWithMessage(Error, /^ENOENT: no such file or directory/u);
 
   expect(
     readExtents(join(ctx.dir, 'gone.ext4'), Number.POSITIVE_INFINITY),
-  ).rejects.toThrowWithMessage(Error, /^ENOENT: no such file or directory/);
+  ).rejects.toThrowWithMessage(Error, /^ENOENT: no such file or directory/u);
 });
 
 test('it removes a file marked to go just before its read, and rejects the read as missing', async () => {

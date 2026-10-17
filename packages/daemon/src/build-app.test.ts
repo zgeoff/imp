@@ -617,7 +617,7 @@ test('it exposes an imp with a basic credential shown once', async () => {
     credential: exposed.credential,
   });
 
-  expect(exposed.credential).toMatch(/^[\w-]{43}$/);
+  expect(exposed.credential).toMatch(/^[\w-]{43}$/u);
 });
 
 test('it shows an exposed imp as public', async () => {
@@ -758,7 +758,7 @@ test('it gives a new credential to a second expose', async () => {
     credential: again.credential,
   });
 
-  expect(again.credential).toMatch(/^[\w-]{43}$/);
+  expect(again.credential).toMatch(/^[\w-]{43}$/u);
   expect(again.credential).not.toBe(first.credential);
 });
 
@@ -879,7 +879,7 @@ test('it boots the configured default image, and names an imp made without a nam
   const created = await ctx.client.imps.create({});
 
   expect(created.image).toBe('base');
-  expect(created.name).toMatch(/^imp-[a-z0-9]{4}$/);
+  expect(created.name).toMatch(/^imp-[a-z0-9]{4}$/u);
 });
 
 test('it rejects a duplicate name', async () => {

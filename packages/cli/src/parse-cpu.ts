@@ -8,7 +8,7 @@ export function parseCpuLimit(text: string): number | null {
 
   const cores = Number(text);
 
-  if (!/^\d*\.?\d+$/.test(text.trim()) || cores < 0.1) {
+  if (!/^\d*\.?\d+$/u.test(text.trim()) || cores < 0.1) {
     throw new UsageError(
       `--cpu-limit takes cores, at least 0.1 (such as 1.5), or none, not ${text}`,
     );
@@ -21,7 +21,7 @@ export function parseCpuLimit(text: string): number | null {
 export function parseCpuWeight(text: string): number {
   const weight = Number(text);
 
-  if (!/^\d+$/.test(text.trim()) || weight < 1 || weight > 10_000) {
+  if (!/^\d+$/u.test(text.trim()) || weight < 1 || weight > 10_000) {
     throw new UsageError(`--cpu-weight takes a whole number from 1 to 10000, not ${text}`);
   }
 

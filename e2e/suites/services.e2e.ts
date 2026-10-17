@@ -122,7 +122,7 @@ test('it runs an added service through logs, a restart, a sleep, a reboot and a 
   const all = await runImp('logs', name);
 
   expect(logs).toContain('url:/');
-  expect(all).toMatch(/^web \| /m);
+  expect(all).toMatch(/^web \| /mu);
 
   // a restart starts the service again from its file
   await runImp('service', 'restart', name, 'web');

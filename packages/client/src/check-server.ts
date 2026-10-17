@@ -38,7 +38,7 @@ export function isCompatibleVersion(client: string, server: string): boolean {
 }
 
 function parseVersion(version: string): { major: number; minor: number } | null {
-  const groups = /^(?<major>\d+)\.(?<minor>\d+)\.\d+/.exec(version)?.groups;
+  const groups = /^(?<major>\d+)\.(?<minor>\d+)\.\d+/u.exec(version)?.groups;
 
   return groups === undefined
     ? null

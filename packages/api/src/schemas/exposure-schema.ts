@@ -14,7 +14,7 @@ export type PublicAuth = z.infer<typeof PublicAuthSchema>;
 // a basic auth user name: no colon, which ends the user in the header
 export const BasicUserSchema = z
   .string()
-  .regex(/^[!-9;-~]{1,64}$/, 'must be 1 to 64 printable characters, without a colon');
+  .regex(/^[!-9;-~]{1,64}$/u, 'must be 1 to 64 printable characters, without a colon');
 
 export const ExposeInputSchema = z
   .object({

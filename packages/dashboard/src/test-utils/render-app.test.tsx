@@ -31,7 +31,7 @@ test('it answers queries from the mock impd', async () => {
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /web/ });
+  const row = await rendered.findByRole('row', { name: /web/u });
 
   expect(row).toBeInTheDocument();
 });

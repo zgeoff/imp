@@ -536,7 +536,7 @@ function readErrorCode(body: unknown): string | null {
   const error = parsed.data.error;
   const code = typeof error === 'string' ? error : (error.code ?? error.error);
 
-  return code !== null && code !== undefined && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : null;
+  return code !== null && code !== undefined && /^[A-Za-z0-9_.-]{1,64}$/u.test(code) ? code : null;
 }
 
 function parseAnswer(status: number, text: string): Classified {

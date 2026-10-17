@@ -436,7 +436,7 @@ async function readTreeUsage(root: string): Promise<{ bytes: number; inodes: num
 
 // the count du prints before its path
 export function parseDuCount(stdout: string): number {
-  const count = Number(stdout.split(/\s/)[0]);
+  const count = Number(stdout.split(/\s/u)[0]);
 
   if (!Number.isSafeInteger(count)) {
     throw new TypeError(`du printed ${stdout}`);

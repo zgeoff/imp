@@ -10,7 +10,7 @@ test('it builds a default governor decision', () => {
     at: expect.toBeValidDate(),
     ev: 'GovernorDecision',
     decision: 'admitted',
-    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
+    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/u.test(value)),
     trigger: 'admission',
     usedMib: expect.toBeNumber(),
     budgetMib: expect.toBeNumber(),

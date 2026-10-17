@@ -128,7 +128,7 @@ interface Presented {
 
 // the token, or basic auth's user and password, as the header carries them
 function readPresented(stored: StoredPublicAuth, authorization: string | null): Presented | null {
-  const match = /^(?<scheme>\S+) +(?<value>\S+)$/.exec(authorization?.trim() ?? '')?.groups;
+  const match = /^(?<scheme>\S+) +(?<value>\S+)$/u.exec(authorization?.trim() ?? '')?.groups;
   const scheme = match?.['scheme']?.toLowerCase();
   const value = match?.['value'];
 

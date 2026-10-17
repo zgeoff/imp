@@ -22,7 +22,7 @@ export function readImpIdFromArgv(argv: readonly string[]): string | null {
 
   const socket = argv[argv.indexOf('--api-sock') + 1] ?? '';
 
-  return /\/imps\/(?<id>[^/]+)\/run\/api\.sock$/.exec(socket)?.groups?.['id'] ?? null;
+  return /\/imps\/(?<id>[^/]+)\/run\/api\.sock$/u.exec(socket)?.groups?.['id'] ?? null;
 }
 
 export interface FirecrackerMemory {
@@ -54,7 +54,7 @@ export function parseFirecrackerMemory(output: string): FirecrackerMemory {
       continue;
     }
 
-    const words = line.trim().split(/\s+/);
+    const words = line.trim().split(/\s+/u);
     const fields = words.slice(0, 3).map(Number);
 
     if (fields.length !== 3 || fields.some((field) => !Number.isInteger(field))) {

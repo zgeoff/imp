@@ -4,10 +4,10 @@ import { buildMockGenerationMeta } from './build-mock-generation-meta';
 test('it builds a default generation meta', () => {
   expect(buildMockGenerationMeta()).toStrictEqual({
     version: 1,
-    session: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
-    executionGeneration: expect.toSatisfy((value: string) => /^[0-9a-f]{32}$/.test(value)),
+    session: expect.toSatisfy((value: string) => /^[a-z]{8}$/u.test(value)),
+    executionGeneration: expect.toSatisfy((value: string) => /^[0-9a-f]{32}$/u.test(value)),
     bootId: expect.toSatisfy((value: string) =>
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value),
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value),
     ),
     startedAt: expect.toBeNumber(),
     origin: 0,

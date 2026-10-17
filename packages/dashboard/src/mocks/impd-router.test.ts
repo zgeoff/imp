@@ -1444,7 +1444,7 @@ test('#checkpoints.create gives the checkpoint an id of the form impd makes', as
 
   const checkpoint = await client.checkpoints.create({ name: 'web' });
 
-  expect(checkpoint.id).toMatch(/^cp-[a-km-np-z2-9]{6}$/);
+  expect(checkpoint.id).toMatch(/^cp-[a-km-np-z2-9]{6}$/u);
 });
 
 test('#checkpoints.create rejects a label another checkpoint of the imp has with CONFLICT', async () => {
@@ -1797,5 +1797,5 @@ test('#tokens.create answers a secret of the form impd makes', async () => {
 
   const created = await client.tokens.create({ name: 'ci', scope: 'exec' });
 
-  expect(created.secret).toMatch(/^imp_[\w-]{16}\.[\w-]{43}$/);
+  expect(created.secret).toMatch(/^imp_[\w-]{16}\.[\w-]{43}$/u);
 });

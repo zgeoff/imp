@@ -54,7 +54,7 @@ export function formatOAuthState(state: Readonly<OAuthStateFile>): string {
 // a token goes into a header value: printable ASCII without spaces, so it
 // cannot split the header
 export function isHeaderSafeToken(token: string): boolean {
-  return token.length > 0 && token.length <= 16_384 && /^[!-~]+$/.test(token);
+  return token.length > 0 && token.length <= 16_384 && /^[!-~]+$/u.test(token);
 }
 
 // the keys of an ID token that identify one sign-in or one token, not the

@@ -57,7 +57,7 @@ export function loadCliConfig(
 }
 
 export function isHttpUrl(url: string): boolean {
-  return /^https?:$/.test(URL.parse(url)?.protocol ?? '');
+  return /^https?:$/u.test(URL.parse(url)?.protocol ?? '');
 }
 
 function loadSavedHost(env: CliEnv, name: string, warn: (line: string) => void): CliConfig {

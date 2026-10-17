@@ -2,7 +2,7 @@ import * as z from 'zod';
 import { ExecutionGenerationSchema } from './session-output-schema';
 
 // The agent checks the same rule (agent/internal/session).
-export const SESSION_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const SESSION_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/u;
 
 export const SessionNameSchema = z
   .string()

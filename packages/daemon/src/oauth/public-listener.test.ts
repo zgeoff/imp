@@ -410,9 +410,9 @@ test('it escapes the redirect URI that Continue shows after approval', async () 
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   const made = await ctx.impd.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
 
@@ -530,8 +530,8 @@ test.each([
 
   const page = await opened.text();
 
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'];
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'];
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'];
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'];
 
   invariant(id);
   invariant(signature);
@@ -702,9 +702,9 @@ test('it signs a client in over HTTP to tokens for the approved scope, sending n
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -777,9 +777,9 @@ test('it lists an exec grant’s tools over /mcp, without the manage ones', asyn
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -924,9 +924,9 @@ test('it ends a grant’s running command when the grant is revoked', async () =
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -1067,9 +1067,9 @@ test('it refuses /mcp to a revoked grant’s session', async () => {
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -1214,9 +1214,9 @@ test('it ends the grant a removed token approved, and its running command', asyn
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -1368,9 +1368,9 @@ test('it lists only the read tools to a read grant', async () => {
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -1540,9 +1540,9 @@ test.each([
 
     const page = await opened.text();
 
-    const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-    const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-    const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+    const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+    const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+    const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
     invariant(approver);
 
@@ -1701,9 +1701,9 @@ test('it audits a grant’s change under its client and grant id', async () => {
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -1856,9 +1856,9 @@ test('it audits a grant’s change refused past its patterns as FORBIDDEN', asyn
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -2293,9 +2293,9 @@ test('it lets a cancel through with every slot held, which stops its tool and fr
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -2554,9 +2554,9 @@ test('it refuses a signed-in notification too large for the allowance with every
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 
@@ -2734,9 +2734,9 @@ test('it ends a signed-in session with its DELETE with every slot held', async (
 
   const page = await opened.text();
 
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
+  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   invariant(approver);
 

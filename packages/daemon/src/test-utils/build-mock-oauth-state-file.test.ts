@@ -7,9 +7,9 @@ test('it builds a default oauth state file', () => {
 
   expect(received).toStrictEqual({
     v: 1,
-    refreshToken: expect.stringMatching(/^fake-refresh-[A-Za-z0-9]{12}$/) as unknown,
-    accessToken: expect.stringMatching(/^fake-access-[A-Za-z0-9]{12}$/) as unknown,
-    idToken: expect.stringMatching(/^fake-id-[A-Za-z0-9]{12}$/) as unknown,
+    refreshToken: expect.stringMatching(/^fake-refresh-[A-Za-z0-9]{12}$/u) as unknown,
+    accessToken: expect.stringMatching(/^fake-access-[A-Za-z0-9]{12}$/u) as unknown,
+    idToken: expect.stringMatching(/^fake-id-[A-Za-z0-9]{12}$/u) as unknown,
     expiresAt: (state.refreshedAt ?? 0) + 240 * 3_600_000,
     refreshedAt: expect.any(Number) as unknown,
     status: 'ready',
@@ -28,8 +28,8 @@ test('it applies overrides on top of the defaults', () => {
   expect(state).toStrictEqual({
     v: 1,
     refreshToken: 'fake-refresh-0',
-    accessToken: expect.stringMatching(/^fake-access-/) as unknown,
-    idToken: expect.stringMatching(/^fake-id-/) as unknown,
+    accessToken: expect.stringMatching(/^fake-access-/u) as unknown,
+    idToken: expect.stringMatching(/^fake-id-/u) as unknown,
     expiresAt: null,
     refreshedAt: expect.any(Number) as unknown,
     status: 'needs_login',

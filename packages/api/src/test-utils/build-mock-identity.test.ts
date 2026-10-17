@@ -9,7 +9,7 @@ test('it builds a default identity', () => {
 
   expect(received).toStrictEqual({
     kind: 'token',
-    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     scope: 'manage',
     imps: null,
     grantable: [],
@@ -24,7 +24,7 @@ test('it applies overrides on top of the defaults', () => {
 
   expect(identity).toStrictEqual({
     kind: 'token',
-    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     scope: 'read',
     imps: ['ci-*'],
     grantable: [],

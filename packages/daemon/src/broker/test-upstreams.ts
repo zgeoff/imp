@@ -10,7 +10,7 @@ import type { Upstream } from './forward-request';
 
 const FileSchema = z.object({
   ca: z.string().includes('-----BEGIN CERTIFICATE-----'),
-  upstreams: z.record(z.string(), z.url({ protocol: /^https$/ })),
+  upstreams: z.record(z.string(), z.url({ protocol: /^https$/u })),
 });
 
 export type ResolveUpstream = (host: string) => Upstream;
@@ -67,6 +67,6 @@ export function createUpstreamResolver(
       return { origin: `https://${host}`, ca: null };
     }
 
-    return { origin: origin.replace(/\/$/, ''), ca: [...rootCertificates, file.ca] };
+    return { origin: origin.replace(/\/$/u, ''), ca: [...rootCertificates, file.ca] };
   };
 }

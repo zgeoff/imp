@@ -28,7 +28,7 @@ test('it makes a token limited to some imps and shows its secret', async () => {
   await user.click(rendered.getByRole('button', { name: 'Make token' }));
 
   const card = await rendered.findByRole('region', { name: 'Secret of ci' });
-  const row = await rendered.findByRole('row', { name: /ci/ });
+  const row = await rendered.findByRole('row', { name: /ci/u });
 
   const token = tokenCollection.findFirst((query) => query.where({ name: 'ci' }));
 
@@ -51,7 +51,7 @@ test('it deletes a token after a confirm', async () => {
 
   const rendered = renderApp('/tokens');
 
-  const row = await rendered.findByRole('row', { name: /old/ });
+  const row = await rendered.findByRole('row', { name: /old/u });
 
   await user.click(within(row).getByRole('button', { name: 'Delete' }));
 
@@ -60,7 +60,7 @@ test('it deletes a token after a confirm', async () => {
   await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
   await waitFor(() => {
-    expect(rendered.queryByRole('row', { name: /old/ })).toBeNull();
+    expect(rendered.queryByRole('row', { name: /old/u })).toBeNull();
   });
 
   expect(tokenCollection.findFirst((query) => query.where({ name: 'old' }))).toBeUndefined();
@@ -135,7 +135,7 @@ test('it lists the SSH keys bound to each token', async () => {
 
   const rendered = renderApp('/tokens');
 
-  const row = await rendered.findByRole('row', { name: /laptop/ });
+  const row = await rendered.findByRole('row', { name: /laptop/u });
 
   expect(within(row).getByText('me@laptop SHA256:abc')).toBeInTheDocument();
 });

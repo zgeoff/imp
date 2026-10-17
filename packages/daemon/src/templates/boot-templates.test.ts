@@ -606,7 +606,7 @@ test('#buildTemplate refuses a build the disk has no room for', async () => {
 
   expect(building).rejects.toThrowWithMessage(
     Error,
-    /^not enough free disk: 1\.0 GiB free, 0\.5 GiB wanted, /,
+    /^not enough free disk: 1\.0 GiB free, 0\.5 GiB wanted, /u,
   );
 });
 

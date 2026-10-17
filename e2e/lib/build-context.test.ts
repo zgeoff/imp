@@ -227,5 +227,5 @@ test('#sendRawBuild throws with tar’s reason when a named file is missing', as
       files: ['missing.txt'],
       name: 'e2e-img-raw',
     }),
-  ).rejects.toThrowWithMessage(Error, /^tar exited 2: .*missing\.txt/);
+  ).rejects.toThrowWithMessage(Error, /^tar exited 2: .*missing\.txt/u);
 });

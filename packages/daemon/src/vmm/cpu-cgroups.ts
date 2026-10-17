@@ -138,7 +138,7 @@ export function buildMemoryMax(memoryMib: number): string {
 
 // memory.events' oom_kill; null without the field
 export function parseOomKills(text: string): number | null {
-  const match = /^oom_kill (?<count>\d+)$/m.exec(text);
+  const match = /^oom_kill (?<count>\d+)$/mu.exec(text);
 
   return match?.groups === undefined ? null : Number(match.groups['count']);
 }
@@ -349,7 +349,7 @@ function isControllerDelegated(imps: string, controller: string): boolean {
   try {
     const delegated = readFileSync(join(imps, 'cgroup.subtree_control'), 'utf8');
 
-    return delegated.split(/\s+/).includes(controller);
+    return delegated.split(/\s+/u).includes(controller);
   } catch {
     return false;
   }

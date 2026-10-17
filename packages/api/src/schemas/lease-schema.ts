@@ -5,7 +5,7 @@ import { NameSchema } from './name-schema';
 // (docs/guides/leases.md). `imps.hold` writes the label `hold`.
 export const LeaseLabelSchema = z
   .string()
-  .regex(/^[\w.:-]{1,64}$/, 'must be 1–64 letters, digits, dots, underscores, colons or hyphens');
+  .regex(/^[\w.:-]{1,64}$/u, 'must be 1–64 letters, digits, dots, underscores, colons or hyphens');
 
 // how long a lease lasts from now, in seconds
 export const LeaseTtlSchema = z.int().min(10).max(3600);

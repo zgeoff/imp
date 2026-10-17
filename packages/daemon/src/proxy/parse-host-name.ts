@@ -8,10 +8,10 @@ export function parseHostName(host: string | null): string | null {
     return null;
   }
 
-  const hostname = host.replace(/:\d+$/, '').replace(/\.$/, '').toLowerCase();
+  const hostname = host.replace(/:\d+$/u, '').replace(/\.$/u, '').toLowerCase();
   const labels = hostname.split('.');
 
-  if (labels.length < 2 || /^[\d.]+$/.test(hostname)) {
+  if (labels.length < 2 || /^[\d.]+$/u.test(hostname)) {
     return null;
   }
 

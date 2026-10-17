@@ -7,7 +7,7 @@ test('it builds a default session output', () => {
   expect(output).toStrictEqual({
     continuity: 'offsets',
     bootId: expect.toBeString(),
-    executionGeneration: expect.toSatisfy((value: string) => /^[0-9a-f]{32}$/.test(value)),
+    executionGeneration: expect.toSatisfy((value: string) => /^[0-9a-f]{32}$/u.test(value)),
     bufferStart: 0,
     end: output.offset,
     offset: expect.toBeNumber(),

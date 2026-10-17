@@ -11,7 +11,7 @@ export function parseSmapsRollup(text: string): ReadonlyMap<string, number> {
   const fields = new Map<string, number>();
 
   for (const line of text.split('\n')) {
-    const match = /^(?<name>\w+):\s+(?<kb>\d+) kB$/.exec(line);
+    const match = /^(?<name>\w+):\s+(?<kb>\d+) kB$/u.exec(line);
 
     if (match?.groups !== undefined) {
       fields.set(match.groups['name'] ?? '', Number(match.groups['kb']));

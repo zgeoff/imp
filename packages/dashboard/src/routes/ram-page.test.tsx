@@ -13,7 +13,7 @@ test('it lists imps by the RAM they own, largest first', async () => {
 
   const rendered = renderApp('/ram');
 
-  await rendered.findByRole('row', { name: /big/ });
+  await rendered.findByRole('row', { name: /big/u });
 
   const names = rendered
     .getAllByRole('row')
@@ -30,7 +30,7 @@ test('it shows the RAM an imp owns, its resident memory and its size', async () 
 
   const rendered = renderApp('/ram');
 
-  const row = await rendered.findByRole('row', { name: /small/ });
+  const row = await rendered.findByRole('row', { name: /small/u });
 
   expect(row).toHaveTextContent('100 MiB150 MiB2.0 GiB');
 });

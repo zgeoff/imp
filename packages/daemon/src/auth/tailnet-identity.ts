@@ -13,7 +13,9 @@ import type { Caller } from './caller';
 const TailnetRuleSchema = z
   .object({
     // `user:<login>`, `tag:<tag>`, or `*` for any peer
-    match: z.string().regex(/^(?:user:\S+|tag:[\w-]+|\*)$/, 'must be user:<login>, tag:<tag> or *'),
+    match: z
+      .string()
+      .regex(/^(?:user:\S+|tag:[\w-]+|\*)$/u, 'must be user:<login>, tag:<tag> or *'),
     scope: ScopeSchema,
     imps: z.array(ImpPatternSchema).min(1).readonly().optional(),
   })
@@ -211,12 +213,12 @@ export function isTailnetAddress(address: string): boolean {
     return octets[0] === '100' && Number(octets[1]) >= 64 && Number(octets[1]) <= 127;
   }
 
-  return /^fd7a:115c:a1e0:/i.test(plain);
+  return /^fd7a:115c:a1e0:/iu.test(plain);
 }
 
 // Bun reports an IPv4 peer of a dual-stack socket as ::ffff:a.b.c.d
 function normalizeAddress(address: string): string {
-  return address.replace(/^::ffff:/i, '');
+  return address.replace(/^::ffff:/iu, '');
 }
 
 function isRuleMatch(match: string, peer: Readonly<TailnetPeer>): boolean {

@@ -9,8 +9,8 @@ test('it builds a default imp', () => {
 
   expect(received).toStrictEqual({
     id: expect.any(String) as unknown,
-    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
-    image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
+    image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     state: 'running',
     kind: 'user',
     vcpus: expect.any(Number) as unknown,
@@ -69,7 +69,7 @@ test('it applies overrides on top of the defaults', () => {
   expect(imp).toStrictEqual({
     id: expect.any(String) as unknown,
     name: 'dev-b',
-    image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     state: 'sleeping',
     kind: 'user',
     vcpus: 2,

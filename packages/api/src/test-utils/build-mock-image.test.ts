@@ -8,9 +8,9 @@ test('it builds a default image', () => {
 
   expect(received).toStrictEqual({
     id: expect.any(String) as unknown,
-    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
-    ref: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}:\d+\.\d+\.\d+$/) as unknown,
-    digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) as unknown,
+    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
+    ref: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}:\d+\.\d+\.\d+$/u) as unknown,
+    digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) as unknown,
     source: 'oci',
     createdAt: expect.toBeBefore(new Date('2026-01-01T00:00:00.000Z')) as unknown,
     sizeBytes: expect.any(Number) as unknown,
@@ -27,7 +27,7 @@ test('it applies overrides on top of the defaults', () => {
     id: expect.any(String) as unknown,
     name: 'tpl',
     ref: expect.any(String) as unknown,
-    digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) as unknown,
+    digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u) as unknown,
     source: 'imp',
     createdAt: expect.toBeValidDate() as unknown,
     sizeBytes: 6,

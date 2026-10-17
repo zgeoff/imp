@@ -8,7 +8,7 @@ test('it builds a default checkpoint', () => {
   const received: unknown = checkpoint;
 
   expect(received).toStrictEqual({
-    id: expect.stringMatching(/^cp-[a-z0-9]{6}$/) as unknown,
+    id: expect.stringMatching(/^cp-[a-z0-9]{6}$/u) as unknown,
     label: expect.any(String) as unknown,
     createdAt: expect.toBeValidDate() as unknown,
     sizeBytes: expect.any(Number) as unknown,

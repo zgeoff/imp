@@ -7,7 +7,7 @@ export function buildMockSession(overrides: Partial<Session> = {}): Session {
   const startedAt = faker.date.past();
 
   return {
-    name: faker.helpers.fromRegExp(/[a-z0-9][a-z0-9-]{2,12}/),
+    name: faker.helpers.fromRegExp(/[a-z0-9][a-z0-9-]{2,12}/u),
     pid: faker.number.int({ min: 2, max: 4_194_304 }),
     argv: [faker.system.fileName()],
     state: 'running',

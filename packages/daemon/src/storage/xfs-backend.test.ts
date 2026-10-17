@@ -158,7 +158,7 @@ test('#start keeps every imp and image a lost database leaves', async () => {
   await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
 
   expect(readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted()).toStrictEqual(
-    before.filter((path) => !/^(?:imps\/done|images\/empty)(?:\/|$)/.test(path)),
+    before.filter((path) => !/^(?:imps\/done|images\/empty)(?:\/|$)/u.test(path)),
   );
 
   expect(readFileSync(ctx.backend.resolveImpPaths('a').memFile, 'utf8')).toBe('memory');
@@ -215,7 +215,7 @@ test('#start logs each orphan it keeps and each leftover it removes', async () =
   ]);
 
   expect(lines).toSatisfyAny((line: string) =>
-    /^impd: storage: kept orphan imp a \(.+\/imps\/a\): \d+\.\d MiB, created \d{4}-\d\d-\d\dT.+Z, snapshots: cp-1, cp-2$/.test(
+    /^impd: storage: kept orphan imp a \(.+\/imps\/a\): \d+\.\d MiB, created \d{4}-\d\d-\d\dT.+Z, snapshots: cp-1, cp-2$/u.test(
       line,
     ),
   );
@@ -314,7 +314,7 @@ test('#dropUnnamed removes what is provably nothing and keeps each orphan with i
   });
 
   expect(readdirSync(ctx.dataDir, { recursive: true, encoding: 'utf8' }).toSorted()).toStrictEqual(
-    before.filter((path) => !/^(?:imps\/done|images\/empty)(?:\/|$)/.test(path)),
+    before.filter((path) => !/^(?:imps\/done|images\/empty)(?:\/|$)/u.test(path)),
   );
 });
 
@@ -544,7 +544,7 @@ test('#createCheckpoint removes the half-made checkpoint when its clone fails', 
   const created = ctx.backend.createCheckpoint('a', 'cp-1');
   const checkpointsDir = ctx.backend.resolveImpPaths('a').checkpointsDir;
 
-  expect(created).rejects.toThrow(/ENOENT/);
+  expect(created).rejects.toThrow(/ENOENT/u);
   expect(existsSync(join(checkpointsDir, 'cp-1'))).toBeFalse();
 });
 

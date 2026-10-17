@@ -2,7 +2,7 @@ import type { GrantFilter } from '@impz/api';
 
 // An encoded slash or backslash, which an upstream may decode into a
 // segment break after the filter matched the path as one segment
-const ENCODED_SEPARATOR = /%2f|%5c/i;
+const ENCODED_SEPARATOR = /%2f|%5c/iu;
 
 // True when a grant's filter lets the request have the credential. The path
 // is the URL parser's pathname, which the broker sends upstream, so it holds

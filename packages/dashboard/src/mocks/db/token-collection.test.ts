@@ -6,14 +6,14 @@ test('#tokenCollection creates a default manage token for every imp with its sec
   const token: Token & { readonly secret: string } = await tokenCollection.create({});
 
   expect(token).toStrictEqual({
-    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
+    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/u.test(value)),
     scope: 'manage',
     imps: null,
     sshKeys: [],
     grantable: [],
     imageRefPrefix: null,
     createdAt: expect.toBeValidDate(),
-    secret: expect.toSatisfy((value: string) => /^imp_[\w-]{16}\.[\w-]{43}$/.test(value)),
+    secret: expect.toSatisfy((value: string) => /^imp_[\w-]{16}\.[\w-]{43}$/u.test(value)),
   });
 });
 

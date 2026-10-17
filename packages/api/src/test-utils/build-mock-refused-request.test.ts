@@ -9,7 +9,7 @@ test('it builds a default refused request', () => {
 
   expect(received).toStrictEqual({
     at: expect.toBeValidDate() as unknown,
-    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     method: 'CONNECT',
     host: expect.toBeString() as unknown,
     path: null,
@@ -32,7 +32,7 @@ test('it applies overrides on top of the defaults', () => {
 
   expect(refused).toStrictEqual({
     at: expect.toBeValidDate() as unknown,
-    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     method: 'GET',
     host: 'api.github.com',
     path: '/stream',

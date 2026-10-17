@@ -185,7 +185,7 @@ export async function readIpv6DefaultRoute(
     return null;
   }
 
-  return /\bdev (?<dev>\S+)/.exec(result.stdout)?.groups?.['dev'] ?? null;
+  return /\bdev (?<dev>\S+)/u.exec(result.stdout)?.groups?.['dev'] ?? null;
 }
 
 // The prefixes on the container's own links, which no imp may reach, read
@@ -206,12 +206,15 @@ export function parseConnectedPrefixes(routes: string, addresses: string): reado
   const found = [
     ...routes.split('\n').flatMap((line) => {
       const [destination = ''] = line.split(' ');
-      const dev = /\bdev (?<dev>\S+)/.exec(line)?.groups?.['dev'] ?? '';
+      const dev = /\bdev (?<dev>\S+)/u.exec(line)?.groups?.['dev'] ?? '';
 
       return line.includes(' via ') || dev.startsWith('imp') ? [] : [destination];
     }),
     ...addresses.split('\n').flatMap((line) => {
-      const match = /^\d+:\s+(?<dev>\S+)\s+inet6\s+(?<cidr>\S+)\s+scope\s+(?<scope>\S+)/.exec(line);
+      const match = /^\d+:\s+(?<dev>\S+)\s+inet6\s+(?<cidr>\S+)\s+scope\s+(?<scope>\S+)/u.exec(
+        line,
+      );
+
       const groups = match?.groups ?? {};
       const isGlobal = groups['scope'] === 'global' && !(groups['dev'] ?? 'imp').startsWith('imp');
 

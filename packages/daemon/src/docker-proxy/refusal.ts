@@ -15,7 +15,7 @@ const REFUSAL_MAX_CHARS = 1000;
 // how the docker CLI prints an error answer from the engine, and the one
 // line it may print before it: a create of an image the engine lacks
 const DAEMON_ERROR_PREFIX = 'Error response from daemon: ';
-const UNABLE_TO_FIND_LINE = /^Unable to find image '[^'\n]+' locally$/;
+const UNABLE_TO_FIND_LINE = /^Unable to find image '[^'\n]+' locally$/u;
 
 // the proxy's body exactly: { "message": "…" } and nothing else
 const RefusalBodySchema = z.strictObject({ message: z.string() });

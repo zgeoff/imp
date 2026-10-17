@@ -16,7 +16,7 @@ test('it hands out distinct ports', () => {
 test('it picks ports from the 4000 just below the start of the ephemeral range', async () => {
   const range = await readFile('/proc/sys/net/ipv4/ip_local_port_range', 'utf8');
 
-  const ephemeralStart = Number(range.trim().split(/\s+/)[0]);
+  const ephemeralStart = Number(range.trim().split(/\s+/u)[0]);
   const free = findFreePorts(3);
   const ports = [free.take(), free.take(), free.take()];
 
@@ -59,7 +59,7 @@ test('it throws when more ports are taken than were asked for', () => {
   free.take();
   free.take();
 
-  expect(() => free.take()).toThrowWithMessage(Error, /^only 2 free ports were asked for$/);
+  expect(() => free.take()).toThrowWithMessage(Error, /^only 2 free ports were asked for$/u);
 });
 
 test('it skips a port that a TCP listener holds', () => {

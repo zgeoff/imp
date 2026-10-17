@@ -90,7 +90,7 @@ test('it runs a new imp jailed under a memory cap, sleeps and wakes it full unde
   // the imp's own jail: a boot template build has its own while it runs
   const asleepMounts = await listJailMounts(`firecracker/${booted.impId}/`);
 
-  expect(asleepEvents).toMatch(/^oom_kill 0$/m);
+  expect(asleepEvents).toMatch(/^oom_kill 0$/mu);
   expect(asleepMounts).toStrictEqual([]);
 
   await runImp('wake', name);
@@ -104,7 +104,7 @@ test('it runs a new imp jailed under a memory cap, sleeps and wakes it full unde
   const woke = await readJailState(name);
 
   expect(parseWholeNumber(size, 'the fill size')).toBe(380 * 1024 * 1024);
-  expect(wokeEvents).toMatch(/^oom_kill 0$/m);
+  expect(wokeEvents).toMatch(/^oom_kill 0$/mu);
   expect(parseWholeNumber(peak, 'memory.peak')).toBeLessThanOrEqual((512 + 256) * 1024 * 1024);
   expect(findJailViolations(woke)).toStrictEqual([]);
 

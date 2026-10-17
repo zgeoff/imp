@@ -66,7 +66,7 @@ function renderComment(comment: string): string[] {
     return [];
   }
 
-  const lines = comment.split('\n').map((line) => line.replace(/^ /, ''));
+  const lines = comment.split('\n').map((line) => line.replace(/^ /u, ''));
 
   return [...lines, ''];
 }
@@ -120,6 +120,6 @@ function formatPresence(field: DescField): string {
 function formatCell(comment: string): string {
   return comment
     .replaceAll('\n', ' ')
-    .replaceAll(/\s+/g, ' ')
+    .replaceAll(/\s+/gu, ' ')
     .replaceAll('|', String.raw`\|`);
 }

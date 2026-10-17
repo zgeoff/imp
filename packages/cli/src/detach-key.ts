@@ -16,7 +16,7 @@ export function parseDetachKey(text: string): number | null {
     return null;
   }
 
-  const key = /^ctrl-(?<key>[a-z@[\\\]^_])$/i.exec(text)?.groups?.['key']?.toLowerCase();
+  const key = /^ctrl-(?<key>[a-z@[\\\]^_])$/iu.exec(text)?.groups?.['key']?.toLowerCase();
 
   if (key === undefined || RESERVED_KEYS.has(key)) {
     throw new UsageError(

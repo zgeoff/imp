@@ -79,7 +79,7 @@ test('#create stores the secret only as its hash', async () => {
   const made = await tokens.create({ name: 'ci', scope: 'exec', imps: ['dev-*'] });
   const row = await ctx.db.selectFrom('tokens').selectAll().executeTakeFirstOrThrow();
 
-  expect(row.secret_hash).toMatch(/^[0-9a-f]{64}$/);
+  expect(row.secret_hash).toMatch(/^[0-9a-f]{64}$/u);
 
   const [, secret = made.secret] = made.secret.split('.');
 
@@ -104,7 +104,7 @@ test('#create gives the token and its secret once, as imp_<id>.<secret>', async 
     secret: expect.toStartWith('imp_'),
   });
 
-  expect(made.secret).toMatch(/^imp_[\w-]{16}\.[\w-]{43}$/);
+  expect(made.secret).toMatch(/^imp_[\w-]{16}\.[\w-]{43}$/u);
 });
 
 test('#authenticate takes a made token’s secret after a restart', async () => {

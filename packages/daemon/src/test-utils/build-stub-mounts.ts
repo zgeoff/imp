@@ -3,7 +3,7 @@ import type { CommandResult } from '../process/run-command';
 // /proc/self/mounts escapes a space, a tab, a newline and a backslash in octal
 function encodeMountPath(path: string): string {
   return path.replaceAll(
-    /[ \t\n\\]/g,
+    /[ \t\n\\]/gu,
     (char) => `\\${char.codePointAt(0)?.toString(8).padStart(3, '0') ?? ''}`,
   );
 }

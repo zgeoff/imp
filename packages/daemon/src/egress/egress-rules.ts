@@ -44,7 +44,7 @@ export function buildAllowRules(allow: readonly string[]): AllowRules {
 
 // a name as DNS and CONNECT give it: any case, maybe a trailing dot
 export function normalizeName(name: string): string {
-  return name.toLowerCase().replace(/\.$/, '');
+  return name.toLowerCase().replace(/\.$/u, '');
 }
 
 // `*.example.com` covers every name under example.com, not example.com

@@ -205,7 +205,7 @@ export function runInContainer(
 export async function readContainerGateway(): Promise<string> {
   const route = await runInContainer(['ip', '-4', 'route', 'show', 'default']);
 
-  const gateway = /via (?<ip>[\d.]+)/.exec(route.stdout)?.groups?.['ip'];
+  const gateway = /via (?<ip>[\d.]+)/u.exec(route.stdout)?.groups?.['ip'];
 
   if (gateway === undefined) {
     throw new Error(`no default route in ${instance.container}: ${route.stdout}`);
@@ -254,7 +254,7 @@ export async function readImpdLoggedMs(text: string): Promise<number | null> {
     .split('\n')
     .filter((line) => line.includes(text));
 
-  const match = /in (?<ms>\d+)ms$/.exec(lines.at(-1)?.trim() ?? '');
+  const match = /in (?<ms>\d+)ms$/u.exec(lines.at(-1)?.trim() ?? '');
   const ms = match?.groups?.['ms'];
 
   return ms === undefined ? null : Number(ms);

@@ -173,7 +173,7 @@ test('#formatImpInfo shows the container not running for a sleeping imp', () => 
 test('#formatImps counts sessions, and shows - when impd has not seen them', () => {
   const { sessions, ...imp } = buildMockImp();
   const rows = formatImps([{ ...imp, sessions: 2 }, imp]).split('\n');
-  const column = rows.map((row) => row.slice(rows[0]?.indexOf('SESSIONS')).split(/\s+/)[0]);
+  const column = rows.map((row) => row.slice(rows[0]?.indexOf('SESSIONS')).split(/\s+/u)[0]);
 
   expect(column).toStrictEqual(['SESSIONS', '2', '-']);
 });
@@ -200,7 +200,7 @@ test('#formatImps shows what a destroy frees and what the imp shares', () => {
   const cells = rows.map((row) =>
     row
       .slice(start)
-      .split(/\s{2,}/)
+      .split(/\s{2,}/u)
       .slice(0, 2),
   );
 

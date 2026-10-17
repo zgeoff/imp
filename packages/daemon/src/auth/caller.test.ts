@@ -288,7 +288,7 @@ test('it answers a create with the token and a secret in the token format', asyn
   });
 
   expect(made).toStrictEqual({
-    secret: expect.stringMatching(/^imp_[\w-]{16}\.[\w-]{43}$/) as unknown,
+    secret: expect.stringMatching(/^imp_[\w-]{16}\.[\w-]{43}$/u) as unknown,
     token: {
       name: 'ci',
       scope: 'exec',

@@ -66,7 +66,7 @@ test('it starts a new run for a session name it does not know', async () => {
   invariant(run);
 
   expect(stream.created).toBeTrue();
-  expect(run.generation).toMatch(/^[0-9a-f]{32}$/);
+  expect(run.generation).toMatch(/^[0-9a-f]{32}$/u);
   expect(run.state).toBe('running');
   expect(run.isAttached).toBeTrue();
 

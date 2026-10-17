@@ -6,7 +6,7 @@ import type { Token } from '../schemas/token-schema';
 // The date counts back from faker's reference date, which the preload fixes.
 export function buildMockToken(overrides: Partial<Token> = {}): Token {
   return {
-    name: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/),
+    name: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/u),
     scope: 'manage',
     imps: null,
     sshKeys: [],

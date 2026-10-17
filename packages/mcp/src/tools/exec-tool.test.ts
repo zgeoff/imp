@@ -467,7 +467,7 @@ test('it runs a command whose broker requirement impd meets, with the broker var
   expect(guest.requests).toMatchObject([
     {
       argv: ['echo', 'hi'],
-      env: expect.arrayContaining([expect.stringMatching(/^HTTPS_PROXY=http:\/\//)]) as unknown,
+      env: expect.arrayContaining([expect.stringMatching(/^HTTPS_PROXY=http:\/\//u)]) as unknown,
     },
   ]);
 });
@@ -512,7 +512,7 @@ test('it refuses an unknown requirement before anything runs', async () => {
         content: [
           {
             type: 'text',
-            text: expect.stringMatching(/^invalid arguments: .*require/s) as unknown,
+            text: expect.stringMatching(/^invalid arguments: .*require/su) as unknown,
           },
         ],
         isError: true,
@@ -631,7 +631,7 @@ test('it refuses an outer exec in the agent, and nothing runs', async () => {
       id: 1,
       result: {
         content: [
-          { type: 'text', text: expect.stringMatching(/^invalid arguments: .*outer/s) as unknown },
+          { type: 'text', text: expect.stringMatching(/^invalid arguments: .*outer/su) as unknown },
         ],
         isError: true,
       },
@@ -1086,7 +1086,7 @@ test('it sends a progress notification on each tick while a call with a progress
       params: {
         progressToken: 'p1',
         progress: 1,
-        message: expect.stringMatching(/^still running after \d+ s$/) as unknown,
+        message: expect.stringMatching(/^still running after \d+ s$/u) as unknown,
       },
     },
     {
@@ -1095,7 +1095,7 @@ test('it sends a progress notification on each tick while a call with a progress
       params: {
         progressToken: 'p1',
         progress: 2,
-        message: expect.stringMatching(/^still running after \d+ s$/) as unknown,
+        message: expect.stringMatching(/^still running after \d+ s$/u) as unknown,
       },
     },
   ]);

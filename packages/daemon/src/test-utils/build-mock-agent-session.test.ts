@@ -6,7 +6,7 @@ import { buildMockAgentSession } from './build-mock-agent-session';
 test('it builds a default agent session', () => {
   expect(buildMockAgentSession()).toStrictEqual({
     $typeName: 'imp.agent.v1.SessionInfo',
-    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
+    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/u.test(value)),
     pid: expect.toBeNumber(),
     argv: [expect.toBeString()],
     state: 'running',
@@ -14,9 +14,9 @@ test('it builds a default agent session', () => {
     cols: expect.toBeNumber(),
     rows: expect.toBeNumber(),
     startedUnixMs: expect.toBeNumber(),
-    executionGeneration: expect.toSatisfy((value: string) => /^[0-9a-f]{32}$/.test(value)),
+    executionGeneration: expect.toSatisfy((value: string) => /^[0-9a-f]{32}$/u.test(value)),
     bootId: expect.toSatisfy((value: string) =>
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value),
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value),
     ),
     end: 0,
   });

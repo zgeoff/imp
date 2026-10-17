@@ -168,7 +168,7 @@ test('it removes only its dir when the dataset cannot be made', async () => {
 
   expect(failure).toMatchObject({
     message: expect.stringMatching(
-      /^zfs create -o mountpoint=legacy tank\/imp\/dataset-\w+ exited 1: /,
+      /^zfs create -o mountpoint=legacy tank\/imp\/dataset-\w+ exited 1: /u,
     ) as unknown,
   });
 
@@ -197,7 +197,7 @@ test('it destroys its dataset and removes its dir when the mount fails', async (
 
   expect(failure).toMatchObject({
     message: expect.stringMatching(
-      /^mount -t zfs tank\/imp\/dataset-\w+ \S+ exited 1: /,
+      /^mount -t zfs tank\/imp\/dataset-\w+ \S+ exited 1: /u,
     ) as unknown,
   });
 

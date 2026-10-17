@@ -14,7 +14,7 @@ interface ImageAddFields {
 }
 
 // a ref pinned by digest, which names one image for good; a tag can move
-const PINNED_REF = /@sha256:[0-9a-f]{64}$/;
+const PINNED_REF = /@sha256:[0-9a-f]{64}$/u;
 
 // The caller's prefix, a ref that starts with it and is pinned, and a name
 // within the caller's patterns.

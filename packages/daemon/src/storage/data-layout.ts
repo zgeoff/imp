@@ -52,7 +52,7 @@ export function buildImagesDir(dataDir: string): string {
 
 // `digest` is the docker image ID; its `sha256:` prefix stays out of paths
 export function toDigestHex(digest: string): string {
-  return digest.replace(/^sha256:/, '');
+  return digest.replace(/^sha256:/u, '');
 }
 
 export function buildImpPaths(dataDir: string, impId: string): ImpPaths {

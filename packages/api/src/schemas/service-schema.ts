@@ -3,7 +3,7 @@ import { ImpStateSchema } from './imp-schema';
 
 // A service's name is its file name in /etc/imp/services.d and in
 // /var/log/imp. The agent checks the same rule (agent/internal/services).
-export const SERVICE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+export const SERVICE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 
 export const ServiceNameSchema = z
   .string()
@@ -16,7 +16,7 @@ export const ServiceNameSchema = z
 // caps them (agent/internal/services)
 export const SERVICE_LOG_MAX_LINES = 100_000;
 export const ServiceRestartSchema = z.enum(['always', 'on-failure', 'never']);
-const EnvEntrySchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*=/, 'must be KEY=VALUE');
+const EnvEntrySchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*=/u, 'must be KEY=VALUE');
 
 // one /etc/imp/services.d file (docs/guides/services.md)
 export const ServiceDefSchema = z.object({

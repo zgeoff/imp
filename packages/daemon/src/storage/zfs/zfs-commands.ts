@@ -239,7 +239,7 @@ export function parseZfsList(stdout: string): ZfsEntry[] {
 // `zfs version` prints the userland first (zfs-2.2.2-0ubuntu9), then the
 // kernel module (zfs-kmod-2.2.2-0ubuntu9)
 export function parseZfsVersion(stdout: string): string {
-  const userland = /^zfs-(?<version>\d+\.\d+\S*)$/m.exec(stdout);
+  const userland = /^zfs-(?<version>\d+\.\d+\S*)$/mu.exec(stdout);
   const version = userland?.groups?.['version'];
 
   if (version === undefined) {
@@ -251,7 +251,7 @@ export function parseZfsVersion(stdout: string): string {
 
 // 2.2.2-0ubuntu9 → { major: '2', minor: '2' }
 export function parseZfsRelease(version: string): { major: string; minor: string } {
-  const found = /^(?<major>\d+)\.(?<minor>\d+)/.exec(version.trim())?.groups;
+  const found = /^(?<major>\d+)\.(?<minor>\d+)/u.exec(version.trim())?.groups;
 
   return { major: found?.['major'] ?? version.trim(), minor: found?.['minor'] ?? '' };
 }

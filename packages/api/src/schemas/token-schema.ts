@@ -12,7 +12,7 @@ export type Scope = z.infer<typeof ScopeSchema>;
 export const ImpPatternSchema = z
   .string()
   .regex(
-    /^[a-z*][a-z0-9*-]{0,30}$/,
+    /^[a-z*][a-z0-9*-]{0,30}$/u,
     'must be an imp name, with * for any run of characters, such as dev-*',
   );
 
@@ -40,7 +40,7 @@ export const ImageRefPrefixSchema = z
   .string()
   .max(200)
   .regex(
-    /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\/[a-z0-9][a-z0-9._/-]*$/,
+    /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::[0-9]+)?|[a-z0-9-]+:[0-9]+|localhost)\/[a-z0-9][a-z0-9._/-]*$/u,
     'must be a registry host and the start of a path, such as ghcr.io/org/app-',
   );
 

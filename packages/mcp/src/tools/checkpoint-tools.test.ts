@@ -411,7 +411,7 @@ test('it answers a restore to a checkpoint that does not exist with an isError r
       jsonrpc: '2.0',
       id: 1,
       result: {
-        content: [{ type: 'text', text: expect.stringMatching(/^NOT_FOUND: /) as unknown }],
+        content: [{ type: 'text', text: expect.stringMatching(/^NOT_FOUND: /u) as unknown }],
         isError: true,
       },
     },

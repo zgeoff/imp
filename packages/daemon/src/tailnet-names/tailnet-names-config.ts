@@ -5,7 +5,7 @@ import * as z from 'zod';
 const PrefixSchema = z
   .string()
   .regex(
-    /^[a-z][a-z\d-]{0,20}$/,
+    /^[a-z][a-z\d-]{0,20}$/u,
     'IMP_TAILNET_NAME_PREFIX must be a lowercase letter followed by up to 20 letters, digits or hyphens',
   );
 

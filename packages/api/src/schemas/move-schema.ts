@@ -8,7 +8,7 @@ export type MoveState = z.infer<typeof MoveStateSchema>;
 
 // the receiving host's base URL for the move routes: a literal tailnet
 // address, so no name lookup can send the bytes elsewhere
-export const PeerUrlSchema = z.url({ protocol: /^https?$/ });
+export const PeerUrlSchema = z.url({ protocol: /^https?$/u });
 
 // What a host must share with the source of a warm move
 // (docs/architecture/storage/moves.md#warm-moves): what loads a memory snapshot,

@@ -36,5 +36,5 @@ test('it throws when the dir does not exist', () => {
 
   expect(() => {
     writeSyncedFile(join(ctx.dir, 'gone', 'rootfs.ext4'), 'one');
-  }).toThrow(/^ENOENT: no such file or directory, open '.+\/gone\/rootfs\.ext4'$/);
+  }).toThrow(/^ENOENT: no such file or directory, open '.+\/gone\/rootfs\.ext4'$/u);
 });

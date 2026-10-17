@@ -13,7 +13,7 @@ test('#parseCpuInfo reads the model of the first processor', () => {
 test('#parseCpuInfo hashes the flags of the first processor', () => {
   const cpu = parseCpuInfo('processor\t: 0\nmodel name\t: AMD EPYC\nflags\t\t: fpu vme sse avx2\n');
 
-  expect(cpu.cpuFlags).toMatch(/^[0-9a-f]{64}$/);
+  expect(cpu.cpuFlags).toMatch(/^[0-9a-f]{64}$/u);
 });
 
 test('#parseCpuInfo hashes the same flags in any order alike', () => {

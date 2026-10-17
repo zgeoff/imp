@@ -21,7 +21,7 @@ const USAGE =
   'try GUEST:LOCAL, each an absolute path or a port: /tmp/app.sock:/run/app.sock, 9000:8080, or 9000';
 
 function parsePort(text: string, min: number): number | null {
-  const port = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  const port = /^\d+$/u.test(text) ? Number(text) : Number.NaN;
 
   return port >= min && port <= MAX_PORT ? port : null;
 }

@@ -8,7 +8,7 @@ test('it builds a default broker rule', () => {
   const received: unknown = rule;
 
   expect(received).toStrictEqual({
-    host: expect.stringMatching(/^[a-z0-9.-]+\.[a-z]+$/) as unknown,
+    host: expect.stringMatching(/^[a-z0-9.-]+\.[a-z]+$/u) as unknown,
     header: 'authorization',
     scheme: 'bearer',
   });

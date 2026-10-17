@@ -15,7 +15,7 @@ export interface HarnessArgs {
 
 // --group N: one of the fast set's CI groups, as its runner runs it
 function resolveGroup(group: string): readonly string[] {
-  const suites = /^[1-9]\d*$/.test(group) ? FAST_GROUPS[Number(group) - 1] : undefined;
+  const suites = /^[1-9]\d*$/u.test(group) ? FAST_GROUPS[Number(group) - 1] : undefined;
 
   if (suites === undefined) {
     throw new Error(`--group takes 1 to ${String(FAST_GROUPS.length)}, not ${group}`);

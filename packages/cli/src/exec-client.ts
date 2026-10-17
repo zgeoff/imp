@@ -630,7 +630,7 @@ function readSignalNumber(signal: string | null): number {
   }
 
   const signals: Readonly<Record<string, number>> = constants.signals;
-  const numbered = /^SIG(?<number>\d+)$/.exec(signal)?.groups?.['number'];
+  const numbered = /^SIG(?<number>\d+)$/u.exec(signal)?.groups?.['number'];
 
   return signals[signal] ?? (numbered === undefined ? 0 : Number(numbered));
 }

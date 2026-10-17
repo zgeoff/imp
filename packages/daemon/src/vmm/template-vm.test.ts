@@ -129,7 +129,7 @@ test('#loadTemplateVm fails a restore whose load fails as a fault of the templat
 
   expect(restoring).rejects.toBeInstanceOf(TemplateRestoreError);
   expect(restoring).rejects.toMatchObject({ isTemplateFault: true });
-  expect(restoring).rejects.toThrow(/^template restore failed: /);
+  expect(restoring).rejects.toThrow(/^template restore failed: /u);
 });
 
 test('#loadTemplateVm fails a restore whose drive patch fails as a fault of the imp', async () => {
@@ -326,7 +326,7 @@ test('#buildTemplateVm fails a build whose VM refuses its config', () => {
     }),
   });
 
-  expect(buildTemplateVm(plan, stub.jails)).rejects.toThrow(/^template build failed: /);
+  expect(buildTemplateVm(plan, stub.jails)).rejects.toThrow(/^template build failed: /u);
 });
 
 test('#buildTemplateVm releases the jail of a build that fails, and leaves no snapshot', () => {

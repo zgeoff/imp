@@ -16,7 +16,7 @@ export function buildMockGovernorDecision(
     at: faker.date.past(),
     ev: 'GovernorDecision',
     decision: 'admitted',
-    name: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/),
+    name: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/u),
     trigger: 'admission',
     usedMib: faker.number.int({ min: 0, max: budgetMib }),
     budgetMib,

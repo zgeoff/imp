@@ -13,7 +13,7 @@ const SOCKET_TABLES = ['tcp', 'tcp6', 'udp', 'udp6'].map((name) => `/proc/net/${
 function readEphemeralStart(): number {
   const range = readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8');
 
-  return Number(range.trim().split(/\s+/)[0]);
+  return Number(range.trim().split(/\s+/u)[0]);
 }
 
 // Every local port a TCP or UDP socket of any state holds, on any address
@@ -27,7 +27,7 @@ function readBusyPorts(): ReadonlySet<number> {
     const lines = readFileSync(table, 'utf8').trim().split('\n');
 
     for (const line of lines.slice(1)) {
-      const local = line.trim().split(/\s+/)[1] ?? '';
+      const local = line.trim().split(/\s+/u)[1] ?? '';
       const hexPort = local.slice(local.lastIndexOf(':') + 1);
 
       busy.add(Number.parseInt(hexPort, 16));

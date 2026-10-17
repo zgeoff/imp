@@ -18,7 +18,7 @@ test('it makes a token of 32 random bytes in base64url on first start', () => {
   const ctx = setupTest();
   const token = loadOrCreateToken(ctx.dir);
 
-  expect(token).toMatch(/^[\w-]{43}$/);
+  expect(token).toMatch(/^[\w-]{43}$/u);
 });
 
 test('it makes a different token for each new data dir', () => {
@@ -59,5 +59,5 @@ test('it reads a token file another process wrote, without its surrounding white
 test('it throws when the data dir does not exist', () => {
   const ctx = setupTest();
 
-  expect(() => loadOrCreateToken(join(ctx.dir, 'missing'))).toThrow(/ENOENT/);
+  expect(() => loadOrCreateToken(join(ctx.dir, 'missing'))).toThrow(/ENOENT/u);
 });

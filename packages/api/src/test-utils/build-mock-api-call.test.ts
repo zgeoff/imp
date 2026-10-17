@@ -11,8 +11,8 @@ test('it builds a default api call', () => {
     at: expect.toBeValidDate() as unknown,
     procedure: expect.toBeOneOf(['imps.stop', 'imps.start', 'imps.create']) as unknown,
     actor: 'token',
-    actorName: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
-    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    actorName: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
+    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     outcome: 'ok',
     durationMs: expect.any(Number) as unknown,
   });
@@ -27,8 +27,8 @@ test('it applies overrides on top of the defaults', () => {
     at: expect.toBeValidDate() as unknown,
     procedure: expect.toBeOneOf(['imps.stop', 'imps.start', 'imps.create']) as unknown,
     actor: 'dashboard',
-    actorName: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
-    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    actorName: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
+    imp: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     outcome: 'NOT_FOUND',
     durationMs: expect.any(Number) as unknown,
   });

@@ -7,7 +7,7 @@ import { OffsetSchema } from './offset-schema';
 
 // one run of a session's process; a sleep and memory wake keeps it, a cold
 // boot ends it
-export const ExecutionGenerationSchema = z.string().regex(/^[0-9a-f]{32}$/);
+export const ExecutionGenerationSchema = z.string().regex(/^[0-9a-f]{32}$/u);
 
 // why impd booted an imp cold; docs/architecture/guest/sessions.md#generations-boots-and-offsets
 // says what each cause means

@@ -4,7 +4,7 @@ const UNIT_MIB: Readonly<Record<string, number>> = { m: 1, g: 1024, t: 1024 * 10
 
 // `2048`, `512m`, `2g`, `2GiB`, `1t` → MiB; a bare number is MiB already
 export function parseSize(text: string): number {
-  const match = /^(?<amount>\d+)(?:(?<unit>[mgt])(?:i?b)?)?$/i.exec(text.trim());
+  const match = /^(?<amount>\d+)(?:(?<unit>[mgt])(?:i?b)?)?$/iu.exec(text.trim());
   const amount = Number(match?.groups?.['amount'] ?? 0);
   const unit = match?.groups?.['unit']?.toLowerCase() ?? 'm';
 
@@ -17,7 +17,7 @@ export function parseSize(text: string): number {
 
 // a count such as --cpus: a whole number above zero
 export function parseCount(text: string, flag: string): number {
-  if (!/^\d+$/.test(text.trim()) || Number(text) === 0) {
+  if (!/^\d+$/u.test(text.trim()) || Number(text) === 0) {
     throw new UsageError(`--${flag} needs a whole number above 0, not ${text}`);
   }
 

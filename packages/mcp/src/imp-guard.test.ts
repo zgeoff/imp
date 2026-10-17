@@ -36,7 +36,7 @@ test('#createImpGuard picks a 31-character name under the longest prefix it take
   const guard = createImpGuard({ prefix: 'aaaaaaaaaaaaaaaaaaaaaaa' });
   const name = guard.pickNewName();
 
-  expect(name).toMatch(/^a{23}[a-z0-9]{8}$/);
+  expect(name).toMatch(/^a{23}[a-z0-9]{8}$/u);
 });
 
 test('#createImpGuard refuses an allow-list that holds an invalid name', () => {
@@ -112,7 +112,7 @@ test('#createImpGuard asks for a name when only an allow-list guards the server'
 test('#createPatternGuard picks a name under a single prefix pattern', () => {
   const guard = createPatternGuard(['agent-*']);
 
-  expect(guard.pickNewName()).toMatch(/^agent-[a-z0-9]{8}$/);
+  expect(guard.pickNewName()).toMatch(/^agent-[a-z0-9]{8}$/u);
 });
 
 test('#createPatternGuard leaves every imp to impd to refuse', () => {

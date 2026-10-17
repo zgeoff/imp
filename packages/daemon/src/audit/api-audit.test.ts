@@ -169,5 +169,5 @@ test('#createApiAudit logs a row it could not write', async () => {
   });
 
   expect(ctx.logs).toHaveLength(1);
-  expect(ctx.logs[0]).toMatch(/^impd: audit: ssh: .*api_audit/);
+  expect(ctx.logs[0]).toMatch(/^impd: audit: ssh: .*api_audit/u);
 });

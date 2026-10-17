@@ -35,7 +35,7 @@ export function parseKernelVersion(image: Uint8Array): string | null {
   // the banner is a C string: stop at its NUL
   const tail = Buffer.from(image.subarray(start + BANNER.length, start + BANNER.length + 64));
   const [text = ''] = tail.toString('latin1').split('\0');
-  const match = /^\S+/.exec(text);
+  const match = /^\S+/u.exec(text);
 
   return match?.[0] ?? null;
 }

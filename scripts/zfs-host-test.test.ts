@@ -83,7 +83,7 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(0);
 
@@ -127,7 +127,7 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
   expect(existsSync(join(work, 'summary.txt'))).toBeTrue();
 
   const owner = readFileSync(join(work, 'data', 'imp-e2e-zfs-owner'), 'utf8').replaceAll(
-    /impbench\d+/g,
+    /impbench\d+/gu,
     'impbenchPID',
   );
 
@@ -136,7 +136,7 @@ test('it runs the unit tests and suites on a bench pool, then releases all it ma
   );
 
   const ownerB = readFileSync(join(work, 'data-mv-b', 'imp-e2e-zfs-owner'), 'utf8').replaceAll(
-    /impbench\d+/g,
+    /impbench\d+/gu,
     'impbenchPID',
   );
 
@@ -164,12 +164,12 @@ test('it refuses a bench pool name that is taken and touches nothing', () => {
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
   expect(result.stderr.toString()).toMatch(
-    /^zfs-host-test: a pool named impbench\d+ already exists; refusing to touch it\n$/,
+    /^zfs-host-test: a pool named impbench\d+ already exists; refusing to touch it\n$/u,
   );
 
   expect(calls).toBe('sudo zpool list impbenchPID\nzpool list impbenchPID\n');
@@ -196,7 +196,7 @@ test('it refuses a work dir that already holds a bench.img and leaves the file a
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -260,7 +260,7 @@ test('it never destroys a pool or stops an instance when its own pool create fai
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -308,7 +308,7 @@ test('it fails and keeps the pool file, saying so, when the pool will not go', (
 
   expect(result.exitCode).toBe(1);
 
-  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+  expect(result.stderr.toString().replaceAll(/impbench\d+/gu, 'impbenchPID')).toBe(
     `zfs-host-test: could not destroy impbenchPID; its file stays at ${work}/bench.img\n`,
   );
 
@@ -358,7 +358,7 @@ EOF`,
 
   expect(result.exitCode).toBe(0);
 
-  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+  expect(result.stderr.toString().replaceAll(/impbench\d+/gu, 'impbenchPID')).toBe(
     `cannot destroy 'impbenchPID': pool is busy
 zfs-host-test: a kernel oops in ZFS holds impbenchPID until a reboot; its file stays at ${work}/bench.img
 [  90.200000] usercopy: Kernel memory exposure attempt detected from SLUB object 'zio_buf_comb_16384' (offset 12288, size 20480)!
@@ -370,7 +370,7 @@ zfs-host-test: a kernel oops in ZFS holds impbenchPID until a reboot; its file s
 `,
   );
 
-  expect(calls).toMatch(/^dmesg --since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/m);
+  expect(calls).toMatch(/^dmesg --since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/mu);
   expect(existsSync(join(work, 'bench.img'))).toBeTrue();
 });
 
@@ -412,7 +412,7 @@ EOF`,
 
   expect(result.exitCode).toBe(1);
 
-  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+  expect(result.stderr.toString().replaceAll(/impbench\d+/gu, 'impbenchPID')).toBe(
     `cannot destroy 'impbenchPID': pool is busy
 zfs-host-test: could not destroy impbenchPID; its file stays at ${work}/bench.img
 `,
@@ -459,7 +459,7 @@ EOF`,
 
   expect(result.exitCode).toBe(1);
 
-  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+  expect(result.stderr.toString().replaceAll(/impbench\d+/gu, 'impbenchPID')).toBe(
     `cannot destroy 'impbenchPID': pool is busy
 zfs-host-test: could not destroy impbenchPID; its file stays at ${work}/bench.img
 `,
@@ -503,7 +503,7 @@ EOF`,
 
   expect(result.exitCode).toBe(0);
 
-  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+  expect(result.stderr.toString().replaceAll(/impbench\d+/gu, 'impbenchPID')).toBe(
     `cannot destroy 'impbenchPID': pool is busy
 zfs-host-test: a kernel oops in ZFS holds impbenchPID until a reboot; its file stays at ${work}/bench.img
 [  90.200200] Oops: 0000 [#1] SMP NOPTI
@@ -548,7 +548,7 @@ EOF`,
 
   expect(result.exitCode).toBe(1);
 
-  expect(result.stderr.toString().replaceAll(/impbench\d+/g, 'impbenchPID')).toBe(
+  expect(result.stderr.toString().replaceAll(/impbench\d+/gu, 'impbenchPID')).toBe(
     `zfs-host-test: could not destroy impbenchPID; its file stays at ${work}/bench.img\n`,
   );
 
@@ -575,7 +575,7 @@ test('it refuses a work dir that already holds a data dir and leaves it as it wa
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -606,7 +606,7 @@ test('it refuses an imp-zfs container that is already there and touches nothing'
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -641,7 +641,7 @@ test('it refuses a work dir that already holds the moves suites’ B data dir an
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -673,7 +673,7 @@ test('it refuses an imp-zfs-mv-b container that is already there and touches not
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -707,7 +707,7 @@ test('it refuses an imp-zfs-mv network that is already there and touches nothing
     },
   });
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -791,7 +791,7 @@ test('it stops the suites, the moves suites’ B, the instance and the pool when
 
   const exitCode = await proc.exited;
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(exitCode).toBe(143);
 
@@ -859,7 +859,7 @@ test('it destroys the pool and removes its file when SIGTERM comes during the po
 
   const exitCode = await proc.exited;
 
-  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/g, 'impbenchPID');
+  const calls = readFileSync(ctx.calls, 'utf8').replaceAll(/impbench\d+/gu, 'impbenchPID');
 
   expect(exitCode).toBe(143);
 

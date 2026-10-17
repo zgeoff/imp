@@ -200,7 +200,7 @@ test('it opens a session at initialize and answers with its id', async () => {
 
   expect(response.status).toBe(200);
   expect(response.headers.get('content-type')).toBe('text/event-stream');
-  expect(response.headers.get('mcp-session-id')).toMatch(/^[0-9a-f-]{36}$/);
+  expect(response.headers.get('mcp-session-id')).toMatch(/^[0-9a-f-]{36}$/u);
 
   expect(body).toStrictEqual({
     jsonrpc: '2.0',
@@ -638,9 +638,9 @@ test('it streams a tool call’s progress and response as server-sent events', a
 
   expect(blocks).toStrictEqual([
     expect.stringMatching(
-      /^event: message\ndata: \{.*"method":"notifications\/progress".*\}$/,
+      /^event: message\ndata: \{.*"method":"notifications\/progress".*\}$/u,
     ) as unknown,
-    expect.stringMatching(/^event: message\ndata: \{"result":.*"id":1\}$/) as unknown,
+    expect.stringMatching(/^event: message\ndata: \{"result":.*"id":1\}$/u) as unknown,
     '',
   ]);
 
@@ -656,7 +656,7 @@ test('it streams a tool call’s progress and response as server-sent events', a
       params: {
         progressToken: 'p',
         progress: 1,
-        message: expect.stringMatching(/^still running after \d+ s$/) as unknown,
+        message: expect.stringMatching(/^still running after \d+ s$/u) as unknown,
       },
     },
     {

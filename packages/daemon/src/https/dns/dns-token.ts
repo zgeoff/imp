@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { readErrorMessage } from '../../read-error-message';
 
-const TOKEN_PATTERN = /^[\w.~+/-]+$/;
+const TOKEN_PATTERN = /^[\w.~+/-]+$/u;
 
 // Where the DNS provider's API token comes from: IMP_DNS_API_TOKEN, fixed at
 // start, or IMP_DNS_API_TOKEN_FILE, read again at each use so a rotated

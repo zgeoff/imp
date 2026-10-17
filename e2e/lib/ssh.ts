@@ -299,7 +299,7 @@ async function waitForSocket(path: string): Promise<void> {
 export async function readTapLinkLocal(hostIp: string): Promise<string> {
   const v4 = await runInContainer(['ip', '-o', '-4', 'addr', 'show', 'to', hostIp]);
 
-  const tap = /^\d+: (?<tap>\S+)/.exec(v4.stdout)?.groups?.['tap'];
+  const tap = /^\d+: (?<tap>\S+)/u.exec(v4.stdout)?.groups?.['tap'];
 
   if (tap === undefined) {
     throw new Error(`no interface has ${hostIp}: ${v4.stdout}${v4.stderr}`);
@@ -307,7 +307,7 @@ export async function readTapLinkLocal(hostIp: string): Promise<string> {
 
   const v6 = await runInContainer(['ip', '-o', '-6', 'addr', 'show', 'dev', tap, 'scope', 'link']);
 
-  const linkLocal = /inet6 (?<ip>[\da-f:]+)/.exec(v6.stdout)?.groups?.['ip'];
+  const linkLocal = /inet6 (?<ip>[\da-f:]+)/u.exec(v6.stdout)?.groups?.['ip'];
 
   if (linkLocal === undefined) {
     throw new Error(`${tap} has no link-local address: ${v6.stdout}${v6.stderr}`);

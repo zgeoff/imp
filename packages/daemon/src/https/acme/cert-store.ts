@@ -38,7 +38,7 @@ const AccountSchema = z.object({ directoryUrl: z.string(), url: z.string(), keyP
 // v0.1.1 kept the key in account.key and only the URL in account.json
 const LegacyAccountSchema = z.object({ directoryUrl: z.string(), url: z.string() });
 const NO_ATTEMPTS: AttemptState = { failures: 0, lastAttemptAt: null, lastError: null };
-const PEM_BLOCK = /-----BEGIN (?<label>[A-Z ]+)-----[\s\S]+?-----END \k<label>-----\n?/g;
+const PEM_BLOCK = /-----BEGIN (?<label>[A-Z ]+)-----[\s\S]+?-----END \k<label>-----\n?/gu;
 
 export interface CertStore {
   readonly readCertificate: () => Certificate | null;

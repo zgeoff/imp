@@ -130,7 +130,7 @@ test('#authorize shows an approval code of two groups of 4 symbols', async () =>
     throw new Error(`expected the sign-in page, got ${outcome.kind}`);
   }
 
-  expect(outcome.view.approvalCode).toMatch(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
+  expect(outcome.view.approvalCode).toMatch(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u);
 });
 
 test('#authorize takes no scope asked as read', async () => {

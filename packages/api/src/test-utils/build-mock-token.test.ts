@@ -8,7 +8,7 @@ test('it builds a default token', () => {
   const received: unknown = token;
 
   expect(received).toStrictEqual({
-    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     scope: 'manage',
     imps: null,
     sshKeys: [],

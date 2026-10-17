@@ -80,7 +80,7 @@ function decodePath(pathname: string): string | null {
   try {
     const path = decodeURIComponent(pathname);
 
-    if (path.includes('\0') || path.split(/[/\\]/).includes('..')) {
+    if (path.includes('\0') || path.split(/[/\\]/u).includes('..')) {
       return null;
     }
 
