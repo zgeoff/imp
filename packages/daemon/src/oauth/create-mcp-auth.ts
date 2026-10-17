@@ -121,7 +121,9 @@ export function createMcpAuth(deps: Readonly<McpAuthDeps>): McpAuth {
     telemetry: { enabled: false },
     logger: { disabled: true },
 
-    // impd limits sign-ins per client itself (create-sign-ins.ts)
+    // Off: it counts by client address, which the public listener never reads,
+    // so all callers would share one bucket. A guess fails on 32 random
+    // characters and PKCE, not a limit; impd limits sign-ins itself.
     rateLimit: { enabled: false },
 
     // migration 034 made the tables; a check at start would only repeat it
@@ -241,6 +243,32 @@ export function createMcpAuth(deps: Readonly<McpAuthDeps>): McpAuth {
     return client;
   };
 
+  const hasClientNamed = async (name: string): Promise<boolean> => {
+    const client = await db
+      .selectFrom('oauthClient')
+      .select('clientId')
+      .where('name', '=', name)
+      .executeTakeFirst();
+
+    return client !== undefined;
+  };
+
+  // The name's unique index refuses a second add that ran beside the first,
+  // past both lookups; it answers as the lookup would.
+  const createFixedClient = async (name: string, redirectUris: readonly string[]) => {
+    try {
+      return await auth.api.createFixedClient({ body: { name, redirectURIs: [...redirectUris] } });
+    } catch (error) {
+      const isTaken = await hasClientNamed(name);
+
+      if (isTaken) {
+        throw buildConflictError('oauth-client', name);
+      }
+
+      throw error;
+    }
+  };
+
   return {
     resource,
     issuer: origin,
@@ -256,19 +284,13 @@ export function createMcpAuth(deps: Readonly<McpAuthDeps>): McpAuth {
     },
 
     addClient: async (name, redirectUris) => {
-      const existing = await db
-        .selectFrom('oauthClient')
-        .select('clientId')
-        .where('name', '=', name)
-        .executeTakeFirst();
+      const isTaken = await hasClientNamed(name);
 
-      if (existing !== undefined) {
+      if (isTaken) {
         throw buildConflictError('oauth-client', name);
       }
 
-      const made = await auth.api.createFixedClient({
-        body: { name, redirectURIs: [...redirectUris] },
-      });
+      const made = await createFixedClient(name, redirectUris);
 
       return {
         name,

@@ -392,6 +392,24 @@ test('#addClient refuses a name another client holds', async () => {
   });
 });
 
+test('#addClient refuses one of two adds of the same name that run at once', async () => {
+  const ctx = await setupTest();
+
+  const settled = await Promise.allSettled([
+    ctx.auth.addClient('conn', ['https://client.example/callback']),
+    ctx.auth.addClient('conn', ['https://other.example/callback']),
+  ]);
+
+  const clients = await ctx.auth.listClients();
+
+  expect(settled).toIncludeSameMembers([
+    { status: 'fulfilled', value: expect.objectContaining({ name: 'conn' }) as unknown },
+    { status: 'rejected', reason: expect.objectContaining({ code: 'CONFLICT' }) as unknown },
+  ]);
+
+  expect(clients).toHaveLength(1);
+});
+
 test('#updateClient replaces the redirect URIs a client holds', async () => {
   const ctx = await setupTest();
 
