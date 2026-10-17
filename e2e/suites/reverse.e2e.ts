@@ -169,7 +169,7 @@ test('it listens again at the same path once the imp wakes, without waking it', 
   });
 
   // a dwell whose length is the contract (decision 5): a reopen after the
-  // CLI's 2 s RETRY_MS (cli/src/reverse-client.ts) would wake the imp by 3 s
+  // CLI's 2 s RETRY_MS (cli/src/forward/reverse-client.ts) would wake the imp by 3 s
   await Bun.sleep(3000);
 
   const waiting = await requireImp(name);

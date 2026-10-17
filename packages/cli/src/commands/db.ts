@@ -1,8 +1,8 @@
 import { requireFeatures } from '@impz/client';
-import { defineCommand, defineGroup } from '../define-command';
-import { formatOutput } from '../format-output';
-import { runAction } from '../run-action';
-import { jsonArg } from './common-args';
+import { jsonArg } from '../args/common-args';
+import { defineCommand, defineGroup } from '../cli/define-command';
+import { runAction } from '../cli/run-action';
+import { formatOutput } from '../output/format-output';
 
 const copyCommand = defineCommand({
   name: 'copy',

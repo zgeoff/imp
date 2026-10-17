@@ -3,11 +3,11 @@ import { ImageRefPrefixSchema, ImpPatternSchema, ScopeSchema, SecretNameSchema }
 import type { Scope } from '@impz/api';
 import { requireFeatures } from '@impz/client';
 import { choice } from 'gunshi/combinators';
-import { defineCommand, defineGroup } from '../define-command';
-import { UsageError } from '../errors';
-import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
-import { runAction } from '../run-action';
-import { jsonArg } from './common-args';
+import { jsonArg } from '../args/common-args';
+import { defineCommand, defineGroup } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../output/format-output';
 
 const tokenArg = { type: 'positional', description: 'token name', required: true } as const;
 

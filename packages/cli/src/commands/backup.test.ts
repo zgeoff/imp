@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { UsageError } from '../errors';
+import { UsageError } from '../cli/errors';
 import { parseUtcTime } from './backup';
 
 test.each([

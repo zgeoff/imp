@@ -1,16 +1,9 @@
-import { defineCommand } from '../define-command';
-import { formatExposeResult, formatImp, formatOutput } from '../format-output';
-import { parsePublicAuth } from '../parse-public-auth';
-import { runAction } from '../run-action';
-import { jsonArg, nameArg } from './common-args';
-
-export const authArgs = {
-  auth: {
-    type: 'string',
-    description: 'what the imp asks for before it wakes: token (default), basic or none',
-  },
-  user: { type: 'string', description: 'the basic auth user (default imp)' },
-} as const;
+import { authArgs } from '../args/auth-args';
+import { jsonArg, nameArg } from '../args/common-args';
+import { defineCommand } from '../cli/define-command';
+import { runAction } from '../cli/run-action';
+import { formatExposeResult, formatImp, formatOutput } from '../output/format-output';
+import { parsePublicAuth } from '../parse/parse-public-auth';
 
 export const exposeCommand = defineCommand({
   name: 'expose',

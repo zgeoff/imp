@@ -3,11 +3,11 @@ import type { ServiceDef, ServiceLog } from '@impz/api';
 import { ORPCError } from '@impz/client';
 import { choice, integer } from 'gunshi/combinators';
 import { match } from 'ts-pattern';
-import { defineCommand, defineGroup } from '../define-command';
-import { UsageError } from '../errors';
-import { formatOutput, formatServices } from '../format-output';
-import { formatError, runAction } from '../run-action';
-import { jsonArg, nameArg } from './common-args';
+import { jsonArg, nameArg } from '../args/common-args';
+import { defineCommand, defineGroup } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { formatError, runAction } from '../cli/run-action';
+import { formatOutput, formatServices } from '../output/format-output';
 
 const serviceArg = { type: 'positional', description: 'service name', required: true } as const;
 

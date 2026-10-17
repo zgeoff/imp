@@ -1,14 +1,14 @@
 import { integer } from 'gunshi/combinators';
-import { defineCommand } from '../define-command';
-import { DEFAULT_SESSION, parseDetachKey } from '../detach-key';
-import { dispatchVerb, listOperands } from '../dispatch-verb';
-import { CommandExitError, UsageError } from '../errors';
-import { buildExecIO, runExec } from '../exec-client';
-import { formatOutput, formatSessions } from '../format-output';
-import { runAction } from '../run-action';
-import { detachKeyArg, jsonArg, nameArg, requireSessionName } from './common-args';
-import { readTermEnv } from './imps';
-import { listSessionLogs, removeSessionLogs, writeSessionLog } from './session-logs';
+import { detachKeyArg, jsonArg, nameArg, requireSessionName } from '../args/common-args';
+import { defineCommand } from '../cli/define-command';
+import { dispatchVerb, listOperands } from '../cli/dispatch-verb';
+import { CommandExitError, UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import { DEFAULT_SESSION, parseDetachKey } from '../exec/detach-key';
+import { buildExecIO, runExec } from '../exec/exec-client';
+import { formatOutput, formatSessions } from '../output/format-output';
+import { readTermEnv } from '../sessions/read-term-env';
+import { listSessionLogs, removeSessionLogs, writeSessionLog } from '../sessions/session-logs';
 
 export const sessionsCommand = defineCommand({
   name: 'sessions',

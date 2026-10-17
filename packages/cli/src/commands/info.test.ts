@@ -6,7 +6,7 @@ import { createImage } from '@impz/daemon/src/db/images';
 import { buildImagePaths, buildImpPaths } from '@impz/daemon/src/storage/data-layout';
 import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
 import { startStubInnerAgent } from '@impz/daemon/src/test-utils/start-stub-inner-agent';
-import { writeHostConfig } from '../host-store';
+import { writeHostConfig } from '../config/host-store';
 import { parseJsonOutput } from '../test-utils/parse-json-output';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startImpdHost } from '../test-utils/start-impd-host';

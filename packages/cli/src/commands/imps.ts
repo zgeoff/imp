@@ -2,17 +2,24 @@ import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { ExposeResult, ForkResult, Imp } from '@impz/api';
 import { CONSOLE_SHELL, EXEC_REQUIREMENTS, requireFeatures } from '@impz/client';
 import type { ExecRequirement } from '@impz/client';
-import type { CliConfig } from '../cli-config';
-import type { CommandIO } from '../command-io';
-import { createImpClient } from '../create-imp-client';
-import type { ImpClient } from '../create-imp-client';
-import { defineCommand } from '../define-command';
-import { DEFAULT_SESSION, parseDetachKey } from '../detach-key';
-import { listOperands } from '../dispatch-verb';
-import { CommandExitError, UsageError } from '../errors';
-import { buildExecIO, runExec } from '../exec-client';
-import { listSavedTargets, runOnHosts } from '../fan-out';
-import type { SavedTarget, StartTimer } from '../fan-out';
+import { authArgs } from '../args/auth-args';
+import { detachKeyArg, jsonArg, nameArg, requireSessionName } from '../args/common-args';
+import { cpuLimitArg, cpuWeightArg, readCpuArgs } from '../args/cpu-args';
+import type { CommandIO } from '../cli/command-io';
+import { defineCommand } from '../cli/define-command';
+import { listOperands } from '../cli/dispatch-verb';
+import { CommandExitError, UsageError } from '../cli/errors';
+import { formatError, runAction, toCallError } from '../cli/run-action';
+import type { CliConfig } from '../config/cli-config';
+import { createImpClient } from '../config/create-imp-client';
+import type { ImpClient } from '../config/create-imp-client';
+import type { CliEnv } from '../config/host-store';
+import { DEFAULT_SESSION, parseDetachKey } from '../exec/detach-key';
+import { buildExecIO, runExec } from '../exec/exec-client';
+import { listSavedTargets, runOnHosts } from '../hosts/fan-out';
+import type { SavedTarget, StartTimer } from '../hosts/fan-out';
+import { buildRanking, createPlaced, readHostProbe } from '../hosts/place-imp';
+import type { PlaceRequest } from '../hosts/place-imp';
 import {
   formatExposeResult,
   formatHostImps,
@@ -20,19 +27,13 @@ import {
   formatImps,
   formatJson,
   formatOutput,
-} from '../format-output';
-import type { CliEnv } from '../host-store';
-import { parseDuration } from '../parse-duration';
-import { formatPolicy, parsePolicy } from '../parse-policy';
-import { parsePublicAuth } from '../parse-public-auth';
-import { parseCount, parseSize } from '../parse-size';
-import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
-import type { PlaceRequest } from '../place-imp';
-import { formatError, runAction, toCallError } from '../run-action';
-import { detachKeyArg, jsonArg, nameArg, requireSessionName } from './common-args';
-import { cpuLimitArg, cpuWeightArg, readCpuArgs } from './cpu';
-import { authArgs } from './expose';
-import { printTrustWarnings } from './networks';
+} from '../output/format-output';
+import { printTrustWarnings } from '../output/print-trust-warnings';
+import { parseDuration } from '../parse/parse-duration';
+import { formatPolicy, parsePolicy } from '../parse/parse-policy';
+import { parsePublicAuth } from '../parse/parse-public-auth';
+import { parseCount, parseSize } from '../parse/parse-size';
+import { readTermEnv } from '../sessions/read-term-env';
 
 export const newCommand = defineCommand({
   name: 'new',
@@ -727,8 +728,4 @@ export function pickConsoleSession(
   }
 
   return requireSessionName(args.session ?? DEFAULT_SESSION);
-}
-
-export function readTermEnv(env: CliEnv): Record<string, string> {
-  return { TERM: env['TERM'] ?? 'xterm-256color' };
 }

@@ -1,8 +1,8 @@
 import type { GuardOptions, ImpGuard } from '@impz/mcp';
 import packageJson from '../../package.json' with { type: 'json' };
-import { defineCommand } from '../define-command';
-import { UsageError } from '../errors';
-import { runAction } from '../run-action';
+import { defineCommand } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
 
 // stdout carries only JSON-RPC messages; anything else goes to stderr. The
 // server loads on use, so other commands do not build its tool schemas.

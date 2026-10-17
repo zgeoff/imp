@@ -190,6 +190,7 @@
       "dependencies": {
         "@balena/dockerignore": "catalog:",
         "tar-stream": "catalog:",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "@impz/test-utils": "workspace:*",

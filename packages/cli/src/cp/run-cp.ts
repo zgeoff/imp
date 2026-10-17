@@ -1,15 +1,20 @@
+import { TAR_TOTAL_RECORD } from '@impz/api';
 import { openToolExec } from '@impz/client';
-import { countFileBytes, listLocalEntries, writeLocalEntries } from '@impz/local-tar';
-import { loadCliConfig } from '../cli-config';
-import type { CliConfig } from '../cli-config';
-import { UsageError } from '../errors';
-import type { CliEnv } from '../host-store';
-import { openBunWebSocket } from '../open-bun-web-socket';
-import { toCallError } from '../run-action';
+import {
+  countFileBytes,
+  createLocalExtractor,
+  listLocalEntries,
+  writeLocalEntries,
+} from '@impz/local-tar';
+import { UsageError } from '../cli/errors';
+import { toCallError } from '../cli/run-action';
+import { loadCliConfig } from '../config/cli-config';
+import type { CliConfig } from '../config/cli-config';
+import type { CliEnv } from '../config/host-store';
+import { openBunWebSocket } from '../exec/open-bun-web-socket';
 import { buildTarArgs } from './build-tar-args';
 import { createCopyProgress } from './copy-progress';
 import type { CopyProgress, ProgressOutput } from './copy-progress';
-import { createLocalExtractor } from './extract-local';
 import { parseCpArgs } from './parse-cp-args';
 import type { CpPlan } from './parse-cp-args';
 
@@ -77,7 +82,7 @@ async function runUpload(
 }
 
 async function runDownload(config: CliConfig, plan: CpPlan, progress: CopyProgress): Promise<void> {
-  const extractor = createLocalExtractor(plan.localPath, progress, writeWarning);
+  const extractor = createLocalExtractor(plan.localPath, progress, writeWarning, TAR_TOTAL_RECORD);
 
   const exec = await openToolExec({
     baseUrl: config.url,

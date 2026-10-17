@@ -1,4 +1,4 @@
-import type { StartTimer } from '../fan-out';
+import type { StartTimer } from '../hosts/fan-out';
 
 // one timer a unit started, as the test reads it
 interface StubTimeout {

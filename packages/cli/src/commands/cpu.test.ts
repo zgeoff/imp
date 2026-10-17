@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { buildMockImp } from '@impz/api/test-utils/build-mock-imp';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';
-import { formatTop, readCpuArgs } from './cpu';
+import { formatTop } from './cpu';
 
 test('#formatTop lists the busiest imp first, with disk use, traffic, wakes and awake time', () => {
   const { diskUsage, ...idle } = buildMockImp({
@@ -78,17 +78,6 @@ test('#formatTop lists the busiest imp first, with disk use, traffic, wakes and 
     ],
     ['idle', 'running', '2%', '100', '0s', '300 MiB', '- / 8.0 GiB', '2.0 KiB', '10 B', '3', '1m'],
   ]);
-});
-
-test('#readCpuArgs reads a limit of none and a weight', () => {
-  expect(readCpuArgs({ 'cpu-limit': 'none', 'cpu-weight': '50' })).toStrictEqual({
-    cpuLimit: null,
-    cpuWeight: 50,
-  });
-});
-
-test('#readCpuArgs reads no CPU flags as no change', () => {
-  expect(readCpuArgs({})).toStrictEqual({});
 });
 
 test('#setCommand refuses a set with no change before any call', async () => {

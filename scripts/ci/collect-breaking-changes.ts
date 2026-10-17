@@ -2,7 +2,7 @@ import type {
   MessageDirection,
   ProtocolSchema,
 } from '../../packages/api/src/protocols/build-protocol-schema';
-import type { JsonOutputSchema } from '../../packages/cli/src/build-json-output-schema';
+import type { JsonOutputSchema } from '../../packages/cli/src/output/build-json-output-schema';
 
 type Schema = boolean | Readonly<Record<string, unknown>>;
 

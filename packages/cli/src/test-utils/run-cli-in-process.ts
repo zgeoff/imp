@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import type { CommandIO } from '../command-io';
+import type { CommandIO } from '../cli/command-io';
 import { runCLI } from '../main';
 import type { CliResult, StartCliOptions } from './start-cli';
 

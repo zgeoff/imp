@@ -1,3 +1,5 @@
+export { createLocalExtractor } from './extract-local';
+export type { ExtractProgress, LocalExtractor } from './extract-local';
 export { MissingDockerfileError, listContextEntries } from './pack-build-context';
 
 export {

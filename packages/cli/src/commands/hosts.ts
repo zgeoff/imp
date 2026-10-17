@@ -1,14 +1,14 @@
 import { ORPCError } from '@impz/client';
-import { isHttpUrl } from '../cli-config';
-import type { CommandIO } from '../command-io';
-import { createImpClient } from '../create-imp-client';
-import { defineCommand, defineGroup } from '../define-command';
-import { UsageError } from '../errors';
-import { formatJson, formatTable } from '../format-output';
-import { checkHostName, readHostConfig, writeHostConfig } from '../host-store';
-import type { HostConfig } from '../host-store';
-import { buildTokenTerminal, readToken } from '../read-token';
-import { jsonArg } from './common-args';
+import { jsonArg } from '../args/common-args';
+import type { CommandIO } from '../cli/command-io';
+import { defineCommand, defineGroup } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { isHttpUrl } from '../config/cli-config';
+import { createImpClient } from '../config/create-imp-client';
+import { checkHostName, readHostConfig, writeHostConfig } from '../config/host-store';
+import type { HostConfig } from '../config/host-store';
+import { formatJson, formatTable } from '../output/format-output';
+import { buildTokenTerminal, readToken } from '../prompts/read-token';
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 

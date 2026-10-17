@@ -2,15 +2,15 @@
 import { isCommandNotFoundError } from 'gunshi';
 import { cli } from 'gunshi/bone';
 import packageJson from '../package.json' with { type: 'json' };
-import { buildProcessIO } from './command-io';
-import type { CommandIO } from './command-io';
-import { mainCommand, subCommands } from './command-tree';
-import { CommandExitError, CommandLineError, UsageError } from './errors';
-import { formatValidationError } from './format-validation-error';
-import { buildImpzPlugin } from './impz-plugin';
-import { PromptCancelledError } from './read-token';
-import { formatError } from './run-action';
-import { toSignalExitCode } from './to-signal-exit-code';
+import { buildProcessIO } from './cli/command-io';
+import type { CommandIO } from './cli/command-io';
+import { mainCommand, subCommands } from './cli/command-tree';
+import { CommandExitError, CommandLineError, UsageError } from './cli/errors';
+import { formatValidationError } from './cli/format-validation-error';
+import { buildImpzPlugin } from './cli/impz-plugin';
+import { formatError } from './cli/run-action';
+import { toSignalExitCode } from './cli/to-signal-exit-code';
+import { PromptCancelledError } from './prompts/read-token';
 
 interface CliOutcome {
   readonly code: number;

@@ -1,20 +1,20 @@
 import { watchEvents } from '@impz/client';
 import type { Imp } from '@impz/client';
 import { formatBytes, formatDuration } from '@impz/shared';
-import { defineCommand } from '../define-command';
-import { UsageError } from '../errors';
+import { jsonArg, nameArg } from '../args/common-args';
+import { cpuLimitArg, cpuWeightArg, readCpuArgs } from '../args/cpu-args';
+import { defineCommand } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import { toSignalExitCode } from '../cli/to-signal-exit-code';
 import {
   formatCpuUse,
   formatDiskUse,
   formatImp,
   formatOutput,
   formatTable,
-} from '../format-output';
-import { parseCpuLimit, parseCpuWeight } from '../parse-cpu';
-import { parseCount } from '../parse-size';
-import { runAction } from '../run-action';
-import { toSignalExitCode } from '../to-signal-exit-code';
-import { jsonArg, nameArg } from './common-args';
+} from '../output/format-output';
+import { parseCount } from '../parse/parse-size';
 
 // how often `impz top` asks again when no event comes
 const TOP_REFRESH_MS = 2000;
@@ -26,28 +26,6 @@ const SHOW_CURSOR = '\u001B[?25h';
 
 // the signals that end top, each with its shell exit code
 const ENDING_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
-
-export const cpuLimitArg = {
-  type: 'string',
-  description: 'cores the VM may use, such as 1.5, or none (default none)',
-} as const;
-
-export const cpuWeightArg = {
-  type: 'string',
-  description: 'share of the host under contention, 1 to 10000 (default 100)',
-} as const;
-
-interface CpuArgs {
-  readonly 'cpu-limit'?: string | undefined;
-  readonly 'cpu-weight'?: string | undefined;
-}
-
-export function readCpuArgs(args: CpuArgs) {
-  return {
-    ...(args['cpu-limit'] !== undefined && { cpuLimit: parseCpuLimit(args['cpu-limit']) }),
-    ...(args['cpu-weight'] !== undefined && { cpuWeight: parseCpuWeight(args['cpu-weight']) }),
-  };
-}
 
 export const setCommand = defineCommand({
   name: 'set',

@@ -1,17 +1,17 @@
 import { ApprovalCodeSchema, GrantPatternSchema, RedirectUriSchema, ScopeSchema } from '@impz/api';
 import type { Scope } from '@impz/api';
-import type { ImpClient } from '../create-imp-client';
-import { defineCommand, defineGroup } from '../define-command';
-import { UsageError } from '../errors';
+import { jsonArg } from '../args/common-args';
+import { defineCommand, defineGroup } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import type { ImpClient } from '../config/create-imp-client';
 import {
   formatOAuthApproval,
   formatOAuthClients,
   formatOAuthGrants,
   formatOutput,
-} from '../format-output';
-import { readConfirmation } from '../read-confirmation';
-import { runAction } from '../run-action';
-import { jsonArg } from './common-args';
+} from '../output/format-output';
+import { readConfirmation } from '../prompts/read-confirmation';
 
 // The public MCP route's clients, grants and sign-in approvals
 // (docs/guides/mcp.md#public-route)

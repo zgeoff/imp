@@ -19,7 +19,7 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
-import { UsageError } from '../errors';
+import { UsageError } from '../cli/errors';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startWarmMoveHosts } from '../test-utils/start-warm-move-hosts';

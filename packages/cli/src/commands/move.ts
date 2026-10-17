@@ -1,14 +1,14 @@
 import type { MovePlan, MoveStatus, WarmHost } from '@impz/api';
-import { loadCliConfig } from '../cli-config';
-import { toProgressOutput } from '../command-io';
+import { nameArg } from '../args/common-args';
+import { toProgressOutput } from '../cli/command-io';
+import { defineCommand } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import { loadCliConfig } from '../config/cli-config';
+import { createImpClient } from '../config/create-imp-client';
+import type { ImpClient } from '../config/create-imp-client';
 import { createCopyProgress } from '../cp/copy-progress';
 import type { ProgressOutput } from '../cp/copy-progress';
-import { createImpClient } from '../create-imp-client';
-import type { ImpClient } from '../create-imp-client';
-import { defineCommand } from '../define-command';
-import { UsageError } from '../errors';
-import { runAction } from '../run-action';
-import { nameArg } from './common-args';
 
 // how often `impz move` asks the source how far the send is
 const POLL_MS = 1000;

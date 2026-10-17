@@ -10,7 +10,7 @@ import { buildMockNewImp } from '@impz/daemon/src/test-utils/build-mock-new-imp'
 import { startStubInnerAgent } from '@impz/daemon/src/test-utils/start-stub-inner-agent';
 import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
-import { writeHostConfig } from '../host-store';
+import { writeHostConfig } from '../config/host-store';
 import { buildStubTimeouts } from '../test-utils/build-stub-timeouts';
 import { parseJsonOutput } from '../test-utils/parse-json-output';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';

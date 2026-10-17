@@ -65,7 +65,7 @@
     },
     {
       // the cli keeps every error that main.ts maps to an exit code in one module
-      "files": ["packages/cli/src/errors.ts"],
+      "files": ["packages/cli/src/cli/errors.ts"],
       "rules": { "max-classes-per-file": "off" }
     },
     {
