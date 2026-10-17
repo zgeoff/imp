@@ -26,7 +26,7 @@ export interface SessionLogReadRequest {
 // a live log's meta as its writer holds it, or null to read the file
 export type LiveMetaReader = (generation: string) => GenerationMeta | null;
 
-const GENERATION_PATTERN = /^[0-9a-f]{32}$/;
+const GENERATION_PATTERN = /^[0-9a-f]{32}$/u;
 const TOMBSTONES = '.deleted';
 
 function isGenerationName(name: string): boolean {

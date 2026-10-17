@@ -42,7 +42,7 @@ export function readSession(value: string, rootToken: string, nowMs: number): Se
     return null;
   }
 
-  if (!/^\d+$/.test(expiry) || Number(expiry) <= nowMs) {
+  if (!/^\d+$/u.test(expiry) || Number(expiry) <= nowMs) {
     return null;
   }
 

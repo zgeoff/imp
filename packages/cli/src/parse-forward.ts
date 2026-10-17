@@ -10,7 +10,7 @@ export interface Forward {
 const MAX_PORT = 65_535;
 
 export function parseForward(spec: string): Forward {
-  const match = /^(?:(?<local>\d+):)?(?<remote>\d+)$/.exec(spec);
+  const match = /^(?:(?<local>\d+):)?(?<remote>\d+)$/u.exec(spec);
   const remote = Number(match?.groups?.['remote']);
   const localText = match?.groups?.['local'];
   const local = localText === undefined ? remote : Number(localText);

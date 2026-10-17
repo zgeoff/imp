@@ -48,7 +48,7 @@ function readRepeated(value: string | readonly string[] | undefined): string[] {
   const values = typeof value === 'string' ? [value] : [...(value ?? [])];
 
   for (const entry of values) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(entry)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/u.test(entry)) {
       throw new UsageError(`--env ${entry}: want KEY=VALUE`);
     }
   }

@@ -10,7 +10,7 @@ test('it creates a default session of a fresh token id that lasts 30 days', asyn
   const latest = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
   expect(session).toStrictEqual({
-    tokenId: expect.toSatisfy((value: string) => /^[\w-]{16}$/.test(value)),
+    tokenId: expect.toSatisfy((value: string) => /^[\w-]{16}$/u.test(value)),
     expiresAt: expect.toBeBetween(earliest, latest),
   });
 });

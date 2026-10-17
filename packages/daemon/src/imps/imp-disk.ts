@@ -24,8 +24,8 @@ export function growDiskFile(disk: string, diskBytes: number): number {
 export async function growFilesystem(disk: string): Promise<boolean> {
   const header = await runChecked(['dumpe2fs', '-h', disk]);
 
-  const state = /^Filesystem state:\s+(?<state>.+)$/m.exec(header)?.groups?.['state']?.trim();
-  const features = /^Filesystem features:\s+(?<features>.+)$/m.exec(header)?.groups?.['features'];
+  const state = /^Filesystem state:\s+(?<state>.+)$/mu.exec(header)?.groups?.['state']?.trim();
+  const features = /^Filesystem features:\s+(?<features>.+)$/mu.exec(header)?.groups?.['features'];
 
   if (state !== 'clean' || features === undefined || features.includes('needs_recovery')) {
     return false;

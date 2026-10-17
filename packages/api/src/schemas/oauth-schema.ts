@@ -30,7 +30,7 @@ export const RedirectUrisSchema = z
 export const GrantPatternSchema = z
   .string()
   .regex(
-    /^(?:\*|[a-z][a-z0-9-]{0,30}|[a-z][a-z0-9-]{0,29}\*)$/,
+    /^(?:\*|[a-z][a-z0-9-]{0,30}|[a-z][a-z0-9-]{0,29}\*)$/u,
     'must be an imp name, or a name prefix and a trailing *, such as dev-*',
   );
 
@@ -41,7 +41,7 @@ export const ApprovalCodeSchema = z
   .trim()
   .transform((code) => code.toUpperCase().replaceAll('-', ''))
   .pipe(
-    z.string().regex(/^[A-HJ-NP-Z2-9]{8}$/, 'must be the 8-symbol code the sign-in page shows'),
+    z.string().regex(/^[A-HJ-NP-Z2-9]{8}$/u, 'must be the 8-symbol code the sign-in page shows'),
   );
 
 export const OAuthClientSchema = z.object({

@@ -63,7 +63,7 @@ test('it runs exec --agent as root outside the container and reports it as an Ag
     stderr: expect.toBeString(),
   });
 
-  expect(cgroup.trim()).toMatch(/^0::\/outer\/\d+$/);
+  expect(cgroup.trim()).toMatch(/^0::\/outer\/\d+$/u);
   expect(container.trim()).not.toContain('outer');
 });
 
@@ -149,7 +149,7 @@ test('it lets a memory hog outside the container meet the OOM killer in its 32 M
 
   const answered = await tryImp(['exec', name, '--', 'true']);
 
-  const kills = Number(/^oom_kill (?<count>\d+)$/m.exec(events)?.groups?.['count']);
+  const kills = Number(/^oom_kill (?<count>\d+)$/mu.exec(events)?.groups?.['count']);
 
   expect(hog.exitCode).toBe(137);
   expect(kills).toBeGreaterThan(0);

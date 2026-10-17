@@ -67,11 +67,11 @@ function listKnownKeys(args: ArgsDef): Set<string> {
 }
 
 function toCamelCase(name: string): string {
-  return name.replaceAll(/-(?<letter>[a-z0-9])/g, (_, letter: string) => letter.toUpperCase());
+  return name.replaceAll(/-(?<letter>[a-z0-9])/gu, (_, letter: string) => letter.toUpperCase());
 }
 
 function toKebabCase(name: string): string {
-  return name.replaceAll(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+  return name.replaceAll(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
 }
 
 function readHost(args: Readonly<Record<string, unknown>>): string | null {

@@ -12,10 +12,10 @@ export function deriveImageName(ref: string): string {
 
   const name = repository
     .toLowerCase()
-    .replaceAll(/[^a-z0-9-]+/g, '-')
-    .replace(/^[^a-z]+/, '')
+    .replaceAll(/[^a-z0-9-]+/gu, '-')
+    .replace(/^[^a-z]+/u, '')
     .slice(0, MAX_NAME_LENGTH)
-    .replace(/-+$/, '');
+    .replace(/-+$/u, '');
 
   if (!NameSchema.safeParse(name).success) {
     throw new Error(`cannot derive an image name from ${ref}; pass a name`);

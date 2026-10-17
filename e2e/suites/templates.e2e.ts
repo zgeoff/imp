@@ -86,11 +86,11 @@ test('it copies a running imp into a template whose copies each get their own id
   const secondIdentity = await readGuestIdentity(second);
   const marker = await readGuestFile(first, '/home/dev/marker');
 
-  expect(firstIdentity.machineId).toMatch(/^[\da-f]{32}$/);
+  expect(firstIdentity.machineId).toMatch(/^[\da-f]{32}$/u);
   expect(firstIdentity.machineId).not.toBe(sourceId);
   expect(firstIdentity.hostKey).toStartWith('SHA256:');
   expect(firstIdentity.hostKey).not.toBe(sourceIdentity.hostKey);
-  expect(secondIdentity.machineId).toMatch(/^[\da-f]{32}$/);
+  expect(secondIdentity.machineId).toMatch(/^[\da-f]{32}$/u);
   expect(secondIdentity.machineId).not.toBe(sourceId);
   expect(secondIdentity.hostKey).toStartWith('SHA256:');
   expect(secondIdentity.hostKey).not.toBe(sourceIdentity.hostKey);

@@ -19,7 +19,7 @@ const CURSOR_KEYS = 1;
 
 // a CSI sequence (prefix, parameters, final byte), or RIS, a full reset
 // oxlint-disable-next-line no-control-regex -- terminal sequences start with ESC
-const SEQUENCE = /\u001B\[(?<prefix>[<=>?]?)(?<params>[\d:;]*)(?<final>[@-~])|\u001Bc/g;
+const SEQUENCE = /\u001B\[(?<prefix>[<=>?]?)(?<params>[\d:;]*)(?<final>[@-~])|\u001Bc/gu;
 
 // a sequence cut off at the end of a chunk is kept for the next one
 const MAX_CARRY = 32;

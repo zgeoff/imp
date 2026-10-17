@@ -61,7 +61,7 @@ test.each([
         prelude: 0,
       },
     }),
-  ).toThrowWithMessage(Error, /^imp\.agent\.v1\.Output\.offset: /);
+  ).toThrowWithMessage(Error, /^imp\.agent\.v1\.Output\.offset: /u);
 });
 
 test('it throws for a bad count in a list of messages', () => {
@@ -86,7 +86,7 @@ test('it throws for a bad count in a list of messages', () => {
         },
       ],
     }),
-  ).toThrowWithMessage(Error, /^imp\.agent\.v1\.SessionInfo\.end: /);
+  ).toThrowWithMessage(Error, /^imp\.agent\.v1\.SessionInfo\.end: /u);
 });
 
 test('it reads a load average that is a fraction', () => {
@@ -98,5 +98,5 @@ test('it reads a load average that is a fraction', () => {
 test('it throws for a load average that is not finite', () => {
   expect(() =>
     decodeAgentMessage(ActivitySchema, { tcp_established: 0, exec_sessions: 0, load1: 'NaN' }),
-  ).toThrowWithMessage(Error, /^imp\.agent\.v1\.Activity\.load1: /);
+  ).toThrowWithMessage(Error, /^imp\.agent\.v1\.Activity\.load1: /u);
 });

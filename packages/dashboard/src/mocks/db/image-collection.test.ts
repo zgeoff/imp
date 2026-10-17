@@ -7,9 +7,9 @@ test('it creates a default image', async () => {
 
   expect(image).toStrictEqual({
     id: expect.toBeString(),
-    name: expect.toSatisfy((value: string) => /^[a-z]{6}$/.test(value)),
-    ref: expect.toSatisfy((value: string) => /^docker\.io\/library\/[a-z]{6}:latest$/.test(value)),
-    digest: expect.toSatisfy((value: string) => /^sha256:[0-9a-f]{64}$/.test(value)),
+    name: expect.toSatisfy((value: string) => /^[a-z]{6}$/u.test(value)),
+    ref: expect.toSatisfy((value: string) => /^docker\.io\/library\/[a-z]{6}:latest$/u.test(value)),
+    digest: expect.toSatisfy((value: string) => /^sha256:[0-9a-f]{64}$/u.test(value)),
     source: 'oci',
     createdAt: expect.toBeValidDate(),
     sizeBytes: expect.toSatisfy((bytes: number) => bytes > 0 && bytes % (1024 * 1024) === 0),

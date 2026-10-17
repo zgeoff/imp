@@ -8,8 +8,8 @@ test('it builds a default oauth config', () => {
   const received: unknown = config;
 
   expect(received).toStrictEqual({
-    tokenUrl: expect.stringMatching(/^https:\/\/[a-z0-9.-]+\/oauth\/token$/) as unknown,
-    clientId: expect.stringMatching(/^[A-Za-z0-9]{16}$/) as unknown,
+    tokenUrl: expect.stringMatching(/^https:\/\/[a-z0-9.-]+\/oauth\/token$/u) as unknown,
+    clientId: expect.stringMatching(/^[A-Za-z0-9]{16}$/u) as unknown,
     tokenFormat: 'form',
   });
 
@@ -24,7 +24,7 @@ test('it applies overrides on top of the defaults', () => {
 
   expect(config).toStrictEqual({
     tokenUrl: 'https://auth.example.com/oauth/token',
-    clientId: expect.stringMatching(/^[A-Za-z0-9]{16}$/) as unknown,
+    clientId: expect.stringMatching(/^[A-Za-z0-9]{16}$/u) as unknown,
     tokenFormat: 'json',
   });
 });

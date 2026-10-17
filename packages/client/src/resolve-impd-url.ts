@@ -3,7 +3,7 @@
 export function resolveImpdUrl(base: string, path: string): URL {
   const url = new URL(base);
 
-  url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`;
+  url.pathname = `${url.pathname.replace(/\/+$/u, '')}${path}`;
 
   return url;
 }

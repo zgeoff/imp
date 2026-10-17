@@ -23,7 +23,7 @@ export interface ParsedAuthorizedKeys {
 // A key line starts with its type. Anything else starts with options
 // (`from=`, `command=`, `restrict`...), which the gateway does not enforce,
 // so it refuses the line rather than grant more than it says.
-const KEY_TYPE = /^(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521))$/;
+const KEY_TYPE = /^(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521))$/u;
 
 export function parseAuthorizedKeys(text: string): ParsedAuthorizedKeys {
   const keys: AuthorizedKey[] = [];
@@ -51,10 +51,10 @@ export function parseAuthorizedKeys(text: string): ParsedAuthorizedKeys {
 
 // one key line, or why it grants nothing
 export function parsePublicKey(line: string): AuthorizedKey | string {
-  const [type = '', data = '', ...rest] = line.trim().split(/\s+/);
+  const [type = '', data = '', ...rest] = line.trim().split(/\s+/u);
 
   if (!KEY_TYPE.test(type)) {
-    return /^(?:sk-|ssh-dss)/.test(type)
+    return /^(?:sk-|ssh-dss)/u.test(type)
       ? `${type} keys are not supported`
       : 'options are not supported; put the key type first';
   }
@@ -77,7 +77,7 @@ export function parsePublicKey(line: string): AuthorizedKey | string {
 export function formatKeyFingerprint(blob: Buffer): string {
   const digest = createHash('sha256').update(blob).digest('base64');
 
-  return `SHA256:${digest.replace(/=+$/, '')}`;
+  return `SHA256:${digest.replace(/=+$/u, '')}`;
 }
 
 export interface AuthorizedKeys {

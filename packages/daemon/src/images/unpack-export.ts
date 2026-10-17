@@ -66,7 +66,7 @@ export function assertUnpacked(result: CommandResult): void {
 
 // GNU tar 1.35's warning for an attribute it could not set
 const XATTR_FAILURE =
-  /Cannot set '(?<name>[^']+)' extended attribute for file '.*': (?<reason>[^:]+)$/;
+  /Cannot set '(?<name>[^']+)' extended attribute for file '.*': (?<reason>[^:]+)$/u;
 
 interface XattrFailure {
   readonly line: string;
@@ -100,7 +100,7 @@ function findXattrFailure(stderr: string): XattrFailure | null {
 export function readSetfcapWarning(
   status: string = readFileSync('/proc/self/status', 'utf8'),
 ): string | null {
-  const effective = /^CapEff:\s*(?<mask>[0-9a-f]+)$/m.exec(status)?.groups?.['mask'] ?? '0';
+  const effective = /^CapEff:\s*(?<mask>[0-9a-f]+)$/mu.exec(status)?.groups?.['mask'] ?? '0';
 
   if ((BigInt(`0x${effective}`) >> CAP_SETFCAP_BIT) & 1n) {
     return null;

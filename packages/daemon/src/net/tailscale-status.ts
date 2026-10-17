@@ -39,7 +39,7 @@ export function parseTailscaleStatus(json: string): TailscaleStatus {
   try {
     const status = StatusSchema.parse(JSON.parse(json));
     const ips = status.Self?.TailscaleIPs ?? [];
-    const dnsName = status.Self?.DNSName?.replace(/\.$/, '') ?? '';
+    const dnsName = status.Self?.DNSName?.replace(/\.$/u, '') ?? '';
     const dnsLabel = dnsName.split('.')[0] ?? '';
 
     return {

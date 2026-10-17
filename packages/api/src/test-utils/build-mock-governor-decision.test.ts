@@ -11,7 +11,7 @@ test('it builds a default governor decision', () => {
     at: expect.toBeValidDate() as unknown,
     ev: 'GovernorDecision',
     decision: 'admitted',
-    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+    name: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     trigger: 'admission',
     usedMib: expect.toBeWithin(0, decision.budgetMib + 1) as unknown,
     budgetMib: expect.toBeWithin(1024, 65_537) as unknown,

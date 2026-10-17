@@ -176,7 +176,7 @@ test('#buildStubVmm rejects a failed boot with a fake error', async () => {
     jail: null,
   });
 
-  expect(booting).rejects.toThrowWithMessage(StubVmError, /^boot failed/);
+  expect(booting).rejects.toThrowWithMessage(StubVmError, /^boot failed/u);
 });
 
 test('#buildStubVmm returns the pid of a VM that is already gone when a boot dies', async () => {
@@ -627,7 +627,7 @@ test('#buildStubVmm rejects a failed stop as a VM that survived SIGKILL', async 
 
   expect(ctx.runner.stopVm(pid, ctx.paths, false)).rejects.toThrowWithMessage(
     StubVmError,
-    /survived SIGKILL/,
+    /survived SIGKILL/u,
   );
 });
 
@@ -667,7 +667,7 @@ test('#buildStubVmm rejects a grow that dies as an agent from before grow', asyn
 
   expect(ctx.runner.growDrive(ctx.paths, 4_294_967_296)).rejects.toThrowWithMessage(
     AgentError,
-    /no online disk grow/,
+    /no online disk grow/u,
   );
 });
 
@@ -724,7 +724,7 @@ test('#buildStubVmm rejects finishing a wake when the agent step fails', async (
 
   expect(ctx.runner.finishWake(ctx.paths)).rejects.toThrowWithMessage(
     StubVmError,
-    /did not answer/,
+    /did not answer/u,
   );
 });
 

@@ -48,7 +48,7 @@ export function createPeerRanges(testCidr: string | null): PeerRanges {
 // The literal address a peer URL names. A name is refused: a lookup could
 // send the bytes off the tailnet.
 export function readPeerUrlAddress(url: string): string | null {
-  const host = new URL(url).hostname.replaceAll(/^\[|\]$/g, '');
+  const host = new URL(url).hostname.replaceAll(/^\[|\]$/gu, '');
 
   return isIP(host) === 0 ? null : host;
 }

@@ -8,12 +8,12 @@ const LETS_ENCRYPT_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
 // and the bare domain hang off
 const DomainSchema = z
   .string()
-  .transform((value) => value.toLowerCase().replace(/\.$/, ''))
+  .transform((value) => value.toLowerCase().replace(/\.$/u, ''))
   .pipe(
     z
       .string()
       .regex(
-        /^(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/,
+        /^(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/u,
         'IMP_DOMAIN must be a domain name such as imp.example.com',
       ),
   );

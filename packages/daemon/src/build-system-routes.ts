@@ -154,7 +154,7 @@ function readKsmInfo(
 
 // imp-20261004-061233: a name's form, in UTC, to the second
 function buildCopyName(now: number): string {
-  const stamp = new Date(now).toISOString().slice(0, 19).replaceAll(/[-:]/g, '').replace('T', '-');
+  const stamp = new Date(now).toISOString().slice(0, 19).replaceAll(/[-:]/gu, '').replace('T', '-');
 
   return `imp-${stamp}`;
 }

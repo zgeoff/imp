@@ -16,7 +16,7 @@ export const UNKNOWN_CPU = 'unknown';
 // The first processor's model and flags; arm64 names them `CPU part` and
 // `Features`. A CPU it cannot read is `unknown`: a move refuses it.
 export function parseCpuInfo(text: string): CpuIdentity {
-  const first = text.split(/\n\s*\n/)[0] ?? '';
+  const first = text.split(/\n\s*\n/u)[0] ?? '';
 
   const fields = new Map<string, string>();
 
@@ -35,7 +35,7 @@ export function parseCpuInfo(text: string): CpuIdentity {
     return { cpuModel: model, cpuFlags: UNKNOWN_CPU };
   }
 
-  const sorted = flags.split(/\s+/).filter(Boolean).toSorted().join(' ');
+  const sorted = flags.split(/\s+/u).filter(Boolean).toSorted().join(' ');
 
   return { cpuModel: model, cpuFlags: createHash('sha256').update(sorted).digest('hex') };
 }

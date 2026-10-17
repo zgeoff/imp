@@ -113,7 +113,7 @@ test('it throws when a value file cannot be read for another reason than its abs
 
   mkdirSync(join(ctx.dir, 'secrets', 'github'));
 
-  expect(() => files.read('github')).toThrowWithMessage(Error, /EISDIR/);
+  expect(() => files.read('github')).toThrowWithMessage(Error, /EISDIR/u);
 });
 
 test('it removes a value file', async () => {
@@ -257,7 +257,7 @@ test('it throws when the orphans directory cannot be checked', async () => {
 
   expect(() =>
     files.keepOrphansExcept(new Set(), new Date('2026-10-04T05:30:00.000Z')),
-  ).toThrowWithMessage(Error, /ENOTDIR/);
+  ).toThrowWithMessage(Error, /ENOTDIR/u);
 });
 
 test('it lists no kept directory before any', async () => {
@@ -329,7 +329,7 @@ test('it throws when the kept directories cannot be checked', async () => {
   rmSync(join(ctx.dir, 'secrets'), { recursive: true });
   writeFileSync(join(ctx.dir, 'secrets'), '');
 
-  expect(() => files.listKept()).toThrowWithMessage(Error, /ENOTDIR/);
+  expect(() => files.listKept()).toThrowWithMessage(Error, /ENOTDIR/u);
 });
 
 test('it removes a kept directory by name', async () => {
@@ -381,7 +381,7 @@ test('it throws and leaves no temp file when a rewrite cannot rename into place'
 
   expect(() => {
     files.rewrite('codex.a1', 'new');
-  }).toThrowWithMessage(Error, /EISDIR/);
+  }).toThrowWithMessage(Error, /EISDIR/u);
 
   expect(readdirSync(join(ctx.dir, 'secrets'))).toStrictEqual(['codex.a1']);
   expect(readdirSync(join(ctx.dir, 'secrets', 'codex.a1'))).toStrictEqual(['keep']);

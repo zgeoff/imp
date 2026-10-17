@@ -45,7 +45,7 @@ test('it lists the checkpoints of the imp', async () => {
 
   const rendered = renderApp('/imps/web');
 
-  const row = await rendered.findByRole('row', { name: /before-upgrade/ });
+  const row = await rendered.findByRole('row', { name: /before-upgrade/u });
 
   expect(row).toBeInTheDocument();
 });
@@ -63,7 +63,7 @@ test('it takes a checkpoint with a label', async () => {
 
   await user.type(field, 'v2');
   await user.click(rendered.getByRole('button', { name: 'Checkpoint now' }));
-  await rendered.findByRole('row', { name: /v2/ });
+  await rendered.findByRole('row', { name: /v2/u });
 
   expect(checkpointCollection.findMany().map((checkpoint) => checkpoint.label)).toStrictEqual([
     'v2',
@@ -89,7 +89,7 @@ test('it restores the named checkpoint after a confirm', async () => {
 
   const rendered = renderApp('/imps/web');
 
-  const row = await rendered.findByRole('row', { name: /before-upgrade/ });
+  const row = await rendered.findByRole('row', { name: /before-upgrade/u });
 
   await user.click(within(row).getByRole('button', { name: 'Restore' }));
 
@@ -121,7 +121,7 @@ test('it opens the new imp after a fork from a checkpoint', async () => {
 
   const rendered = renderApp('/imps/web');
 
-  const row = await rendered.findByRole('row', { name: /before-upgrade/ });
+  const row = await rendered.findByRole('row', { name: /before-upgrade/u });
 
   await user.click(within(row).getByRole('button', { name: 'Fork' }));
 

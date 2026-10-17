@@ -66,14 +66,14 @@ const MAX_RECLAIM_STEPS = 1000;
 // zfs's refusal of a dataset a task still holds, such as
 // `cannot destroy 'tank/imp/a': dataset is busy`
 const BUSY_DATASET = /'(?<name>[^']+)': dataset is busy/v;
-const CHECKPOINT_SNAPSHOT = /@cp-[^@]+$/;
-const FORK_SNAPSHOT = /@fork-[^@]+$/;
+const CHECKPOINT_SNAPSHOT = /@cp-[^@]+$/u;
+const FORK_SNAPSHOT = /@fork-[^@]+$/u;
 
 // `@bk-<run>-<imp>`: a backup run's copy of a disk, gone once the run ends
-const BACKUP_SNAPSHOT = /@bk-[^@]+$/;
+const BACKUP_SNAPSHOT = /@bk-[^@]+$/u;
 
 // `@mv-<move>`: a move's copy of a stopped disk, gone once the move ends
-const MOVE_SNAPSHOT = /@mv-[^@]+$/;
+const MOVE_SNAPSHOT = /@mv-[^@]+$/u;
 
 // what removeLeftovers removes, in this order, and the orphans it keeps
 interface LeftoverPlan {

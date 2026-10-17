@@ -15,8 +15,8 @@ test('it builds a default token record', () => {
     createdAt: expect.toBeValidDate(),
   });
 
-  expect(record.id).toMatch(/^\w{16}$/);
-  expect(record.secretHash).toMatch(/^[0-9a-f]{64}$/);
+  expect(record.id).toMatch(/^\w{16}$/u);
+  expect(record.secretHash).toMatch(/^[0-9a-f]{64}$/u);
 });
 
 test('it applies overrides on top of the defaults', () => {

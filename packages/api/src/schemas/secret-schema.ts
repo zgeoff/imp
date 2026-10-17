@@ -8,7 +8,7 @@ export const SecretNameSchema = NameSchema;
 
 // Printable ASCII without spaces: every API token is, and a value with CR or
 // LF could split the header impd sets from it.
-const PrintableSchema = z.string().regex(/^[!-~]+$/, 'must be printable ASCII without spaces');
+const PrintableSchema = z.string().regex(/^[!-~]+$/u, 'must be printable ASCII without spaces');
 
 export const SecretValueSchema = PrintableSchema.min(1).max(8192);
 
@@ -18,7 +18,7 @@ export const BrokerHostSchema = z
   .string()
   .max(253)
   .regex(
-    /^(?:[a-z0-9][a-z0-9-]{0,62}\.)+[a-z][a-z0-9-]{0,62}$/,
+    /^(?:[a-z0-9][a-z0-9-]{0,62}\.)+[a-z][a-z0-9-]{0,62}$/u,
     'must be a lowercase hostname such as api.example.com',
   );
 
@@ -65,7 +65,7 @@ export const BrokerRuleSchema = z.object({
   host: BrokerHostSchema,
   header: z
     .string()
-    .regex(/^[a-z0-9-]{1,64}$/, 'must be a lowercase header name such as authorization'),
+    .regex(/^[a-z0-9-]{1,64}$/u, 'must be a lowercase header name such as authorization'),
   scheme: z.enum(['bearer', 'basic', 'raw']),
   user: BasicUserSchema.optional(),
   upstream: BrokerUpstreamSchema.optional(),
@@ -84,7 +84,7 @@ export type SecretKind = z.infer<typeof SecretKindSchema>;
 // (https only) and the client the refresh token was issued to. `form` sends
 // application/x-www-form-urlencoded, `json` a JSON body.
 export const OAuthConfigSchema = z.object({
-  tokenUrl: z.url({ protocol: /^https$/ }).max(2048),
+  tokenUrl: z.url({ protocol: /^https$/u }).max(2048),
   clientId: PrintableSchema.min(1).max(256),
   tokenFormat: z.enum(['json', 'form']).default('form'),
 });
@@ -128,7 +128,7 @@ export type SecretAdded = z.infer<typeof SecretAddedSchema>;
 // An HTTP method as a request line names it: an uppercase token such as GET
 const GrantMethodSchema = z
   .string()
-  .regex(/^[A-Z]{1,16}$/, 'must be an uppercase method such as GET');
+  .regex(/^[A-Z]{1,16}$/u, 'must be an uppercase method such as GET');
 
 // Matched segment by segment: `*` is any one non-empty segment, a last `**`
 // the rest of the path, none included. No `%`: a pattern names a path only as
@@ -137,7 +137,7 @@ const GrantPathSchema = z
   .string()
   .max(512)
   .regex(
-    /^(?:\/(?:\*|[A-Za-z0-9._~!$&'()+,;=:@-]*))*(?:\/\*\*)?$/,
+    /^(?:\/(?:\*|[A-Za-z0-9._~!$&'()+,;=:@-]*))*(?:\/\*\*)?$/u,
     'must be a path such as /v1/messages, with * for one segment and a last /** for the rest',
   )
   .refine((path) => path.startsWith('/'), 'must start with /');

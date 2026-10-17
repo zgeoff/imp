@@ -3,7 +3,7 @@
 export function buildWebSocketUrl(base: string, path: string): string {
   const url = new URL(base);
 
-  url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`;
+  url.pathname = `${url.pathname.replace(/\/+$/u, '')}${path}`;
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 
   return url.toString();

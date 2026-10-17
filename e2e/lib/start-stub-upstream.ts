@@ -57,7 +57,7 @@ export interface StubUpstream {
   readonly stop: () => Promise<void>;
 }
 
-const CGI_HEADER_END = /\r?\n\r?\n/;
+const CGI_HEADER_END = /\r?\n\r?\n/u;
 
 export async function startStubUpstream(address: string, token: string): Promise<StubUpstream> {
   const dir = mkdtempSync(join(tmpdir(), 'imp-e2e-upstream-'));
@@ -305,7 +305,7 @@ function parseCgiOutput(output: Uint8Array): Response {
 
   let status = 200;
 
-  for (const line of text.slice(0, headEnd).split(/\r?\n/)) {
+  for (const line of text.slice(0, headEnd).split(/\r?\n/u)) {
     const at = line.indexOf(':');
     const name = line.slice(0, at).trim();
     const value = line.slice(at + 1).trim();

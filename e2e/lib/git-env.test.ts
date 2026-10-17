@@ -64,5 +64,5 @@ test('#runGitChecked rejects on a non-zero exit', async () => {
 
   await Promise.allSettled([attempt]);
 
-  expect(attempt).rejects.toThrow(/^git -C .* rev-parse main exited 128: /);
+  expect(attempt).rejects.toThrow(/^git -C .* rev-parse main exited 128: /u);
 });

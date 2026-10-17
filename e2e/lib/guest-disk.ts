@@ -2,7 +2,7 @@
 // filesystem. Throws on output that holds no such number.
 export function parseDfSizeKib(stdout: string): number {
   const last = stdout.trim().split('\n').at(-1) ?? '';
-  const sizeKib = Number(last.split(/\s+/)[1]);
+  const sizeKib = Number(last.split(/\s+/u)[1]);
 
   if (!Number.isInteger(sizeKib)) {
     throw new TypeError(`no size in df output: ${JSON.stringify(stdout)}`);

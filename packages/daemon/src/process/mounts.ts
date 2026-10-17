@@ -51,7 +51,7 @@ export function parseMountInfo(mountInfo: string): MountInfoEntry[] {
 }
 
 function decodeMountField(field: string): string {
-  return field.replaceAll(/\\(?<octal>[0-7]{3})/g, (_match, octal: string) =>
+  return field.replaceAll(/\\(?<octal>[0-7]{3})/gu, (_match, octal: string) =>
     String.fromCodePoint(Number.parseInt(octal, 8)),
   );
 }

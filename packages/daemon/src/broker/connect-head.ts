@@ -58,7 +58,7 @@ export function parseConnectHead(head: string): ConnectHead {
     };
   }
 
-  const match = /^(?:\[(?<v6>[0-9a-f:.]+)\]|(?<name>[a-z0-9.-]{1,253})):(?<port>\d{1,5})$/i.exec(
+  const match = /^(?:\[(?<v6>[0-9a-f:.]+)\]|(?<name>[a-z0-9.-]{1,253})):(?<port>\d{1,5})$/iu.exec(
     target,
   );
 
@@ -81,5 +81,5 @@ export function parseConnectHead(head: string): ConnectHead {
 // a method as RFC 9110 spells one, at most 16 characters; anything else the
 // guest sent is not kept
 function buildAuditMethod(method: string): string | null {
-  return /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,16}$/.test(method) ? method : null;
+  return /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,16}$/u.test(method) ? method : null;
 }

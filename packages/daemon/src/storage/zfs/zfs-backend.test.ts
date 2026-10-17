@@ -405,7 +405,7 @@ test('#createImage builds and snapshots an image in staging, then renames and mo
 
   const staged = written.mounted ?? '';
 
-  expect(staged).toMatch(/^tank\/imp\/staging\/image-/);
+  expect(staged).toMatch(/^tank\/imp\/staging\/image-/u);
 
   expect(changes).toStrictEqual([
     `zfs create ${staged}`,
@@ -646,7 +646,7 @@ test('#restoreCheckpoint remounts the old disk when the swap fails to retire it'
   ctx.fake.failOnce((command) => command.startsWith('zfs rename tank/imp/disks/a '));
 
   expect(ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve())).rejects.toThrow(
-    /^zfs rename tank\/imp\/disks\/a tank\/imp\/retired\/\S+ exited 1: /,
+    /^zfs rename tank\/imp\/disks\/a tank\/imp\/retired\/\S+ exited 1: /u,
   );
 
   expect(ctx.fake.readOrigin('tank/imp/disks/a')).toBe('tank/imp/images/9f2c@base');
@@ -665,7 +665,7 @@ test('#restoreCheckpoint finishes the swap when its last rename fails', async ()
   ctx.fake.failOnce((command) => command.startsWith('zfs rename tank/imp/staging/restore-a'));
 
   expect(ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve())).rejects.toThrow(
-    /^zfs rename tank\/imp\/staging\/restore-a tank\/imp\/disks\/a exited 1: /,
+    /^zfs rename tank\/imp\/staging\/restore-a tank\/imp\/disks\/a exited 1: /u,
   );
 
   expect(ctx.fake.readOrigin('tank/imp/disks/a')).toEndWith('@cp-one');
@@ -673,10 +673,10 @@ test('#restoreCheckpoint finishes the swap when its last rename fails', async ()
 });
 
 test.each([
-  ['umount', /^umount /, false],
-  ['retire', /^zfs rename tank\/imp\/disks\/a /, false],
-  ['rename', /^zfs rename tank\/imp\/staging\/restore-a /, true],
-  ['mount', /^mount -t zfs tank\/imp\/disks\/a /, true],
+  ['umount', /^umount /u, false],
+  ['retire', /^zfs rename tank\/imp\/disks\/a /u, false],
+  ['rename', /^zfs rename tank\/imp\/staging\/restore-a /u, true],
+  ['mount', /^mount -t zfs tank\/imp\/disks\/a /u, true],
 ])(
   '#start settles a restore that a crash cut short before its %s (restored: %p)',
   async (_step, before, isRestored) => {
@@ -833,7 +833,7 @@ test('#createImpDisk forks a live disk from a fork snapshot marked for deferred 
 
   invariant(forkSnapshot);
 
-  expect(forkSnapshot).toMatch(/^tank\/imp\/disks\/a@fork-/);
+  expect(forkSnapshot).toMatch(/^tank\/imp\/disks\/a@fork-/u);
   expect(ctx.fake.isDeferred(forkSnapshot)).toBeTrue();
 });
 
@@ -978,7 +978,7 @@ test('#createImageFromImp clones the live disk under hold and writes it in stagi
   expect(held).toStrictEqual(['hold', 'release', 'write staging']);
 
   expect(ctx.fake.readOrigin('tank/imp/images/imp-0199a3b4-0000-7000-8000-000000000001')).toMatch(
-    /^tank\/imp\/disks\/a@fork-/,
+    /^tank\/imp\/disks\/a@fork-/u,
   );
 
   expect(
@@ -1272,7 +1272,7 @@ test('#start after a lost database keeps every disk, image and checkpoint, and l
   expect(ctx.fake.listSnapshots()).toSatisfyAll((name: string) => !ctx.fake.isDeferred(name));
 
   expect(
-    ctx.fake.listDatasets().filter((name) => /\/(?:disks|images|staging)\//.test(name)),
+    ctx.fake.listDatasets().filter((name) => /\/(?:disks|images|staging)\//u.test(name)),
   ).toStrictEqual([
     'tank/imp/disks/a',
     'tank/imp/disks/b',
@@ -1301,7 +1301,7 @@ test('#start after a lost database keeps every disk, image and checkpoint, and l
       .map(([line]) => line)
       .filter((line) => line.startsWith('impd: storage:'))
       .map((line) =>
-        line.replace(/(?<dir>\(\/[^)]*\): \S+ MiB, )created \S+Z/, '$<dir>created <birth>'),
+        line.replace(/(?<dir>\(\/[^)]*\): \S+ MiB, )created \S+Z/u, '$<dir>created <birth>'),
       ),
   ).toStrictEqual([
     'impd: storage: removed imp done',
@@ -1494,9 +1494,9 @@ test('#dropUnnamed with orphans retires every orphan of a lost database', async 
 
   expect(ctx.fake.listSnapshots()).toStrictEqual([]);
 
-  expect(ctx.fake.listDatasets().filter((name) => /\/(?:disks|images)\//.test(name))).toStrictEqual(
-    [],
-  );
+  expect(
+    ctx.fake.listDatasets().filter((name) => /\/(?:disks|images)\//u.test(name)),
+  ).toStrictEqual([]);
 
   expect(readdirSync(join(ctx.dataDir, 'mem'))).toStrictEqual([]);
   expect(readdirSync(join(ctx.dataDir, 'imps'))).toStrictEqual([]);
@@ -1695,8 +1695,8 @@ test('#removeImpDisk lets a checkpoint and a fork of the promote target run whil
 });
 
 test.each([
-  ['snapshot', /^zfs snapshot .+@base$/],
-  ['rename', /^zfs rename tank\/imp\/staging\//],
+  ['snapshot', /^zfs snapshot .+@base$/u],
+  ['rename', /^zfs rename tank\/imp\/staging\//u],
 ])(
   '#start drops an image build that a crash cut short before its %s, so a re-pull builds it again',
   async (_step, before) => {
@@ -2011,7 +2011,7 @@ test('#openBackupTree releases what it made when it fails to open', async () => 
       imps: [{ impId: 'a', checkpointIds: ['cp-1'] }],
       imageDigests: ['sha256:9f2c'],
     }),
-  ).rejects.toThrow(/^zfs clone .+ tank\/imp\/staging\/bki-9f2c exited 1: /);
+  ).rejects.toThrow(/^zfs clone .+ tank\/imp\/staging\/bki-9f2c exited 1: /u);
 
   expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toStrictEqual([]);
   expect(ctx.fake.listSnapshots().filter((name) => name.includes('@bk-'))).toStrictEqual([]);
@@ -3570,7 +3570,7 @@ test.skipIf(readZfsTestPool() === null)(
     const datasets = await runChecked(['zfs', 'list', '-H', '-o', 'name', '-r', pool.root]);
 
     expect(swept.dropped.map((dropped) => dropped.id)).toSatisfyAll(
-      (id: string) => !['b', 'c', 'cp-two'].includes(id) && !/staging|building/.test(id),
+      (id: string) => !['b', 'c', 'cp-two'].includes(id) && !/staging|building/u.test(id),
     );
 
     expect(readFileSync(pool.backend.resolveImpPaths('b').disk, 'utf8')).toBe('from a');
@@ -3647,7 +3647,7 @@ test.skipIf(readZfsTestPool() === null)(
     ).toHaveLength(3);
 
     expect(
-      names.split('\n').filter((name) => /\/(?:disks|images|retired)\//.test(name)),
+      names.split('\n').filter((name) => /\/(?:disks|images|retired)\//u.test(name)),
     ).toIncludeSameMembers([
       `${pool.root}/disks/a`,
       `${pool.root}/disks/a@cp-one`,
@@ -3720,7 +3720,7 @@ test.skipIf(readZfsTestPool() === null)(
     ]);
 
     expect(names.split('\n')).toSatisfyAll(
-      (name: string) => !/\/(?:disks|images|retired)\//.test(name),
+      (name: string) => !/\/(?:disks|images|retired)\//u.test(name),
     );
   },
   120_000,

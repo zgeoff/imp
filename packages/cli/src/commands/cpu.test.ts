@@ -47,7 +47,7 @@ test('#formatTop lists the busiest imp first, with disk use, traffic, wakes and 
 
   const rows = formatTop([idle, busy])
     .split('\n')
-    .map((row) => row.split(/\s{2,}/));
+    .map((row) => row.split(/\s{2,}/u));
 
   expect(rows).toStrictEqual([
     [

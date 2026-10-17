@@ -3,7 +3,7 @@ import * as z from 'zod';
 // One segment of a read-only file's path. No segment starts with a dot, so
 // no path names a file the agent stages. The agent checks the same rule
 // (agent/internal/files).
-export const FILE_SEGMENT_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
+export const FILE_SEGMENT_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/u;
 
 // the most bytes one read-only file holds, as the agent caps them
 export const FILE_DATA_MAX_BYTES = 524_288;

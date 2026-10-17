@@ -852,7 +852,7 @@ test('#seal refuses a second link to the log in run/ and deletes nothing', async
     ctx.jails.seal(imp.paths, 4242);
   }).toThrowWithMessage(
     Error,
-    /: the VM left .*log-link.* there; a VM that writes there is compromised$/,
+    /: the VM left .*log-link.* there; a VM that writes there is compromised$/u,
   );
 
   expect(readdirSync(imp.paths.runDir).toSorted()).toStrictEqual([

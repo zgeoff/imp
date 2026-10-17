@@ -8,7 +8,7 @@ test('it builds a default session', () => {
   const received: unknown = session;
 
   expect(received).toStrictEqual({
-    name: expect.stringMatching(/^[a-z0-9][a-z0-9-]{2,12}$/) as unknown,
+    name: expect.stringMatching(/^[a-z0-9][a-z0-9-]{2,12}$/u) as unknown,
     pid: expect.any(Number) as unknown,
     argv: [expect.any(String)] as unknown,
     state: 'running',
@@ -17,7 +17,7 @@ test('it builds a default session', () => {
     rows: expect.any(Number) as unknown,
     startedAt: expect.toBeValidDate() as unknown,
     continuity: 'offsets',
-    executionGeneration: expect.stringMatching(/^[0-9a-f]{32}$/) as unknown,
+    executionGeneration: expect.stringMatching(/^[0-9a-f]{32}$/u) as unknown,
     bootId: expect.any(String) as unknown,
     end: expect.any(Number) as unknown,
     endObservedAt: expect.toBeValidDate() as unknown,
@@ -45,7 +45,7 @@ test('it applies overrides on top of the defaults', () => {
     rows: expect.any(Number) as unknown,
     startedAt: expect.toBeValidDate() as unknown,
     continuity: 'offsets',
-    executionGeneration: expect.stringMatching(/^[0-9a-f]{32}$/) as unknown,
+    executionGeneration: expect.stringMatching(/^[0-9a-f]{32}$/u) as unknown,
     bootId: expect.any(String) as unknown,
     end: expect.any(Number) as unknown,
     endObservedAt: expect.toBeValidDate() as unknown,

@@ -188,7 +188,7 @@ export async function runImpWith(
 export async function runInImp(name: string, ...argv: readonly string[]): Promise<string> {
   const stdout = await runImp('exec', name, '--', ...argv);
 
-  return stdout.replace(/\n$/, '');
+  return stdout.replace(/\n$/u, '');
 }
 
 export function runShellInImp(name: string, script: string): Promise<string> {

@@ -59,7 +59,7 @@ test('#createToken makes an access token under its prefix, with the hash of its 
     text: `impat_${access.id}.${access.secret}`,
   });
 
-  expect(`${access.id}.${access.secret}`).toMatch(/^[\w-]{16}\.[\w-]{43}$/);
+  expect(`${access.id}.${access.secret}`).toMatch(/^[\w-]{16}\.[\w-]{43}$/u);
 });
 
 test('#createToken makes a refresh token under its own prefix', () => {
@@ -117,11 +117,11 @@ test('#createCode makes 256 bits kept as their hash', () => {
     hash: createHash('sha256').update(code.text).digest('hex'),
   });
 
-  expect(code.text).toMatch(/^[\w-]{43}$/);
+  expect(code.text).toMatch(/^[\w-]{43}$/u);
 });
 
 test('#createApprovalCode makes 8 symbols from the 32 that are not misread', () => {
-  expect(createApprovalCode()).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
+  expect(createApprovalCode()).toMatch(/^[A-HJ-NP-Z2-9]{8}$/u);
 });
 
 test('#formatApprovalCode shows the code with a dash, which the approval schema reads back in any case', () => {
@@ -136,5 +136,5 @@ test('#formatApprovalCode puts the dash after the fourth symbol', () => {
 });
 
 test('#createId makes 20 base64url characters', () => {
-  expect(createId()).toMatch(/^[\w-]{20}$/);
+  expect(createId()).toMatch(/^[\w-]{20}$/u);
 });

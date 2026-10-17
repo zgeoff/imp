@@ -394,7 +394,7 @@ test('it keeps what a lost database leaves on ZFS through the hourly pass and im
   expect(log).toHaveBeenCalledTimes(3);
 
   expect(log.mock.calls[0]?.[0]).toMatch(
-    /^impd: gc: kept orphan imp a \(tank\/imp\/disks\/a\): .+snapshots: cp-1$/,
+    /^impd: gc: kept orphan imp a \(tank\/imp\/disks\/a\): .+snapshots: cp-1$/u,
   );
 });
 

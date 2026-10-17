@@ -421,7 +421,7 @@ test.each([
       jsonrpc: '2.0',
       id: 1,
       result: {
-        content: [{ type: 'text', text: expect.stringMatching(/^GUARD: /) as unknown }],
+        content: [{ type: 'text', text: expect.stringMatching(/^GUARD: /u) as unknown }],
         isError: true,
       },
     },
@@ -456,7 +456,7 @@ test('it names a nameless create under the prefix', async () => {
   const json: unknown = JSON.parse(JSON.stringify(imps));
   const [stored] = z.tuple([z.looseObject({ resources: z.looseObject({}) })]).parse(json);
 
-  expect(imps).toMatchObject([{ name: expect.stringMatching(/^agent-[a-z0-9]{8}$/) as unknown }]);
+  expect(imps).toMatchObject([{ name: expect.stringMatching(/^agent-[a-z0-9]{8}$/u) as unknown }]);
 
   expect(ctx.sent).toStrictEqual([
     {
@@ -707,7 +707,7 @@ test("it answers impd's error as an isError result led by its code", async () =>
       jsonrpc: '2.0',
       id: 1,
       result: {
-        content: [{ type: 'text', text: expect.stringMatching(/^NOT_FOUND: /) as unknown }],
+        content: [{ type: 'text', text: expect.stringMatching(/^NOT_FOUND: /u) as unknown }],
         isError: true,
       },
     },

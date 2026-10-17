@@ -192,7 +192,7 @@ test('#pickNewCalls throws when the newest row from before is gone', () => {
       ],
       before,
     ),
-  ).toThrowWithMessage(Error, /^the newest audit row from before is gone: /);
+  ).toThrowWithMessage(Error, /^the newest audit row from before is gone: /u);
 });
 
 test('#pickNewCalls throws when an earlier row both reads hold changed', () => {
@@ -233,5 +233,5 @@ test('#pickNewCalls throws when an earlier row both reads hold changed', () => {
       ],
       before,
     ),
-  ).toThrowWithMessage(Error, /^the audit rows from before changed: /);
+  ).toThrowWithMessage(Error, /^the audit rows from before changed: /u);
 });

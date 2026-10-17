@@ -744,6 +744,6 @@ test('it never grows an elastic imp whose agent predates elastic memory, and log
   expect(ctx.vmm.guestMemory.get(paths.dir)?.pluggedMib).toBe(0);
 
   expect(ctx.logs).toSatisfyAny((line: string) =>
-    /dev: memory low, not grown.*the imp's agent has no elastic memory/.test(line),
+    /dev: memory low, not grown.*the imp's agent has no elastic memory/u.test(line),
   );
 });

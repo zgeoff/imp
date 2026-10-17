@@ -5,7 +5,7 @@ import type { Image } from '../schemas/image-schema';
 // back from faker's reference date, which the preload fixes, so a seed gives
 // the same image.
 export function buildMockImage(overrides: Partial<Image> = {}): Image {
-  const name = faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/);
+  const name = faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/u);
 
   return {
     id: faker.string.uuid(),

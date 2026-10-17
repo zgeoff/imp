@@ -66,7 +66,7 @@ test('#checkStorageMarker reads a data dir with imps and no marker as xfs', asyn
 
   expect(() => {
     checkStorageMarker(ctx.dataDir, 'zfs');
-  }).toThrowWithMessage(Error, /holds xfs storage, but IMP_STORAGE_BACKEND is zfs/);
+  }).toThrowWithMessage(Error, /holds xfs storage, but IMP_STORAGE_BACKEND is zfs/u);
 });
 
 test('#checkStorageMarker accepts a data dir with imps and no marker for xfs', async () => {
@@ -116,7 +116,7 @@ test('#createStorageBackend refuses a data dir another backend marked', async ()
         IMP_ZFS_ROOT: 'tank/imp',
       }),
     ),
-  ).toThrowWithMessage(Error, /holds xfs storage, but IMP_STORAGE_BACKEND is zfs/);
+  ).toThrowWithMessage(Error, /holds xfs storage, but IMP_STORAGE_BACKEND is zfs/u);
 });
 
 test('#createStorageBackend refuses the zfs backend with no root dataset', async () => {

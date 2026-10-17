@@ -209,7 +209,7 @@ test.skipIf(!canUpdateReadOnly())(
     const note = `impz: cannot move ${join(ctx.dir, 'imp', 'token')} to ${join(ctx.dir, 'impz', 'token')}, so it stays there: `;
 
     expect(warn.mock.calls).toStrictEqual([
-      [expect.toSatisfy((line: string) => line.startsWith(note) && /EACCES|EPERM/.test(line))],
+      [expect.toSatisfy((line: string) => line.startsWith(note) && /EACCES|EPERM/u.test(line))],
     ]);
 
     expect(readFileSync(join(ctx.dir, 'imp', 'token'), 'utf8')).toBe('file-token\n');

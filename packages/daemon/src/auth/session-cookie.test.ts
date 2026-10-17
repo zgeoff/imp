@@ -16,7 +16,7 @@ test('#buildSessionValue signs the version, the token and the expiry', () => {
     expiresAt: 1_800_000_001_000,
   });
 
-  expect(value).toMatch(/^v2\.abcdefghijklmnop\.1800000001000\.[\w-]{43}$/);
+  expect(value).toMatch(/^v2\.abcdefghijklmnop\.1800000001000\.[\w-]{43}$/u);
 });
 
 test('#buildSessionValue keys the signature on a key derived from the root token, not the token', () => {

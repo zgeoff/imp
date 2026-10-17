@@ -63,7 +63,7 @@ export function buildMockSystemInfo(overrides: SystemInfoOverrides = {}): System
 
   const defaults: NonNullable<SystemInfo['defaults']> = {
     memoryMib: faker.number.int({ min: 128, max: 4096 }),
-    image: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/),
+    image: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/u),
   };
 
   const egress: NonNullable<SystemInfo['egress']> = { isEnforced: true };

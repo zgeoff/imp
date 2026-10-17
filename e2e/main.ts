@@ -158,7 +158,7 @@ function checkScaleHeadroom(): void {
 }
 
 function readAvailableMib(): number {
-  const match = /^MemAvailable:\s+(?<kib>\d+) kB$/m.exec(readFileSync('/proc/meminfo', 'utf8'));
+  const match = /^MemAvailable:\s+(?<kib>\d+) kB$/mu.exec(readFileSync('/proc/meminfo', 'utf8'));
 
   return Math.floor(Number(match?.groups?.['kib'] ?? 0) / 1024);
 }

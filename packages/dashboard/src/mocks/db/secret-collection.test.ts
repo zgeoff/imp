@@ -6,7 +6,7 @@ test('it creates a default secret', async () => {
     await secretCollection.create({});
 
   expect(secret).toStrictEqual({
-    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
+    name: expect.toSatisfy((value: string) => /^[a-z]{8}$/u.test(value)),
     generation: expect.toBeString(),
   });
 });

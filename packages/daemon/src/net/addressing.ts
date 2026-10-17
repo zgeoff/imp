@@ -181,7 +181,7 @@ export function formatCidr4(text: string): string | null {
   const ip = parseIpv4(address);
   const prefix = Number(prefixText);
 
-  if (ip === null || rest.length > 0 || !/^\d{1,2}$/.test(prefixText) || prefix > 32) {
+  if (ip === null || rest.length > 0 || !/^\d{1,2}$/u.test(prefixText) || prefix > 32) {
     return null;
   }
 
@@ -189,7 +189,7 @@ export function formatCidr4(text: string): string | null {
 }
 
 function isDecimal(text: string): boolean {
-  return /^\d{1,3}$/.test(text);
+  return /^\d{1,3}$/u.test(text);
 }
 
 function formatIpv4(address: number): string {

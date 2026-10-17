@@ -57,7 +57,7 @@ test('it runs a command over ssh and returns its output, stderr, exit status and
   const env = await runSsh(ctx.ssh, name, ['echo "$SSH_CONNECTION"']);
 
   expect(result).toStrictEqual({ exitCode: 7, stdout: 'out\n', stderr: 'err\n' });
-  expect(env.stdout).toMatch(/^\S+ \d+ \S+ 22\n$/);
+  expect(env.stdout).toMatch(/^\S+ \d+ \S+ 22\n$/u);
 });
 
 test('it gives a pty the terminal size and follows a resize', async () => {

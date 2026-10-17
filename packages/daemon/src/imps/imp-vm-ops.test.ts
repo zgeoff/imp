@@ -698,7 +698,7 @@ test(
               // a sleep the governor did, as impd logs it
               onLog: (message) => {
                 const match =
-                  /^impd: (?<name>\S+): asleep in \d+ms \((?:to make room for \S+|RAM over budget)\)/.exec(
+                  /^impd: (?<name>\S+): asleep in \d+ms \((?:to make room for \S+|RAM over budget)\)/u.exec(
                     message,
                   );
 

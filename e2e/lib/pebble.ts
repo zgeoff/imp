@@ -321,7 +321,7 @@ async function readPublishedPort(container: string, port: number): Promise<strin
 // The host port in `docker port`'s output, one `<address>:<port>` line per
 // binding; the first line's port when there are several
 export function parsePublishedPort(container: string, port: number, out: string): string {
-  const published = /:(?<port>\d+)\s*$/m.exec(out.trim())?.groups?.['port'];
+  const published = /:(?<port>\d+)\s*$/mu.exec(out.trim())?.groups?.['port'];
 
   if (published === undefined) {
     throw new Error(`${container} publishes no port for ${String(port)}: ${out.trim()}`);

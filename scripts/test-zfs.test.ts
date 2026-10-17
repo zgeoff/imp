@@ -64,7 +64,7 @@ test('it creates the pool, runs the tests on it, then releases all it made', () 
     },
   });
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(result.exitCode).toBe(0);
 
@@ -138,12 +138,12 @@ test('it refuses a pool name that is taken and touches nothing', () => {
     },
   });
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(result.exitCode).toBe(1);
 
   expect(result.stderr.toString()).toMatch(
-    /^test-zfs: a pool named imptest\d+ already exists; refusing to touch it\n$/,
+    /^test-zfs: a pool named imptest\d+ already exists; refusing to touch it\n$/u,
   );
 
   expect(calls).toBe('id -u\nzpool list imptestPID\n');
@@ -175,7 +175,7 @@ test('it refuses a work dir that already holds a pool.img and leaves the file as
     },
   });
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -212,7 +212,7 @@ test('it refuses a work dir that already holds a mnt and leaves it in place', ()
     },
   });
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -248,7 +248,7 @@ test('it destroys the pool it created and removes its file when the dataset cann
     },
   });
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -294,7 +294,7 @@ test('it never destroys a pool when its own create fails', () => {
     },
   });
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(result.exitCode).toBe(1);
 
@@ -339,7 +339,7 @@ test('it keeps the pool file and says so when the pool will not go', () => {
 
   expect(result.exitCode).toBe(1);
 
-  expect(result.stderr.toString().replaceAll(/imptest\d+/g, 'imptestPID')).toBe(
+  expect(result.stderr.toString().replaceAll(/imptest\d+/gu, 'imptestPID')).toBe(
     `test-zfs: could not destroy imptestPID; its file stays at ${work}/pool.img\n`,
   );
 
@@ -421,7 +421,7 @@ test('it stops the test run and releases all it made when it gets SIGTERM', asyn
 
   const exitCode = await proc.exited;
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(exitCode).toBe(143);
 
@@ -479,7 +479,7 @@ test('it destroys the pool and removes its file when SIGTERM comes during the po
 
   const exitCode = await proc.exited;
 
-  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/g, 'imptestPID');
+  const calls = readFileSync(zpool.calls, 'utf8').replaceAll(/imptest\d+/gu, 'imptestPID');
 
   expect(exitCode).toBe(143);
 

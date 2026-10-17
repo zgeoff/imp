@@ -12,7 +12,7 @@ const SFTP_ARGV = [SYSTEM_AGENT_PATH, 'sftp'];
 
 // the env a client may set with SendEnv/SetEnv; everything else is refused,
 // as OpenSSH's default AcceptEnv does
-const ACCEPTED_ENV = /^(?:LANG|LC_[A-Z_]+)$/;
+const ACCEPTED_ENV = /^(?:LANG|LC_[A-Z_]+)$/u;
 
 // the signals an SSH exit-signal may name (RFC 4254 6.10); a process that
 // another signal ended reports 128 + its number instead
@@ -321,7 +321,7 @@ function isTerminalSize(size: TerminalSize): boolean {
 }
 
 function sendExit(channel: ServerChannel, code: number, signal: number): void {
-  const name = signal === 0 ? null : findSignalName(signal).replace(/^SIG/, '');
+  const name = signal === 0 ? null : findSignalName(signal).replace(/^SIG/u, '');
 
   if (name !== null && EXIT_SIGNALS.has(name)) {
     channel.exit(name, false, '');

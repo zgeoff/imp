@@ -35,8 +35,7 @@
     // off until GEO-1198 splits the files over 500 lines
     "max-lines": "off",
     // off until GEO-1199 trims the functions that take more than 4 parameters
-    "max-params": "off",
-    "require-unicode-regexp": "off"
+    "max-params": "off"
   },
   "overrides": [
     {

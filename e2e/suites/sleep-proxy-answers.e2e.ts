@@ -39,5 +39,5 @@ test('it answers 404 for an unknown imp, and 502 when nothing in the imp listens
 
   expect(unknown.status).toBe(404);
   expect(refused.status).toBe(502);
-  expect(openProxySocket(name)).rejects.toThrow(/closed/);
+  expect(openProxySocket(name)).rejects.toThrow(/closed/u);
 });

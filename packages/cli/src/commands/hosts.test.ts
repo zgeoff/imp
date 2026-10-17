@@ -411,7 +411,7 @@ test.skipIf(!canUpdateReadOnly())(
     expect(listed).toStrictEqual({
       stdout: '[]\n',
       stderr: expect.toSatisfy(
-        (text: string) => text.startsWith(note) && /EACCES|EPERM/.test(text),
+        (text: string) => text.startsWith(note) && /EACCES|EPERM/u.test(text),
       ),
       code: 0,
     });

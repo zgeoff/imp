@@ -1,8 +1,8 @@
 import * as z from 'zod';
 import { EGRESS_MODE_TRAITS } from './egress-mode-traits';
 
-const HOST_PATTERN = /^(?:[a-z0-9_][a-z0-9_-]{0,62}\.)+[a-z][a-z0-9-]{0,62}$/;
-const CIDR_PATTERN = /^(?<address>(?:\d{1,3}\.){3}\d{1,3})(?:\/(?<prefix>\d{1,2}))?$/;
+const HOST_PATTERN = /^(?:[a-z0-9_][a-z0-9_-]{0,62}\.)+[a-z][a-z0-9-]{0,62}$/u;
+const CIDR_PATTERN = /^(?<address>(?:\d{1,3}\.){3}\d{1,3})(?:\/(?<prefix>\d{1,2}))?$/u;
 
 // What an imp may reach directly (docs/architecture/network/egress.md):
 // open, public (the internet only), box (its allow-list) or none. Hosts a
@@ -66,7 +66,7 @@ function isCidr6Entry(entry: string): boolean {
   const [address = '', prefixText = '128', ...rest] = entry.split('/');
   const prefix = Number(prefixText);
 
-  if (rest.length > 0 || !/^\d{1,3}$/.test(prefixText) || prefix < 16 || prefix > 128) {
+  if (rest.length > 0 || !/^\d{1,3}$/u.test(prefixText) || prefix < 16 || prefix > 128) {
     return false;
   }
 

@@ -7,7 +7,7 @@ test('it creates a default open policy', async () => {
     await impPolicyCollection.create({});
 
   expect(row).toStrictEqual({
-    imp: expect.toSatisfy((value: string) => /^[a-z]{8}$/.test(value)),
+    imp: expect.toSatisfy((value: string) => /^[a-z]{8}$/u.test(value)),
     policy: { mode: 'open', allow: [] },
   });
 });

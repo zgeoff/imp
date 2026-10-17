@@ -61,7 +61,7 @@ test('it boots the default image on impz new and answers the first exec within t
 
   expect(created.name).toBe(name);
   expect(created.url).toBe(row.url);
-  expect(row.url).toMatch(new RegExp(`^http://${name}\\.imp\\.localhost:\\d+$`));
+  expect(row.url).toMatch(new RegExp(`^http://${name}\\.imp\\.localhost:\\d+$`, 'u'));
   expect(row.state).toBe('running');
   expect(urls.local).toBe(row.url);
   expect(uname).toStartWith(`Linux ${name} `);
@@ -110,7 +110,7 @@ test('it runs exec -t on a pseudo-terminal', async () => {
 
   const out = await runImp('exec', '-t', name, '--', 'sh', '-c', 'tty; stty size');
 
-  expect(out.replaceAll('\r', '')).toMatch(/^\/dev\/pts\/\d+\n\d+ \d+\n$/);
+  expect(out.replaceAll('\r', '')).toMatch(/^\/dev\/pts\/\d+\n\d+ \d+\n$/u);
 });
 
 test('it runs commands in a console shell and returns its exit code', async () => {
@@ -154,7 +154,7 @@ test('it resolves names and reaches the internet from the guest', async () => {
     `getent hosts example.com >/dev/null && exec 3<>/dev/tcp/example.com/80 && ${request} && head -1 <&3`,
   );
 
-  expect(status).toMatch(/^HTTP\/1\.[01] 200 /);
+  expect(status).toMatch(/^HTTP\/1\.[01] 200 /u);
 });
 
 test('it keeps the disk through a stop, boots a stopped imp on exec with an empty /run, and again on start', async () => {
@@ -217,7 +217,7 @@ test('it removes the imp and its network device on rm', async () => {
   const listed = await runImp('ls');
   const tap = await runInContainer(['ip', 'link', 'show', device]);
 
-  expect(listed).not.toMatch(new RegExp(`^${name} `, 'm'));
+  expect(listed).not.toMatch(new RegExp(`^${name} `, 'mu'));
 
   expect(tap).toStrictEqual({
     exitCode: 1,

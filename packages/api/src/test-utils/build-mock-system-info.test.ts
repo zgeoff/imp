@@ -8,7 +8,7 @@ test('it builds a default system info', () => {
   const received: unknown = info;
 
   expect(received).toStrictEqual({
-    version: expect.stringMatching(/^\d+\.\d+\.\d+$/) as unknown,
+    version: expect.stringMatching(/^\d+\.\d+\.\d+$/u) as unknown,
     ramBudgetMib: expect.any(Number) as unknown,
     ramUsedMib: expect.any(Number) as unknown,
     ramReservedMib: expect.any(Number) as unknown,
@@ -18,12 +18,12 @@ test('it builds a default system info', () => {
     impCount: expect.any(Number) as unknown,
     sessionCount: expect.any(Number) as unknown,
     bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0, ipv6: 0 } },
-    firecrackerVersion: expect.stringMatching(/^v\d+\.\d+\.\d+$/) as unknown,
+    firecrackerVersion: expect.stringMatching(/^v\d+\.\d+\.\d+$/u) as unknown,
     guestKernel: {
-      version: expect.stringMatching(/^\d+\.\d+\.\d+$/) as unknown,
-      sha256: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown,
+      version: expect.stringMatching(/^\d+\.\d+\.\d+$/u) as unknown,
+      sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown,
     },
-    systemDrive: { sha256: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown },
+    systemDrive: { sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown },
     storage: {
       backend: 'xfs',
       usedBytes: expect.any(Number) as unknown,
@@ -38,7 +38,7 @@ test('it builds a default system info', () => {
     cpu: { hostCpus: expect.any(Number) as unknown, limitsEnforced: true },
     defaults: {
       memoryMib: expect.any(Number) as unknown,
-      image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+      image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     },
     egress: { isEnforced: true },
     public: null,
@@ -81,7 +81,7 @@ test('it applies overrides on top of the defaults', () => {
   });
 
   expect(info).toStrictEqual({
-    version: expect.stringMatching(/^\d+\.\d+\.\d+$/) as unknown,
+    version: expect.stringMatching(/^\d+\.\d+\.\d+$/u) as unknown,
     ramBudgetMib: 2048,
     ramUsedMib: expect.any(Number) as unknown,
     ramReservedMib: expect.any(Number) as unknown,
@@ -91,12 +91,12 @@ test('it applies overrides on top of the defaults', () => {
     impCount: expect.any(Number) as unknown,
     sessionCount: expect.any(Number) as unknown,
     bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0, ipv6: 0 } },
-    firecrackerVersion: expect.stringMatching(/^v\d+\.\d+\.\d+$/) as unknown,
+    firecrackerVersion: expect.stringMatching(/^v\d+\.\d+\.\d+$/u) as unknown,
     guestKernel: {
-      version: expect.stringMatching(/^\d+\.\d+\.\d+$/) as unknown,
-      sha256: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown,
+      version: expect.stringMatching(/^\d+\.\d+\.\d+$/u) as unknown,
+      sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown,
     },
-    systemDrive: { sha256: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown },
+    systemDrive: { sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown },
     storage: {
       backend: 'xfs',
       usedBytes: expect.any(Number) as unknown,
@@ -111,7 +111,7 @@ test('it applies overrides on top of the defaults', () => {
     cpu: { hostCpus: expect.any(Number) as unknown, limitsEnforced: true },
     defaults: {
       memoryMib: expect.any(Number) as unknown,
-      image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/) as unknown,
+      image: expect.stringMatching(/^[a-z][a-z0-9-]{2,12}$/u) as unknown,
     },
     egress: { isEnforced: true },
     public: null,

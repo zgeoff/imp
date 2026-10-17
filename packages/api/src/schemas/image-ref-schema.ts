@@ -11,6 +11,7 @@ const DIGEST = String.raw`[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0
 
 const REFERENCE = new RegExp(
   String.raw`^(?:${DOMAIN}/)?${PATH_COMPONENT}(?:/${PATH_COMPONENT})*(?::${TAG})?(?:@${DIGEST})?$`,
+  'u',
 );
 
 export const ImageRefSchema = z

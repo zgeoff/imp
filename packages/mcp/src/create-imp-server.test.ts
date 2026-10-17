@@ -949,7 +949,7 @@ test('it stops reporting progress for a cancelled call', async () => {
       params: {
         progressToken: 'p',
         progress: 1,
-        message: expect.stringMatching(/^still running after \d+ s$/) as unknown,
+        message: expect.stringMatching(/^still running after \d+ s$/u) as unknown,
       },
     },
   ]);

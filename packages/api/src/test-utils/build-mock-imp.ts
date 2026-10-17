@@ -39,8 +39,8 @@ export function buildMockImp(overrides: ImpOverrides = {}): Imp {
   // an override keeps its key's place
   const defaults: Imp = {
     id: faker.string.uuid(),
-    name: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/),
-    image: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/),
+    name: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/u),
+    image: faker.helpers.fromRegExp(/[a-z][a-z0-9-]{2,12}/u),
     state: 'running',
     kind: 'user',
     vcpus: faker.number.int({ min: 1, max: 32 }),

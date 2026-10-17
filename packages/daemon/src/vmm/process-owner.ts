@@ -15,7 +15,7 @@ interface ProcessUids {
 function readProcessUids(pid: number, procRoot = '/proc'): ProcessUids | null {
   try {
     const status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
-    const uids = /^Uid:\s+(?<real>\d+)\s+(?<effective>\d+)/m.exec(status)?.groups;
+    const uids = /^Uid:\s+(?<real>\d+)\s+(?<effective>\d+)/mu.exec(status)?.groups;
 
     return uids === undefined
       ? null
@@ -38,7 +38,7 @@ export function readProcessCgroup(pid: number, procRoot = '/proc'): string | nul
   try {
     const text = readFileSync(join(procRoot, String(pid), 'cgroup'), 'utf8');
 
-    return text.trim().replace(/^0::/, '');
+    return text.trim().replace(/^0::/u, '');
   } catch {
     return null;
   }

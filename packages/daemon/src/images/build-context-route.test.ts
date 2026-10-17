@@ -3287,7 +3287,7 @@ test('it reports the unpack of an on-host build after the engine built the image
 
   expect(building).rejects.toThrowWithMessage(
     Error,
-    /Error response from daemon: no space left on device/,
+    /Error response from daemon: no space left on device/u,
   );
 
   expect(phases).toStrictEqual(['build', 'unpack']);

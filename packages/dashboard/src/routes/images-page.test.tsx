@@ -17,7 +17,7 @@ test('it lists each image with its size', async () => {
 
   const rendered = renderApp('/images');
 
-  const row = await rendered.findByRole('row', { name: /base/ });
+  const row = await rendered.findByRole('row', { name: /base/u });
 
   expect(within(row).getByText('512 MiB')).toBeInTheDocument();
 });
@@ -34,7 +34,7 @@ test('it adds an image from a ref', async () => {
   await user.type(field, 'docker.io/library/node:22');
   await user.click(rendered.getByRole('button', { name: 'Add image' }));
 
-  const row = await rendered.findByRole('row', { name: /docker\.io\/library\/node:22/ });
+  const row = await rendered.findByRole('row', { name: /docker\.io\/library\/node:22/u });
 
   expect(row).toBeInTheDocument();
 
@@ -63,7 +63,7 @@ test('it sends only the ref of an image added without a name', async () => {
 
   await user.type(field, 'docker.io/library/node:22');
   await user.click(rendered.getByRole('button', { name: 'Add image' }));
-  await rendered.findByRole('row', { name: /docker\.io\/library\/node:22/ });
+  await rendered.findByRole('row', { name: /docker\.io\/library\/node:22/u });
 
   expect(received).toHaveBeenCalledExactlyOnceWith({ ref: 'docker.io/library/node:22' });
 });
@@ -77,7 +77,7 @@ test('it deletes an image after a confirm', async () => {
 
   const rendered = renderApp('/images');
 
-  const row = await rendered.findByRole('row', { name: /base/ });
+  const row = await rendered.findByRole('row', { name: /base/u });
 
   await user.click(within(row).getByRole('button', { name: 'Delete' }));
 
@@ -86,7 +86,7 @@ test('it deletes an image after a confirm', async () => {
   await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
   await waitFor(() => {
-    expect(rendered.queryByRole('row', { name: /base/ })).toBeNull();
+    expect(rendered.queryByRole('row', { name: /base/u })).toBeNull();
   });
 
   expect(imageCollection.count()).toBe(0);

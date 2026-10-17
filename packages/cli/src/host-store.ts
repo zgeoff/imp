@@ -37,7 +37,7 @@ const HostConfigSchema = z.object({
 
 // A name a shell and a completion script take as one word, and never a URL,
 // so `--host https://…` is caught as the mistake it is.
-const HOST_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
+const HOST_NAME = /^[a-z0-9][a-z0-9._-]*$/iu;
 const EMPTY_CONFIG: HostConfig = { current: null, hosts: {} };
 
 // the saved hosts need only their own file: a fallback token that cannot

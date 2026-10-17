@@ -85,7 +85,7 @@ export function isSameHash(given: string, expected: string): boolean {
 // PKCE S256 (RFC 7636): the challenge is the verifier's SHA-256 in
 // base64url, and a verifier is 43 to 128 unreserved characters
 export function isVerifierMatch(verifier: string, challenge: string): boolean {
-  if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) {
+  if (!/^[A-Za-z0-9._~-]{43,128}$/u.test(verifier)) {
     return false;
   }
 
@@ -96,5 +96,5 @@ export function isVerifierMatch(verifier: string, challenge: string): boolean {
 }
 
 export function isChallenge(text: string): boolean {
-  return /^[A-Za-z0-9_-]{43}$/.test(text);
+  return /^[A-Za-z0-9_-]{43}$/u.test(text);
 }

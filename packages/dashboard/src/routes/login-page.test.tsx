@@ -76,7 +76,7 @@ test('it clears what the dashboard knew and opens the login page on log out', as
 
   const rendered = renderApp();
 
-  await rendered.findByRole('row', { name: /web/ });
+  await rendered.findByRole('row', { name: /web/u });
   await user.click(rendered.getByRole('button', { name: 'Log out' }));
   await rendered.findByLabelText('API token');
 

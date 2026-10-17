@@ -21,10 +21,10 @@ test('it lists a running imp with its state, RAM, disk and a sleep button', asyn
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /web/ });
+  const row = await rendered.findByRole('row', { name: /web/u });
 
   expect(within(row).getByText('running')).toBeInTheDocument();
-  expect(within(row).getByText(/300 MiB/)).toBeInTheDocument();
+  expect(within(row).getByText(/300 MiB/u)).toBeInTheDocument();
   expect(within(row).getByText('— / 32.0 GiB')).toBeInTheDocument();
   expect(within(row).getByRole('button', { name: 'Sleep' })).toBeInTheDocument();
 });
@@ -40,7 +40,7 @@ test('it lists a sleeping imp with its notes and a wake button', async () => {
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /old/ });
+  const row = await rendered.findByRole('row', { name: /old/u });
 
   expect(within(row).getByText('next wake boots cold: the kernel changed')).toBeInTheDocument();
   expect(within(row).getByRole('button', { name: 'Wake' })).toBeInTheDocument();
@@ -53,7 +53,7 @@ test('it lists a failed imp with its error and a restart button', async () => {
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /bad/ });
+  const row = await rendered.findByRole('row', { name: /bad/u });
 
   expect(within(row).getByText('boot failed: no agent')).toBeInTheDocument();
   expect(within(row).getByRole('button', { name: 'Restart' })).toBeInTheDocument();
@@ -92,7 +92,7 @@ test('it moves the row of an imp to the state its lifecycle button asks for', as
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /web/ });
+  const row = await rendered.findByRole('row', { name: /web/u });
 
   await user.click(within(row).getByRole('button', { name: 'Sleep' }));
 
@@ -111,7 +111,7 @@ test('it asks before destroying an imp', async () => {
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /web/ });
+  const row = await rendered.findByRole('row', { name: /web/u });
 
   await user.click(within(row).getByRole('button', { name: 'Destroy' }));
 
@@ -130,7 +130,7 @@ test('it destroys an imp once the destroy is confirmed', async () => {
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /web/ });
+  const row = await rendered.findByRole('row', { name: /web/u });
 
   await user.click(within(row).getByRole('button', { name: 'Destroy' }));
 
@@ -139,7 +139,7 @@ test('it destroys an imp once the destroy is confirmed', async () => {
   await user.click(within(dialog).getByRole('button', { name: 'Destroy' }));
 
   await waitFor(() => {
-    expect(rendered.queryByRole('row', { name: /web/ })).toBeNull();
+    expect(rendered.queryByRole('row', { name: /web/u })).toBeNull();
   });
 
   expect(impCollection.count()).toBe(0);
@@ -173,7 +173,7 @@ test('it sends only the fields that were filled in for a new imp', async () => {
   await user.type(within(dialog).getByLabelText('Name'), 'box');
   await user.type(within(dialog).getByLabelText('Memory (MiB)'), '512');
   await user.click(within(dialog).getByRole('button', { name: 'Create' }));
-  await rendered.findByRole('row', { name: /box/ });
+  await rendered.findByRole('row', { name: /box/u });
 
   expect(received).toHaveBeenCalledExactlyOnceWith({ name: 'box', memoryMib: 512 });
 });
@@ -185,7 +185,7 @@ test('it shows a change impd streams without waiting for the next poll', async (
 
   const rendered = renderApp();
 
-  const row = await rendered.findByRole('row', { name: /web/ });
+  const row = await rendered.findByRole('row', { name: /web/u });
 
   // impd sends its event only to streams open at the time
   await waitFor(() => {

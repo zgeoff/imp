@@ -14,7 +14,7 @@ export const AgentSessionNameSchema = SessionNameSchema;
 // lowercase UUID, or empty without procfs
 export const AgentBootIdSchema = z
   .string()
-  .regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/);
+  .regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/u);
 
 const AgentLogIdentitySchema = z.object({
   generation: AgentGenerationSchema,

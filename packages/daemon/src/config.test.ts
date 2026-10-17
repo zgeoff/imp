@@ -174,7 +174,7 @@ test.each([
   ['IMP_STORAGE_BACKEND', 'btrfs'],
   ['IMP_KSM', 'yes'],
 ])('it refuses %s=%s', (name, value) => {
-  expect(() => loadConfig({ [name]: value })).toThrow(new RegExp(`"path": \\[\\s*"${name}"`));
+  expect(() => loadConfig({ [name]: value })).toThrow(new RegExp(`"path": \\[\\s*"${name}"`, 'u'));
 });
 
 test('it runs Firecracker without the jailer when IMP_JAILER is false', () => {
@@ -327,7 +327,7 @@ test('it refuses an IMP_PUBLIC_IP that is a name', () => {
       IMP_DNS_API_TOKEN: 'cf-token',
       IMP_PUBLIC_IP: 'example.com',
     }),
-  ).toThrow(/"path": \[\s*"IMP_PUBLIC_IP"/);
+  ).toThrow(/"path": \[\s*"IMP_PUBLIC_IP"/u);
 });
 
 test('it takes egress deny addresses and CIDRs of both families', () => {
@@ -580,7 +580,7 @@ test('it refuses tailnet identity rules that are not JSON', () => {
 
 test('it refuses a tailnet identity rule without a scope', () => {
   expect(() => loadConfig({ IMP_TAILNET_IDENTITIES: '[{"match":"x"}]' })).toThrow(
-    /^IMP_TAILNET_IDENTITIES: .*scope/s,
+    /^IMP_TAILNET_IDENTITIES: .*scope/su,
   );
 });
 

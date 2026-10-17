@@ -5,15 +5,15 @@ test('it creates a default host on XFS, off the tailnet, on impd defaults', asyn
   const host: Record<string, unknown> = await hostCollection.create({});
 
   expect(host).toStrictEqual({
-    version: expect.toSatisfy((value: string) => /^\d+\.\d+\.\d+$/.test(value)),
+    version: expect.toSatisfy((value: string) => /^\d+\.\d+\.\d+$/u.test(value)),
     ramBudgetMib: expect.toSatisfy((mib: number) => mib >= 4096 && mib % 1024 === 0),
     ramReservedMib: 0,
-    firecrackerVersion: expect.toSatisfy((value: string) => /^v\d+\.\d+\.\d+$/.test(value)),
+    firecrackerVersion: expect.toSatisfy((value: string) => /^v\d+\.\d+\.\d+$/u.test(value)),
     guestKernel: {
       version: null,
-      sha256: expect.toSatisfy((value: string) => /^[0-9a-fA-F]{64}$/.test(value)),
+      sha256: expect.toSatisfy((value: string) => /^[0-9a-fA-F]{64}$/u.test(value)),
     },
-    systemDrive: { sha256: expect.toSatisfy((value: string) => /^[0-9a-fA-F]{64}$/.test(value)) },
+    systemDrive: { sha256: expect.toSatisfy((value: string) => /^[0-9a-fA-F]{64}$/u.test(value)) },
     backend: 'xfs',
     disk: {
       usedBytes: expect.toBeNumber(),

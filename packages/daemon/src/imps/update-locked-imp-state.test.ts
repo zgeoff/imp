@@ -74,7 +74,7 @@ test('it refuses a record kept past the callback that held its lock', async () =
 
   const refusal = updateLockedImpState(ctx.db, kept, { reason: 'stopped', state: 'stopped' });
 
-  expect(refusal).rejects.toThrow(/a state write needs the imp's lock/);
+  expect(refusal).rejects.toThrow(/a state write needs the imp's lock/u);
 });
 
 test("it refuses a record read without the imp's lock", async () => {
@@ -84,7 +84,7 @@ test("it refuses a record read without the imp's lock", async () => {
   // @ts-expect-error a plain record is no LockedImp: the type refuses it too
   const refusal = updateLockedImpState(ctx.db, imp, { reason: 'stopped', state: 'stopped' });
 
-  expect(refusal).rejects.toThrow(/a state write needs the imp's lock/);
+  expect(refusal).rejects.toThrow(/a state write needs the imp's lock/u);
 
   const unchanged = await findImpById(ctx.db, imp.id);
 

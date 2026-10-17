@@ -41,6 +41,6 @@ test('it throws for an event stream that ends with no answer', () => {
 
   expect(readMcpAnswer(response)).rejects.toThrowWithMessage(
     Error,
-    /the event stream carries no answer/,
+    /the event stream carries no answer/u,
   );
 });

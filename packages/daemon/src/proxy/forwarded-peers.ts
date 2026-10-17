@@ -77,5 +77,5 @@ export function readPeerAddress(
 }
 
 function isLoopback(address: string): boolean {
-  return address === '::1' || /^(?:::ffff:)?127\./i.test(address);
+  return address === '::1' || /^(?:::ffff:)?127\./iu.test(address);
 }

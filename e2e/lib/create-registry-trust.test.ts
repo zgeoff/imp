@@ -59,7 +59,7 @@ test('#createRegistryTrust refuses a registry whose directory is already there, 
   // settled before the directory is read
   await Promise.allSettled([attempt]);
 
-  expect(attempt).rejects.toThrow(/^refusing to trust imp-e2e-registry\.test:43210: mkdir: /);
+  expect(attempt).rejects.toThrow(/^refusing to trust imp-e2e-registry\.test:43210: mkdir: /u);
 
   const kept = await readFile(join(owned, 'ca.crt'), 'utf8');
 
@@ -149,7 +149,7 @@ test('#createRegistryTrust removes the directory it made when the certificate co
   // settled before the directory is read
   await Promise.allSettled([attempt]);
 
-  expect(attempt).rejects.toThrow(/^cp .* exited 1: /);
+  expect(attempt).rejects.toThrow(/^cp .* exited 1: /u);
 
   const left = await readdir(ctx.certsRoot);
 

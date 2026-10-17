@@ -20,7 +20,7 @@ test('it logs in, creates an imp, runs a command in its console and destroys it'
 
   await page.goto('/');
 
-  await expect(page).toHaveURL(/\/ui\/login$/);
+  await expect(page).toHaveURL(/\/ui\/login$/u);
 
   await page.getByLabel('API token').fill(token);
   await page.getByRole('button', { name: 'Log in' }).click();
@@ -49,7 +49,7 @@ test('it logs in, creates an imp, runs a command in its console and destroys it'
   await dialog.getByLabel('Image').selectOption(image);
   await dialog.getByRole('button', { name: 'Create' }).click();
 
-  const row = page.getByRole('row', { name: new RegExp(name) });
+  const row = page.getByRole('row', { name: new RegExp(name, 'u') });
 
   await expect(row.getByText('running')).toBeVisible();
 
@@ -78,14 +78,14 @@ test('it logs in, creates an imp, runs a command in its console and destroys it'
   await page.getByRole('dialog').getByRole('button', { name: 'Destroy' }).click();
 
   await expect(page.getByRole('heading', { name: 'Imps' })).toBeVisible();
-  await expect(page.getByRole('row', { name: new RegExp(name) })).toHaveCount(0);
+  await expect(page.getByRole('row', { name: new RegExp(name, 'u') })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Log out' }).click();
 
-  await expect(page).toHaveURL(/\/ui\/login$/);
+  await expect(page).toHaveURL(/\/ui\/login$/u);
 
   // the session is gone: the list sends the browser back to the login
   await page.goto('/ui/');
 
-  await expect(page).toHaveURL(/\/ui\/login$/);
+  await expect(page).toHaveURL(/\/ui\/login$/u);
 });

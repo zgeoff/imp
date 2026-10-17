@@ -426,7 +426,7 @@ test.skipIf(Bun.which('mkfs.ext4') === null || Bun.which('resize2fs') === null)(
     expect(isGrown).toBeTrue();
 
     // 256 MiB of 4096-byte blocks
-    expect(header).toMatch(/^Block count:\s+65536$/m);
+    expect(header).toMatch(/^Block count:\s+65536$/mu);
   },
 );
 
@@ -452,7 +452,7 @@ test.skipIf(Bun.which('mkfs.ext4') === null || Bun.which('resize2fs') === null)(
     expect(isGrown).toBeTrue();
 
     // 256 MiB of 4096-byte blocks
-    expect(header).toMatch(/^Block count:\s+65536$/m);
+    expect(header).toMatch(/^Block count:\s+65536$/mu);
 
     // six new groups' zeroed inode tables would take several MiB
     expect(allocatedAfter - allocatedBefore).toBeLessThan(1024 * 1024);
@@ -481,6 +481,6 @@ test.skipIf(Bun.which('mkfs.ext4') === null || Bun.which('resize2fs') === null)(
     expect(isGrown).toBeFalse();
 
     // still 64 MiB of 4096-byte blocks
-    expect(header).toMatch(/^Block count:\s+16384$/m);
+    expect(header).toMatch(/^Block count:\s+16384$/mu);
   },
 );

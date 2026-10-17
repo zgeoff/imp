@@ -172,7 +172,7 @@ export const ExecClientMessageSchema = z.discriminatedUnion('type', [
   ExecAttachMessageSchema,
   z.object({ type: z.literal('stdin_eof') }),
   z.object({ type: z.literal('resize'), cols: DimensionSchema, rows: DimensionSchema }),
-  z.object({ type: z.literal('signal'), signal: z.string().regex(/^SIG[A-Z0-9]+$/) }),
+  z.object({ type: z.literal('signal'), signal: z.string().regex(/^SIG[A-Z0-9]+$/u) }),
 
   // a tool's stdout bytes the client wrote; impd ignores it for a plain exec
   z.object({ type: z.literal('stdout_ack'), bytes: z.int().positive() }),

@@ -206,7 +206,7 @@ async function setupTest(options: SetupOptions) {
 }
 
 test('it makes an id of cp- and six letters that read unambiguously', () => {
-  expect(buildCheckpointId()).toMatch(/^cp-[a-km-z2-9]{6}$/);
+  expect(buildCheckpointId()).toMatch(/^cp-[a-km-z2-9]{6}$/u);
 });
 
 test('it picks each letter of an id from its own draw of the random source', () => {

@@ -24,7 +24,7 @@ export function findLoopBackingFile(
       const [mounts = '', fields = ''] = line.split(' - ');
       const mountPoint = mounts.split(' ').at(4);
       const [, source = ''] = fields.split(' ');
-      const loop = /^\/dev\/(?<name>loop\d+)$/.exec(source)?.groups?.['name'];
+      const loop = /^\/dev\/(?<name>loop\d+)$/u.exec(source)?.groups?.['name'];
 
       if (mountPoint === target && loop !== undefined) {
         const backing = join(hostDirs.sysDir, 'block', loop, 'loop', 'backing_file');
