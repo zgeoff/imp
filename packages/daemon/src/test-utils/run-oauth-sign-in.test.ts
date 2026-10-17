@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { ApprovalCodeSchema } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
 import { createMcpAuth } from '../oauth/create-mcp-auth';

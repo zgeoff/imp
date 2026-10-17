@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { ROOT_TOKEN_ID } from '../auth/token-store';
 import { buildMockCaller } from '../test-utils/build-mock-caller';
 import { createSignIns } from './create-sign-ins';
