@@ -98,7 +98,7 @@
       "name": "@impz/daemon",
       "version": "2.3.0",
       "dependencies": {
-        "@better-auth/mcp": "1.7.7",
+        "@better-auth/mcp": "catalog:",
         "@bufbuild/protobuf": "catalog:",
         "@impz/api": "workspace:*",
         "@impz/client": "workspace:*",
@@ -114,7 +114,7 @@
         "@orpc/server": "catalog:",
         "@peculiar/x509": "catalog:",
         "acme-client": "catalog:",
-        "better-auth": "1.7.7",
+        "better-auth": "catalog:",
         "dns-packet": "catalog:",
         "elysia": "catalog:",
         "kysely": "catalog:",
@@ -232,6 +232,7 @@
   "catalog": {
     "@ark-ui/react": "5.37.2",
     "@balena/dockerignore": "1.0.2",
+    "@better-auth/mcp": "1.7.7",
     "@bufbuild/protobuf": "2.16.0",
     "@commitlint/cli": "21.2.0",
     "@faker-js/faker": "10.6.0",
@@ -271,6 +272,7 @@
     "@zgeoff/format-codemod": "0.1.0",
     "@zgeoff/oxlint-config": "0.2.3",
     "acme-client": "5.4.0",
+    "better-auth": "1.7.7",
     "citty": "0.2.2",
     "dns-packet": "5.6.1",
     "elysia": "1.4.29",
