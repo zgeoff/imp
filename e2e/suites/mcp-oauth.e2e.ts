@@ -85,7 +85,7 @@ test('it serves the route’s discovery documents and nothing private', async ()
 
   expect(issuer).toMatchObject({
     issuer: ctx.origin,
-    code_challenge_methods_supported: expect.arrayContaining(['S256']),
+    code_challenge_methods_supported: expect.toIncludeAllMembers(['S256']),
     token_endpoint_auth_methods_supported: ['none'],
   });
 
