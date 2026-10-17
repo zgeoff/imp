@@ -6,6 +6,16 @@ import { join } from 'node:path';
 import { ApprovalCodeSchema } from '@impz/api';
 import type { ImpContract } from '@impz/api';
 import { waitFor } from '@impz/test-utils/wait-for';
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  UnauthorizedError,
+} from '@modelcontextprotocol/client';
+import type {
+  OAuthClientProvider,
+  OAuthDiscoveryState,
+  OAuthTokens,
+} from '@modelcontextprotocol/client';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -30,7 +40,9 @@ import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
 import { buildStubExecGuest } from '../test-utils/build-stub-exec-guest';
 import { buildStubMcpTransport } from '../test-utils/build-stub-mcp-transport';
 import { buildStubVmm } from '../test-utils/build-stub-vmm';
+import { createPendingSignIn } from '../test-utils/create-pending-sign-in';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { runOAuthSignIn } from '../test-utils/run-oauth-sign-in';
 import { startStubExecAgent } from '../test-utils/start-stub-exec-agent';
 import { createPublicHandler, startPublicListener } from './public-listener';
 
@@ -87,8 +99,9 @@ async function setupTest() {
     // the host's free space, so a create never meets this machine's disk
     readDiskSpace: () => Promise.resolve({ usedBytes: 0, availableBytes: 1024 ** 4 }),
 
-    // a frozen clock, so a rate bucket never refills while a test runs
-    now: () => Date.UTC(2026, 0, 1),
+    // the wall clock: better-auth checks its sessions and tokens against it,
+    // and a sign-in bucket refills one start per 6 s, longer than a test
+    now: Date.now,
     log: () => {},
     readIdentity: (files, ipv6Prefix) => ({
       firecrackerVersion: 'v1.17.0',
@@ -181,19 +194,25 @@ test.each([
     null,
   );
 
-  expect({ status: response.status, body: await response.json() }).toStrictEqual({
-    status: 200,
-    body: {
-      resource: 'http://127.0.0.1:7171/mcp',
-      authorization_servers: ['http://127.0.0.1:7171'],
-      scopes_supported: ['read', 'exec', 'manage'],
-      bearer_methods_supported: ['header'],
-      resource_name: 'imp',
-    },
+  const json: unknown = await response.json();
+
+  const body = z.record(z.string(), z.unknown()).parse(json);
+
+  expect(response.status).toBe(200);
+
+  expect(body).toMatchObject({
+    resource: 'http://127.0.0.1:7171/mcp',
+    authorization_servers: ['http://127.0.0.1:7171'],
+    bearer_methods_supported: ['header'],
+    resource_name: 'imp',
   });
+
+  expect(
+    Object.keys(body).filter((key) => key.startsWith('introspection_') || key.startsWith('dpop_')),
+  ).toStrictEqual([]);
 });
 
-test('it serves the authorization server metadata', async () => {
+test('it serves the authorization server metadata, with public clients only and nothing on introspection or DPoP', async () => {
   const ctx = await setupTest();
 
   const response = await ctx.handle(
@@ -203,29 +222,25 @@ test('it serves the authorization server metadata', async () => {
     null,
   );
 
-  expect({
-    status: response.status,
-    cache: response.headers.get('cache-control'),
-    body: await response.json(),
-  }).toStrictEqual({
-    status: 200,
-    cache: 'no-store',
-    body: {
-      issuer: 'http://127.0.0.1:7171',
-      authorization_endpoint: 'http://127.0.0.1:7171/oauth/authorize',
-      token_endpoint: 'http://127.0.0.1:7171/oauth/token',
-      revocation_endpoint: 'http://127.0.0.1:7171/oauth/revoke',
-      response_types_supported: ['code'],
-      response_modes_supported: ['query'],
-      grant_types_supported: ['authorization_code', 'refresh_token'],
-      code_challenge_methods_supported: ['S256'],
-      token_endpoint_auth_methods_supported: ['none'],
-      revocation_endpoint_auth_methods_supported: ['none'],
-      scopes_supported: ['read', 'exec', 'manage'],
-      authorization_response_iss_parameter_supported: true,
-      client_id_metadata_document_supported: false,
-    },
+  const json: unknown = await response.json();
+
+  const body = z.record(z.string(), z.unknown()).parse(json);
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+
+  expect(body).toMatchObject({
+    issuer: 'http://127.0.0.1:7171',
+    authorization_endpoint: 'http://127.0.0.1:7171/oauth2/authorize',
+    token_endpoint: 'http://127.0.0.1:7171/oauth2/token',
+    code_challenge_methods_supported: expect.arrayContaining(['S256']),
+    token_endpoint_auth_methods_supported: ['none'],
+    revocation_endpoint_auth_methods_supported: ['none'],
   });
+
+  expect(
+    Object.keys(body).filter((key) => key.startsWith('introspection_') || key.startsWith('dpop_')),
+  ).toStrictEqual([]);
 });
 
 test.each([['/rpc/system/info'], ['/health'], ['/auth/login'], ['/exec'], ['/'], ['/index.html']])(
@@ -353,17 +368,16 @@ test('it sends the sign-in page with headers that keep it from being framed, cac
   const ctx = await setupTest();
   const oauthClient = await ctx.impd.oauth.addClient('conn', ['https://client.example/callback']);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
+  const pending = await createPendingSignIn({
+    handle: (request) => ctx.handle(request, null),
+    origin: 'http://127.0.0.1:7171',
+    clientID: oauthClient.clientId,
+    redirectURI: 'https://client.example/callback',
     scope: 'read',
   });
 
   const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
+    new Request(`http://127.0.0.1:7171/login?${pending.oauthQuery}`, {
       headers: { host: '127.0.0.1:7171' },
     }),
     null,
@@ -385,34 +399,12 @@ test('it sends the sign-in page with headers that keep it from being framed, cac
   });
 });
 
-test('it escapes the redirect URI that Continue shows after approval', async () => {
+test('it escapes the redirect URI that the consent page shows after approval', async () => {
   const ctx = await setupTest();
 
   const oauthClient = await ctx.impd.oauth.addClient('conn', [
     'https://client.example/cb?next=%22%3E&x=<b>"\'',
   ]);
-
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/cb?next=%22%3E&x=<b>"\'',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    scope: 'read',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
   const made = await ctx.impd.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
 
@@ -420,18 +412,38 @@ test('it escapes the redirect URI that Continue shows after approval', async () 
 
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+  const pending = await createPendingSignIn({
+    handle: (request) => ctx.handle(request, null),
+    origin: 'http://127.0.0.1:7171',
+    clientID: oauthClient.clientId,
+    redirectURI: 'https://client.example/cb?next=%22%3E&x=<b>"\'',
+    scope: 'read',
+  });
 
-  const confirmed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
+  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(pending.code), approver, 'read', undefined);
+
+  const continued = await ctx.handle(
+    new Request('http://127.0.0.1:7171/login', {
       method: 'POST',
       headers: {
         host: '127.0.0.1:7171',
         'content-type': 'application/x-www-form-urlencoded',
         origin: 'http://127.0.0.1:7171',
       },
-      body: new URLSearchParams({ id, signature, action: 'continue' }),
+      body: new URLSearchParams({ oauth_query: pending.oauthQuery, action: 'continue' }),
     }),
+    null,
+  );
+
+  const consentURL = new URL(continued.headers.get('location') ?? '');
+
+  const cookie = continued.headers
+    .getSetCookie()
+    .map((line) => line.split(';')[0])
+    .join('; ');
+
+  const confirmed = await ctx.handle(
+    new Request(consentURL.href, { headers: { host: '127.0.0.1:7171', cookie } }),
     null,
   );
 
@@ -442,26 +454,22 @@ test('it escapes the redirect URI that Continue shows after approval', async () 
   expect(text).not.toInclude('<b>"');
 });
 
-test('it answers a refused sign-in with a page that carries no Location', async () => {
+test('it never sends a sign-in for a client it does not know to its redirect URI or the login page', async () => {
   const ctx = await setupTest();
 
   const response = await ctx.handle(
     new Request(
-      `http://127.0.0.1:7171/oauth/authorize?client_id=impc_guess&redirect_uri=https://evil.example`,
+      `http://127.0.0.1:7171/oauth2/authorize?response_type=code&client_id=impc_guess&redirect_uri=https://evil.example&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256`,
       { headers: { host: '127.0.0.1:7171' } },
     ),
     null,
   );
 
-  const text = await response.text();
+  const location = response.headers.get('location') ?? '';
 
-  expect({
-    status: response.status,
-    location: response.headers.get('location'),
-    referrer: response.headers.get('referrer-policy'),
-  }).toStrictEqual({ status: 400, location: null, referrer: 'same-origin' });
-
-  expect(text).not.toInclude('evil.example');
+  expect(response.status).toBeGreaterThanOrEqual(300);
+  expect(location).not.toInclude('evil.example');
+  expect(location).not.toInclude('/login');
 });
 
 test('it answers a too-busy sign-in with a 429 and when to try again', async () => {
@@ -474,13 +482,14 @@ test('it answers a too-busy sign-in with a 429 and when to try again', async () 
     redirect_uri: 'https://client.example/callback',
     code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
     code_challenge_method: 'S256',
+    scope: 'read',
   });
 
   // the burst of 10 sign-ins a client may start at once
   await Promise.all(
     Array.from({ length: 10 }, async () => {
       await ctx.handle(
-        new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
+        new Request(`http://127.0.0.1:7171/oauth2/authorize?${query.toString()}`, {
           headers: { host: '127.0.0.1:7171' },
         }),
         null,
@@ -489,7 +498,7 @@ test('it answers a too-busy sign-in with a 429 and when to try again', async () 
   );
 
   const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
+    new Request(`http://127.0.0.1:7171/oauth2/authorize?${query.toString()}`, {
       headers: { host: '127.0.0.1:7171' },
     }),
     null,
@@ -513,38 +522,23 @@ test.each([
   const ctx = await setupTest();
   const oauthClient = await ctx.impd.oauth.addClient('conn', ['https://client.example/callback']);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
+  const pending = await createPendingSignIn({
+    handle: (request) => ctx.handle(request, null),
+    origin: 'http://127.0.0.1:7171',
+    clientID: oauthClient.clientId,
+    redirectURI: 'https://client.example/callback',
+    scope: 'read',
   });
 
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'];
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'];
-
-  invariant(id !== undefined);
-  invariant(signature !== undefined);
-
   const posted = await ctx.handle(
-    new Request('http://127.0.0.1:7171/oauth/authorize', {
+    new Request('http://127.0.0.1:7171/login', {
       method: 'POST',
       headers: {
         host: '127.0.0.1:7171',
         'content-type': 'application/x-www-form-urlencoded',
         ...headers,
       },
-      body: new URLSearchParams({ id, signature, action: 'continue' }).toString(),
+      body: new URLSearchParams({ oauth_query: pending.oauthQuery, action: 'continue' }),
     }),
     null,
   );
@@ -554,16 +548,25 @@ test.each([
 
 test('it refuses a sign-in form with an action it does not know', async () => {
   const ctx = await setupTest();
+  const oauthClient = await ctx.impd.oauth.addClient('conn', ['https://client.example/callback']);
+
+  const pending = await createPendingSignIn({
+    handle: (request) => ctx.handle(request, null),
+    origin: 'http://127.0.0.1:7171',
+    clientID: oauthClient.clientId,
+    redirectURI: 'https://client.example/callback',
+    scope: 'read',
+  });
 
   const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
+    new Request('http://127.0.0.1:7171/login', {
       method: 'POST',
       headers: {
         host: '127.0.0.1:7171',
         'content-type': 'application/x-www-form-urlencoded',
         origin: 'http://127.0.0.1:7171',
       },
-      body: new URLSearchParams({ id: 'x', signature: 'y', action: 'maybe' }),
+      body: new URLSearchParams({ oauth_query: pending.oauthQuery, action: 'maybe' }),
     }),
     null,
   );
@@ -571,108 +574,79 @@ test('it refuses a sign-in form with an action it does not know', async () => {
   expect(response.status).toBe(400);
 });
 
-test('it refuses a token request that is not a form', async () => {
+test('it refuses a token request from a client it does not know', async () => {
   const ctx = await setupTest();
 
   const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/json' },
-      body: '{}',
-    }),
-    null,
-  );
-
-  expect({ status: response.status, body: await response.json() }).toStrictEqual({
-    status: 400,
-    body: { error: 'invalid_request', error_description: 'send a form' },
-  });
-});
-
-test('it refuses a token form over 16 KiB', async () => {
-  const ctx = await setupTest();
-
-  const large = 'x'.repeat(17 * 1024);
-
-  const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
+    new Request('http://127.0.0.1:7171/oauth2/token', {
       method: 'POST',
       headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: large }),
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: 'impc_guess',
+        refresh_token: 'not-a-refresh-token',
+      }),
     }),
     null,
   );
 
-  expect(response.status).toBe(400);
+  expect(response.status).toBeOneOf([400, 401]);
+  expect(response.headers.get('cache-control')).toInclude('no-store');
 });
 
-test('it answers a token request from an unknown client with a 401 that is not cached', async () => {
-  const ctx = await setupTest();
-
-  const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'refresh_token', client_id: 'impc_guess' }),
-    }),
-    null,
-  );
-
-  expect({
-    status: response.status,
-    cache: response.headers.get('cache-control'),
-    challenge: response.headers.get('www-authenticate'),
-  }).toStrictEqual({ status: 401, cache: 'no-store', challenge: 'Basic realm="imp"' });
-});
-
-test('it refuses a revocation that is not a form', async () => {
-  const ctx = await setupTest();
-
-  const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/revoke`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/json' },
-      body: '{}',
-    }),
-    null,
-  );
-
-  expect(response.status).toBe(400);
-});
-
-test('it answers a client’s revocation with an empty 200 that is not cached', async () => {
+test('it ends the grant whose client revokes its refresh token, and refuses its access token', async () => {
   const ctx = await setupTest();
   const oauthClient = await ctx.impd.oauth.addClient('conn', ['https://client.example/callback']);
+  const made = await ctx.impd.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
 
-  const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/revoke`, {
+  const approver = ctx.impd.tokens.authenticate(made.secret);
+
+  invariant(approver);
+
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+    },
+  );
+
+  const revoked = await ctx.handle(
+    new Request('http://127.0.0.1:7171/oauth2/revoke', {
       method: 'POST',
       headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: oauthClient.clientId, token: 'impat_guess.wrong' }),
+      body: new URLSearchParams({
+        client_id: oauthClient.clientId,
+        token: tokens.refresh_token,
+        token_type_hint: 'refresh_token',
+      }),
     }),
     null,
   );
 
-  expect({
-    status: response.status,
-    cache: response.headers.get('cache-control'),
-    body: await response.text(),
-  }).toStrictEqual({ status: 200, cache: 'no-store', body: '' });
-});
-
-test('it answers a revocation from an unknown client with a 401', async () => {
-  const ctx = await setupTest();
-
-  const response = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/revoke`, {
+  const after = await ctx.handle(
+    new Request('http://127.0.0.1:7171/mcp', {
       method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: 'impc_guess', token: 'impat_guess.wrong' }),
+      headers: {
+        host: '127.0.0.1:7171',
+        'content-type': 'application/json',
+        authorization: `Bearer ${tokens.access_token}`,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'ping' }),
     }),
     null,
   );
 
-  expect(response.status).toBe(401);
+  const grants = await ctx.impd.oauth.listGrants();
+
+  expect(revoked.status).toBe(200);
+  expect(grants).toStrictEqual([]);
+  expect(after.status).toBe(401);
 });
 
 test('it signs a client in over HTTP to tokens for the approved scope, sending no referrer on the redirect', async () => {
@@ -682,43 +656,50 @@ test('it signs a client in over HTTP to tokens for the approved scope, sending n
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+  const pending = await createPendingSignIn({
+    handle: (request) => ctx.handle(request, null),
+    origin: 'http://127.0.0.1:7171',
+    clientID: oauthClient.clientId,
+    redirectURI: 'https://client.example/callback',
+    scope: 'read exec manage',
+  });
 
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
+  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(pending.code), approver, 'exec', undefined);
+
+  const continued = await ctx.handle(
+    new Request('http://127.0.0.1:7171/login', {
       method: 'POST',
       headers: {
         host: '127.0.0.1:7171',
         'content-type': 'application/x-www-form-urlencoded',
         origin: 'http://127.0.0.1:7171',
       },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
+      body: new URLSearchParams({ oauth_query: pending.oauthQuery, action: 'continue' }),
+    }),
+    null,
+  );
+
+  const consentURL = new URL(continued.headers.get('location') ?? '');
+
+  const cookie = continued.headers
+    .getSetCookie()
+    .map((line) => line.split(';')[0])
+    .join('; ');
+
+  const consentQuery = consentURL.search.slice(1);
+
+  const allowed = await ctx.handle(
+    new Request('http://127.0.0.1:7171/consent', {
+      method: 'POST',
+      headers: {
+        host: '127.0.0.1:7171',
+        'content-type': 'application/x-www-form-urlencoded',
+        origin: 'http://127.0.0.1:7171',
+        cookie,
+      },
+      body: new URLSearchParams({ oauth_query: consentQuery, action: 'allow' }),
     }),
     null,
   );
@@ -728,7 +709,7 @@ test('it signs a client in over HTTP to tokens for the approved scope, sending n
   const issuedCode = redirect.searchParams.get('code') ?? '';
 
   const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
+    new Request('http://127.0.0.1:7171/oauth2/token', {
       method: 'POST',
       headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -737,6 +718,7 @@ test('it signs a client in over HTTP to tokens for the approved scope, sending n
         code: issuedCode,
         redirect_uri: 'https://client.example/callback',
         code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+        resource: 'http://127.0.0.1:7171/mcp',
       }),
     }),
     null,
@@ -746,8 +728,156 @@ test('it signs a client in over HTTP to tokens for the approved scope, sending n
 
   const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
+  expect(consentURL.pathname).toBe('/consent');
   expect(allowed.headers.get('referrer-policy')).toBe('no-referrer');
-  expect(tokens.scope).toBe('read exec');
+  expect(`${redirect.origin}${redirect.pathname}`).toBe('https://client.example/callback');
+  expect(tokens.scope).toBe('read exec offline_access');
+});
+
+test('it signs an MCP client in through its OAuth provider and lists the tools its grant allows', async () => {
+  const ctx = await setupTest();
+
+  const origin = 'http://127.0.0.1:7171';
+
+  const oauthClient = await ctx.impd.oauth.addClient('conn', ['https://client.example/callback']);
+  const made = await ctx.impd.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
+
+  const approver = ctx.impd.tokens.authenticate(made.secret);
+
+  invariant(approver);
+
+  const listener = startPublicListener(
+    {
+      config: { ...ctx.publicMcp, port: 0 },
+      oauth: ctx.impd.oauth,
+      mcp: ctx.impd.api.publicMcp,
+    },
+    () => {},
+  );
+
+  ctx.stack.defer(() => listener.stop());
+
+  // the operator's front: a request for the route's origin goes to the
+  // listener's own port, with the origin's host
+  const sendThroughFront = (url: string | URL, init?: RequestInit): Promise<Response> => {
+    const target = new URL(url);
+
+    target.port = String(listener.port);
+
+    const headers = new Headers(init?.headers);
+
+    headers.set('host', '127.0.0.1:7171');
+
+    return fetch(target, { ...init, headers, redirect: 'manual' });
+  };
+
+  // what the client keeps between its runs, as a connector stores it
+  const saved: {
+    tokens?: OAuthTokens;
+    discovery?: OAuthDiscoveryState;
+    verifier: string;
+    authorizationURL: URL | null;
+  } = { verifier: '', authorizationURL: null };
+
+  const provider: OAuthClientProvider = {
+    redirectUrl: 'https://client.example/callback',
+    clientMetadata: {
+      client_name: 'conn',
+      redirect_uris: ['https://client.example/callback'],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: 'read exec',
+    },
+    clientInformation: () => ({ client_id: oauthClient.clientId }),
+    tokens: () => saved.tokens,
+    saveTokens: (tokens) => {
+      saved.tokens = tokens;
+    },
+    redirectToAuthorization: (url) => {
+      saved.authorizationURL = url;
+    },
+    saveCodeVerifier: (verifier) => {
+      saved.verifier = verifier;
+    },
+    codeVerifier: () => saved.verifier,
+    saveDiscoveryState: (state) => {
+      saved.discovery = state;
+    },
+    discoveryState: () => saved.discovery,
+  };
+
+  const unsigned = new Client({ name: 'test', version: '1.0.0' });
+
+  const first = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
+    authProvider: provider,
+    fetch: sendThroughFront,
+  });
+
+  const refused = await unsigned.connect(first).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  invariant(saved.authorizationURL);
+
+  const authorized = await sendThroughFront(saved.authorizationURL);
+
+  const loginURL = new URL(authorized.headers.get('location') ?? '', origin);
+
+  const login = await sendThroughFront(loginURL);
+  const loginPage = await login.text();
+
+  const code = /impz oauth approve (?<code>[A-Z0-9\-]+)/v.exec(loginPage)?.groups?.['code'] ?? '';
+
+  // the client asks for the scope the route's 401 names, read
+  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+
+  const continued = await sendThroughFront(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin },
+    body: new URLSearchParams({ oauth_query: loginURL.search.slice(1), action: 'continue' }),
+  });
+
+  const consentURL = new URL(continued.headers.get('location') ?? '', origin);
+
+  const cookie = continued.headers
+    .getSetCookie()
+    .map((line) => line.split(';')[0])
+    .join('; ');
+
+  const allowed = await sendThroughFront(`${origin}/consent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin, cookie },
+    body: new URLSearchParams({ oauth_query: consentURL.search.slice(1), action: 'allow' }),
+  });
+
+  const back = new URL(allowed.headers.get('location') ?? '');
+
+  // the redirect's whole query, code and iss, as the client's callback reads it
+  await first.finishAuth(back.searchParams);
+
+  const client = new Client({ name: 'test', version: '1.0.0' });
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
+      authProvider: provider,
+      fetch: sendThroughFront,
+    }),
+  );
+
+  ctx.stack.defer(() => client.close());
+
+  const listed = await client.listTools();
+
+  expect(refused).toBeInstanceOf(UnauthorizedError);
+
+  expect(listed.tools.map((tool) => tool.name)).toStrictEqual([
+    'imp_list',
+    'imp_url',
+    'imp_image_list',
+    'imp_checkpoint_list',
+  ]);
 });
 
 test('it lists an exec grant’s tools over /mcp, without the manage ones', async () => {
@@ -757,69 +887,20 @@ test('it lists an exec grant’s tools over /mcp, without the manage ones', asyn
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -904,69 +985,20 @@ test('it ends a grant’s running command when the grant is revoked', async () =
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -1047,69 +1079,20 @@ test('it refuses /mcp to a revoked grant’s session', async () => {
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -1194,69 +1177,20 @@ test('it ends the grant a removed token approved, and its running command', asyn
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -1348,69 +1282,20 @@ test('it lists only the read tools to a read grant', async () => {
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -1520,69 +1405,20 @@ test.each([
 
     const approver = ctx.impd.tokens.authenticate(made.secret);
 
-    const query = new URLSearchParams({
-      response_type: 'code',
-      client_id: oauthClient.clientId,
-      redirect_uri: 'https://client.example/callback',
-      code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-      code_challenge_method: 'S256',
-      state: 'st',
-      scope: 'read exec manage',
-      resource: 'http://127.0.0.1:7171/mcp',
-    });
-
-    const opened = await ctx.handle(
-      new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-        headers: { host: '127.0.0.1:7171' },
-      }),
-      null,
-    );
-
-    const page = await opened.text();
-
-    const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-    const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-    const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
     invariant(approver);
 
-    ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, scope, imps);
-
-    const allowed = await ctx.handle(
-      new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-        method: 'POST',
-        headers: {
-          host: '127.0.0.1:7171',
-          'content-type': 'application/x-www-form-urlencoded',
-          origin: 'http://127.0.0.1:7171',
-        },
-        body: new URLSearchParams({ id, signature, action: 'allow' }),
-      }),
-      null,
+    const tokens = await runOAuthSignIn(
+      {
+        handle: (request) => ctx.handle(request, null),
+        origin: 'http://127.0.0.1:7171',
+        clientID: oauthClient.clientId,
+        redirectURI: 'https://client.example/callback',
+        scope: 'read exec manage',
+      },
+      (code) => {
+        ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, scope, imps);
+      },
     );
-
-    const redirect = new URL(allowed.headers.get('location') ?? '');
-
-    const issuedCode = redirect.searchParams.get('code') ?? '';
-
-    const issued = await ctx.handle(
-      new Request(`http://127.0.0.1:7171/oauth/token`, {
-        method: 'POST',
-        headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: oauthClient.clientId,
-          code: issuedCode,
-          redirect_uri: 'https://client.example/callback',
-          code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-        }),
-      }),
-      null,
-    );
-
-    const issuedBody: unknown = await issued.json();
-
-    const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
     const mcpOpened = await ctx.handle(
       new Request(`http://127.0.0.1:7171/mcp`, {
@@ -1681,69 +1517,20 @@ test('it audits a grant’s change under its client and grant id', async () => {
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', ['dev-*']);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', ['dev-*']);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -1836,69 +1623,20 @@ test('it audits a grant’s change refused past its patterns as FORBIDDEN', asyn
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', ['dev-*']);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', ['dev-*']);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2273,69 +2011,20 @@ test('it lets a cancel through with every slot held, which stops its tool and fr
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2534,69 +2223,20 @@ test('it refuses a signed-in notification too large for the allowance with every
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {
@@ -2714,69 +2354,20 @@ test('it ends a signed-in session with its DELETE with every slot held', async (
 
   const approver = ctx.impd.tokens.authenticate(made.secret);
 
-  const query = new URLSearchParams({
-    response_type: 'code',
-    client_id: oauthClient.clientId,
-    redirect_uri: 'https://client.example/callback',
-    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    code_challenge_method: 'S256',
-    state: 'st',
-    scope: 'read exec manage',
-    resource: 'http://127.0.0.1:7171/mcp',
-  });
-
-  const opened = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize?${query.toString()}`, {
-      headers: { host: '127.0.0.1:7171' },
-    }),
-    null,
-  );
-
-  const page = await opened.text();
-
-  const code = /impz oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
-  const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
-  const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
-
   invariant(approver);
 
-  ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
-
-  const allowed = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/authorize`, {
-      method: 'POST',
-      headers: {
-        host: '127.0.0.1:7171',
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: 'http://127.0.0.1:7171',
-      },
-      body: new URLSearchParams({ id, signature, action: 'allow' }),
-    }),
-    null,
+  const tokens = await runOAuthSignIn(
+    {
+      handle: (request) => ctx.handle(request, null),
+      origin: 'http://127.0.0.1:7171',
+      clientID: oauthClient.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read exec manage',
+    },
+    (code) => {
+      ctx.impd.oauth.approve(ApprovalCodeSchema.parse(code), approver, 'exec', undefined);
+    },
   );
-
-  const redirect = new URL(allowed.headers.get('location') ?? '');
-
-  const issuedCode = redirect.searchParams.get('code') ?? '';
-
-  const issued = await ctx.handle(
-    new Request(`http://127.0.0.1:7171/oauth/token`, {
-      method: 'POST',
-      headers: { host: '127.0.0.1:7171', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: oauthClient.clientId,
-        code: issuedCode,
-        redirect_uri: 'https://client.example/callback',
-        code_verifier: 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
-      }),
-    }),
-    null,
-  );
-
-  const issuedBody: unknown = await issued.json();
-
-  const tokens = z.object({ access_token: z.string(), scope: z.string() }).parse(issuedBody);
 
   const mcpOpened = await ctx.handle(
     new Request(`http://127.0.0.1:7171/mcp`, {

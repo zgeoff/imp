@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { createApiAudit } from './audit/api-audit';
 import type { ApiAudit } from './audit/api-audit';
@@ -53,7 +52,7 @@ import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import type { TapDevices } from './net/tap-devices';
 import { createNetworkService } from './networks/network-service';
-import { createOAuthService } from './oauth/oauth-service';
+import { createMcpAuth } from './oauth/create-mcp-auth';
 import { printLog } from './process/print-log';
 import { runCommand } from './process/run-command';
 import type { CommandRunner } from './process/run-command';
@@ -195,9 +194,6 @@ export interface ImpdDeps {
 
   // fsfreeze inside the guest, around a checkpoint or a template's disk
   readonly freezer?: DiskFreezer;
-
-  // signs each OAuth sign-in's id; drawn at random by default
-  readonly oauthKey?: Buffer;
 
   // the gap between the progress events of a streamed image call;
   // BUILD_KEEPALIVE_MS by default
@@ -390,14 +386,13 @@ export async function loadImpdAccess(
     isFileKey,
   });
 
-  const oauth = createOAuthService({
+  const oauth = createMcpAuth({
     db: deps.db,
     tokens,
     revocations,
     config: config.publicMcp,
     now,
     log,
-    key: deps.oauthKey ?? randomBytes(32),
   });
 
   return { revocations, tokens, oauth };

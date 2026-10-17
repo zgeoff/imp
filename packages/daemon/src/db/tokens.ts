@@ -165,23 +165,16 @@ export async function readTokenGrantable(
   return row === undefined ? null : GrantableSchema.parse(JSON.parse(row.grantable));
 }
 
-// the token, its keys, and the OAuth grants it approved, whose tokens go with
-// them; returns the grants' ids, for their revocation
+// the token, its keys, and the OAuth grants it approved: each one
+// better-auth user, whose tokens and consents go with it. Returns the
+// grants' ids, for their revocation.
 export function removeTokenRecord(db: ImpDatabase, id: string): Promise<string[]> {
   return db.transaction().execute(async (trx) => {
     await trx.deleteFrom('token_ssh_keys').where('token_id', '=', id).execute();
 
-    const grants = await trx
-      .selectFrom('oauth_grants')
-      .select('id')
-      .where('token_id', '=', id)
-      .execute();
+    const grants = await trx.deleteFrom('user').where('tokenId', '=', id).returning('id').execute();
 
     const grantIds = grants.map((grant) => grant.id);
-
-    if (grantIds.length > 0) {
-      await trx.deleteFrom('oauth_grants').where('id', 'in', grantIds).execute();
-    }
 
     await trx.deleteFrom('tokens').where('id', '=', id).execute();
 

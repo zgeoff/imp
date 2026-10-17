@@ -53,7 +53,7 @@ import type { ImpService } from './imps/imp-service';
 import type { MoveService } from './moves/move-service';
 import type { TailscaleStatus } from './net/tailscale-status';
 import type { NetworkService } from './networks/network-service';
-import type { OAuthService } from './oauth/oauth-service';
+import type { McpAuth } from './oauth/create-mcp-auth';
 import type { DiskBudget } from './storage/disk-budget';
 import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
@@ -113,7 +113,7 @@ export interface RouterDeps {
   readonly imageKeepaliveRepeat?: Repeat;
 
   // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
-  readonly oauth: OAuthService;
+  readonly oauth: McpAuth;
 }
 
 // what a streamed image call's options are made from

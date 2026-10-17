@@ -36,7 +36,6 @@ import { createInProcessSocket } from './exec/in-process-socket';
 import type { BuildContextRoute } from './images/build-context-route';
 import { createMcpEndpoint } from './mcp/mcp-endpoint';
 import type { MoveService } from './moves/move-service';
-import { PROTECTED_RESOURCE_PATH } from './oauth/oauth-metadata';
 import { getImpdLogger } from './process/get-impd-logger';
 import { readPeerAddress } from './proxy/forwarded-peers';
 import type { ForwardedPeers } from './proxy/forwarded-peers';
@@ -278,7 +277,7 @@ export function buildApp(deps: AppDeps) {
     connectExec: openExecSocket,
     readEnds,
     isCrossOrigin: (request) => isPublicCrossOrigin(request, deps.oauth.issuer),
-    challenge: `Bearer resource_metadata="${deps.oauth.issuer}${PROTECTED_RESOURCE_PATH}/mcp", scope="read"`,
+    challenge: `Bearer resource_metadata="${deps.oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="read"`,
   });
 
   const dashboardRoutes = buildDashboardRoutes({
