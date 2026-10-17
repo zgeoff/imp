@@ -733,6 +733,24 @@ test('#runMigrations adds only better-auth’s tables in the better-auth migrati
   ]);
 });
 
+test('#runMigrations refuses a second OAuth client with a name another holds', async () => {
+  const db = createUnmigratedDatabase();
+
+  await runMigrations(db);
+
+  await sql`
+    INSERT INTO "oauthClient" ("id", "clientId", "name", "redirectUris")
+    VALUES ('c1', 'impc_one', 'conn', '[]')
+  `.execute(db);
+
+  expect(
+    sql`
+      INSERT INTO "oauthClient" ("id", "clientId", "name", "redirectUris")
+      VALUES ('c2', 'impc_two', 'conn', '[]')
+    `.execute(db),
+  ).rejects.toThrowWithMessage(Error, /UNIQUE constraint failed: oauthClient\.name/u);
+});
+
 test('#runMigrations leaves better-auth no table or column to add', async () => {
   const db = createUnmigratedDatabase();
 

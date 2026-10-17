@@ -1096,6 +1096,11 @@ export const MIGRATIONS: Record<string, Migration> = {
 
         await sql`CREATE INDEX "oauthClient_userId_idx" ON "oauthClient" ("userId")`.execute(trx);
 
+        // imp names its clients, and the CLI finds one by its name
+        await sql`
+          CREATE UNIQUE INDEX "oauthClient_name_uidx" ON "oauthClient" ("name")
+        `.execute(trx);
+
         await sql`
           CREATE INDEX "oauthClientResource_clientId_idx" ON "oauthClientResource" ("clientId")
         `.execute(trx);
