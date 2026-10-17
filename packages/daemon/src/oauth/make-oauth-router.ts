@@ -64,6 +64,12 @@ interface OAuthRouterDeps {
   readonly removeGrantRows: (ids: readonly string[], why: string) => Promise<void>;
 }
 
+// the parts of a request's URL a route reads
+interface RequestTarget {
+  readonly pathname: string;
+  readonly search: string;
+}
+
 // one approval between its sign-in and its consent
 interface SignedIn {
   readonly binding: string;
@@ -104,11 +110,15 @@ export function makeOAuthRouter(
     }
   };
 
-  const toPublicRequest = (request: Request, url: URL): Request =>
+  const toPublicRequest = (request: Request, url: Readonly<RequestTarget>): Request =>
     new Request(`${deps.origin}${url.pathname}${url.search}`, request);
 
   // the request again for better-auth, with the body it read
-  const toPublicFormRequest = (request: Request, url: URL, body: string): Request =>
+  const toPublicFormRequest = (
+    request: Request,
+    url: Readonly<RequestTarget>,
+    body: string,
+  ): Request =>
     new Request(`${deps.origin}${url.pathname}${url.search}`, {
       method: request.method,
       headers: request.headers,
@@ -118,7 +128,10 @@ export function makeOAuthRouter(
   // The metadata advertises only what imp's clients can use: public clients
   // with no client authentication, no introspection, and Bearer tokens
   // alone, so nothing about DPoP.
-  const readMetadata = async (request: Request, url: URL): Promise<Response> => {
+  const readMetadata = async (
+    request: Request,
+    url: Readonly<RequestTarget>,
+  ): Promise<Response> => {
     const response = await deps.auth.handler(toPublicRequest(request, url));
     const metadata: unknown = await response.json();
 
@@ -154,8 +167,8 @@ export function makeOAuthRouter(
   // A fresh login and consent each time, each scope with the lower ones it
   // holds and offline_access, so an approval may give less than asked, and
   // the one resource when the client named none
-  const runAuthorize = async (url: URL): Promise<Response> => {
-    const params = new URLSearchParams(url.searchParams);
+  const runAuthorize = async (url: Readonly<RequestTarget>): Promise<Response> => {
+    const params = new URLSearchParams(url.search);
 
     const asked = (params.get('scope') ?? '').split(' ').filter((word) => word !== '');
     const askedOrRead = asked.length === 0 ? ['read'] : asked;
@@ -209,7 +222,7 @@ export function makeOAuthRouter(
   // The login page, for a sign-in better-auth sent here. Continue, once the
   // sign-in is approved, makes its user and carries the authorization on to
   // consent; deny returns to the client.
-  const runLogin = async (request: Request, url: URL): Promise<Response> => {
+  const runLogin = async (request: Request, url: Readonly<RequestTarget>): Promise<Response> => {
     const form = request.method === 'POST' ? await readForm(request) : null;
 
     const oauthQuery =
@@ -297,7 +310,7 @@ export function makeOAuthRouter(
   // The consent page, for the session a sign-in started and the request it
   // signed in for; either answer returns to the client with the session
   // cookie cleared
-  const runConsent = async (request: Request, url: URL): Promise<Response> => {
+  const runConsent = async (request: Request, url: Readonly<RequestTarget>): Promise<Response> => {
     const form = request.method === 'POST' ? await readForm(request) : null;
 
     const oauthQuery =
@@ -413,7 +426,10 @@ export function makeOAuthRouter(
   // A code exchange binds its tokens to the session that approved them;
   // once issued, no token needs it, so every session a token holds goes,
   // with the expired ones.
-  const runTokenRequest = async (request: Request, url: URL): Promise<Response> => {
+  const runTokenRequest = async (
+    request: Request,
+    url: Readonly<RequestTarget>,
+  ): Promise<Response> => {
     const body = await readBodyText(request, MAX_FORM_BYTES);
 
     if (body === null) {
@@ -453,7 +469,7 @@ export function makeOAuthRouter(
 
   // RFC 7009 through better-auth; a token it revoked for its own client
   // takes its whole grant with it, as imp's grants always went
-  const runRevoke = async (request: Request, url: URL): Promise<Response> => {
+  const runRevoke = async (request: Request, url: Readonly<RequestTarget>): Promise<Response> => {
     const body = await readBodyText(request, MAX_FORM_BYTES);
 
     if (body === null) {
@@ -620,7 +636,7 @@ function readURLField(answer: unknown): string | null {
     return null;
   }
 
-  const fields = new Map(Object.entries(answer));
+  const fields = new Map<string, unknown>(Object.entries(answer));
 
   const next: unknown = fields.get('url') ?? fields.get('redirect_uri');
 
@@ -633,7 +649,9 @@ function readErrorDescription(answer: unknown): string | null {
     return null;
   }
 
-  const description: unknown = new Map(Object.entries(answer)).get('error_description');
+  const fields = new Map<string, unknown>(Object.entries(answer));
+
+  const description = fields.get('error_description');
 
   return typeof description === 'string' ? description : null;
 }

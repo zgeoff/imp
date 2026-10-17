@@ -492,7 +492,7 @@ function readAccessPayload(payload: unknown): AccessPayload | null {
     return null;
   }
 
-  const fields = new Map(Object.entries(payload));
+  const fields = new Map<string, unknown>(Object.entries(payload));
 
   const userID = fields.get('sub');
   const clientID = fields.get('client_id');
