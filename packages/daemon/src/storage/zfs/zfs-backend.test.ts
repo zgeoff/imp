@@ -3744,6 +3744,34 @@ test.skipIf(readZfsTestPool() === null)(
 
     mkdirSync(tree);
 
+    // `available` is the whole pool's: the frees of datasets that earlier
+    // tests destroyed raise it as their txgs commit, and a txg that commits
+    // mid-write would count them against the tree, so they land first
+    const [poolName] = pool.root.split('/');
+
+    invariant(poolName);
+
+    const diagFreeing = await runChecked([
+      'zpool',
+      'get',
+      '-Hp',
+      '-o',
+      'value',
+      'freeing',
+      poolName,
+    ]);
+
+    const diagBefore = await pool.backend.readUsage();
+
+    await runChecked(['zpool', 'sync', poolName]);
+    await runChecked(['zpool', 'wait', '-t', 'free', poolName]);
+
+    const diagAfter = await pool.backend.readUsage();
+
+    console.log(
+      `GEO-1226 diag: freeing=${diagFreeing.trim()} availableGain=${String(diagAfter.availableBytes - diagBefore.availableBytes)}`,
+    );
+
     const before = await pool.backend.readUsage();
 
     const fd = openSync(join(tree, 'layer.bin'), 'w');
