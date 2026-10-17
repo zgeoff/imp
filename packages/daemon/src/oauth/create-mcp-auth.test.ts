@@ -314,6 +314,123 @@ test('it refreshes a grant’s tokens and refuses its spent refresh token', asyn
   expect(second.status).toBe(400);
 });
 
+test('it ends the grant when two refreshes spend one refresh token at once', async () => {
+  const ctx = await setupTest();
+  const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
+  const made = await ctx.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
+
+  const approver = ctx.tokens.authenticate(made.secret);
+
+  invariant(approver);
+
+  const issued = await runOAuthSignIn(
+    {
+      handle: ctx.handle,
+      origin: 'http://127.0.0.1:7171',
+      clientID: client.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read',
+    },
+    (code) => {
+      ctx.auth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+    },
+  );
+
+  const sendRefresh = () =>
+    ctx.handle(
+      new Request('http://127.0.0.1:7171/oauth2/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: client.clientId,
+          refresh_token: issued.refresh_token,
+        }),
+      }),
+    );
+
+  const answers = await Promise.all([sendRefresh(), sendRefresh()]);
+  const grants = await ctx.db.selectFrom('user').select('id').execute();
+  const accessRows = await ctx.db.selectFrom('oauthAccessToken').select('id').execute();
+
+  expect(answers.map((answer) => answer.status)).toIncludeSameMembers([200, 400]);
+  expect(grants).toStrictEqual([]);
+  expect(accessRows).toStrictEqual([]);
+});
+
+test('it refuses an access token bound to a key, as the route takes bearer tokens alone', async () => {
+  const ctx = await setupTest();
+  const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
+  const made = await ctx.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
+
+  const approver = ctx.tokens.authenticate(made.secret);
+
+  invariant(approver);
+
+  const issued = await runOAuthSignIn(
+    {
+      handle: ctx.handle,
+      origin: 'http://127.0.0.1:7171',
+      clientID: client.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read',
+    },
+    (code) => {
+      ctx.auth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+    },
+  );
+
+  // what better-auth stores for a token it bound to a DPoP key
+  await ctx.db
+    .updateTable('oauthAccessToken')
+    .set({ confirmation: JSON.stringify({ jkt: '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I' }) })
+    .execute();
+
+  const caller = await ctx.auth.resolveAccess(issued.access_token);
+
+  expect(caller).toBeNull();
+});
+
+test('it answers a token request that sends a DPoP proof with a bearer token', async () => {
+  const ctx = await setupTest();
+  const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
+  const made = await ctx.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
+
+  const approver = ctx.tokens.authenticate(made.secret);
+
+  invariant(approver);
+
+  const issued = await runOAuthSignIn(
+    {
+      handle: ctx.handle,
+      origin: 'http://127.0.0.1:7171',
+      clientID: client.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read',
+    },
+    (code) => {
+      ctx.auth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+    },
+  );
+
+  const refreshed = await ctx.handle(
+    new Request('http://127.0.0.1:7171/oauth2/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', dpop: 'a.dpop.proof' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: client.clientId,
+        refresh_token: issued.refresh_token,
+      }),
+    }),
+  );
+
+  const body: unknown = await refreshed.json();
+
+  expect(refreshed.status).toBe(200);
+  expect(body).toMatchObject({ token_type: 'Bearer' });
+});
+
 test('#listGrants lists a signed-in grant with its client, token, scope and imps', async () => {
   const ctx = await setupTest();
   const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
@@ -466,6 +583,64 @@ test('#removeExpired removes a grant whose refresh token expired', async () => {
   const grants = await ctx.db.selectFrom('user').select('id').execute();
 
   expect(grants).toStrictEqual([]);
+});
+
+test('#removeExpired removes the expired tokens of a grant that keeps refreshing, and keeps its live refresh rows', async () => {
+  const ctx = await setupTest();
+  const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
+  const made = await ctx.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
+
+  const approver = ctx.tokens.authenticate(made.secret);
+
+  invariant(approver);
+
+  const issued = await runOAuthSignIn(
+    {
+      handle: ctx.handle,
+      origin: 'http://127.0.0.1:7171',
+      clientID: client.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read',
+    },
+    (code) => {
+      ctx.auth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+    },
+  );
+
+  const refreshed = await ctx.handle(
+    new Request('http://127.0.0.1:7171/oauth2/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: client.clientId,
+        refresh_token: issued.refresh_token,
+      }),
+    }),
+  );
+
+  invariant(refreshed.status === 200);
+
+  // the first sign-in's refresh token and every access token ran out
+  const past = new Date(Date.now() - 1000).toISOString();
+
+  await ctx.db.updateTable('oauthAccessToken').set({ expiresAt: past }).execute();
+
+  await ctx.db
+    .updateTable('oauthRefreshToken')
+    .set({ expiresAt: past })
+    .where('revoked', 'is not', null)
+    .execute();
+
+  await ctx.auth.removeExpired();
+
+  const accessRows = await ctx.db.selectFrom('oauthAccessToken').select('id').execute();
+  const refreshRows = await ctx.db.selectFrom('oauthRefreshToken').select('revoked').execute();
+  const grants = await ctx.db.selectFrom('user').select('id').execute();
+
+  expect(accessRows).toStrictEqual([]);
+  expect(refreshRows).toStrictEqual([{ revoked: null }]);
+  expect(grants).toHaveLength(1);
 });
 
 test('#removeExpired never removes a grant with a live refresh token', async () => {

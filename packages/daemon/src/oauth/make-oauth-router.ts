@@ -121,7 +121,7 @@ export function makeOAuthRouter(
   ): Request =>
     new Request(`${deps.origin}${url.pathname}${url.search}`, {
       method: request.method,
-      headers: request.headers,
+      headers: removeDpopProof(request),
       body,
     });
 
@@ -423,6 +423,28 @@ export function makeOAuthRouter(
     });
   };
 
+  // A refused refresh of a spent token is a replay, even one racing the
+  // refresh that spent it, which better-auth refuses without revoking
+  // anything: the grant goes, with what the winner got.
+  const removeReplayedGrant = async (form: Readonly<URLSearchParams>): Promise<void> => {
+    const refreshToken = form.get('refresh_token');
+
+    if (form.get('grant_type') !== 'refresh_token' || refreshToken === null) {
+      return;
+    }
+
+    const spent = await deps.db
+      .selectFrom('oauthRefreshToken')
+      .select('userId')
+      .where('token', '=', deriveTokenHash(refreshToken))
+      .where((eb) => eb.or([eb('revoked', 'is not', null), eb('rotatedAt', 'is not', null)]))
+      .executeTakeFirst();
+
+    if (spent !== undefined) {
+      await deps.removeGrantRows([spent.userId], 'a spent refresh token came again');
+    }
+  };
+
   // A code exchange binds its tokens to the session that approved them;
   // once issued, no token needs it, so every session a token holds goes,
   // with the expired ones.
@@ -437,6 +459,10 @@ export function makeOAuthRouter(
     }
 
     const response = await deps.auth.handler(toPublicFormRequest(request, url, body));
+
+    if (response.status === 400) {
+      await removeReplayedGrant(new URLSearchParams(body));
+    }
 
     if (response.ok) {
       const held = await deps.db
@@ -654,6 +680,16 @@ function readErrorDescription(answer: unknown): string | null {
   const description = fields.get('error_description');
 
   return typeof description === 'string' ? description : null;
+}
+
+// The route takes bearer tokens alone, so a client's DPoP proof is dropped
+// and better-auth issues a bearer token, as RFC 9449 lets a server do.
+function removeDpopProof(request: Request): Headers {
+  const kept = new Headers(request.headers);
+
+  kept.delete('dpop');
+
+  return kept;
 }
 
 // a urlencoded form of at most MAX_FORM_BYTES; null for anything else

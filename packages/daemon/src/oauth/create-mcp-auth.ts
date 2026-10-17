@@ -494,6 +494,9 @@ export function createMcpAuth(deps: Readonly<McpAuthDeps>): McpAuth {
         'its refresh token expired',
       );
 
+      // a live rotated refresh token stays, so a replay of it still ends its grant
+      await db.deleteFrom('oauthRefreshToken').where('expiresAt', '<', at).execute();
+      await db.deleteFrom('oauthAccessToken').where('expiresAt', '<', at).execute();
       await db.deleteFrom('session').where('expiresAt', '<', at).execute();
       await db.deleteFrom('verification').where('expiresAt', '<', at).execute();
     },
@@ -507,14 +510,19 @@ interface AccessPayload {
   readonly scopes: readonly string[];
 }
 
-// the fields of better-auth's introspection payload a grant needs; null
-// for one without a user or client
+// The fields of better-auth's introspection payload a grant needs; null for
+// one without a user or client, or one bound to a key (`cnf`), since the
+// route checks no proof of the key and a stolen bound token must not pass.
 function readAccessPayload(payload: unknown): AccessPayload | null {
   if (typeof payload !== 'object' || payload === null) {
     return null;
   }
 
   const fields = new Map<string, unknown>(Object.entries(payload));
+
+  if (fields.get('cnf') !== undefined && fields.get('cnf') !== null) {
+    return null;
+  }
 
   const userID = fields.get('sub');
   const clientID = fields.get('client_id');

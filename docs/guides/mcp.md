@@ -281,10 +281,12 @@ A grant ends with `impz oauth grant rm <id>`, `impz token rm` of the token that 
 running commands stop as a cancel stops them, its unused exec tickets open nothing, and its next
 request gets 401. A code works once: a second exchange gets `invalid_grant`.
 
-A refresh token is strictly single use, with no grace window. A spent refresh token that its own
-client presents again revokes every refresh token of the grant, so two refreshes of one token at
-once leave the client with neither. A client must send one refresh at a time. After a lost response
-or a reuse failure, it signs in again.
+A refresh token is strictly single use, with no grace window. A spent refresh token that comes again
+ends its grant, so two refreshes of one token at once leave the client with no working token. A
+client must send one refresh at a time. After a lost response or a reuse failure, it signs in again.
+
+The route takes bearer tokens alone. A token request that sends a DPoP proof gets a bearer token,
+because impd checks no proof on `/mcp`, and a token bound to a key is refused there.
 
 A restart ends the sign-ins in progress and their codes, not the grants.
 
