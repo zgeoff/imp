@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, requireImp, runImp } from '../lib/imp-cli';
@@ -62,7 +62,7 @@ test('it reports AGENT_OUTDATED and closes the connection when the imp’s agent
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const held = await openHeldSocket(port);
 

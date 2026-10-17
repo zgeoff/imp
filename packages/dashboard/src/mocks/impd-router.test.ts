@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { EVENT_VERSION } from '@impz/api';
 import { createImpClient } from '@impz/client';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { buildMockImpChangedEvent } from '../test-utils/build-mock-imp-changed-event';
 import { createDashboardSession } from '../test-utils/create-dashboard-session';
 import { checkpointCollection } from './db/checkpoint-collection';

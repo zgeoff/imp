@@ -22,7 +22,7 @@ import { buildStubExecGuest } from '@impz/daemon/src/test-utils/build-stub-exec-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubExecAgent } from '@impz/daemon/src/test-utils/start-stub-exec-agent';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { createImpGuard } from '../imp-guard';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';

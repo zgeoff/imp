@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { config } from '../lib/config';
 import { openSessionSocket, requireOutput, requireSessionError } from '../lib/exec-socket';
 import { resolveImageName } from '../lib/fixtures';
@@ -197,7 +197,7 @@ test('it resumes session output from the offset a client saw, and names the gap,
 
   expect(startGone.code).toBe('NO_SESSION');
 
-  invariant(startGone.data.bootId);
+  invariant(startGone.data.bootId !== undefined);
 
   expect(startGone.data.bootId).not.toBe(exactOutput.bootId);
 

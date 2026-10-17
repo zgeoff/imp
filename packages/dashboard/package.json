@@ -39,6 +39,7 @@
     "@vitejs/plugin-react": "catalog:",
     "@zgeoff/bun-test-react": "catalog:",
     "msw": "catalog:",
+    "tiny-invariant": "catalog:",
     "vite": "catalog:",
     "zod": "catalog:"
   }

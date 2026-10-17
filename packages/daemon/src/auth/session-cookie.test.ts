@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import {
   buildClearedSessionCookies,
   buildSessionCookie,
@@ -31,7 +31,7 @@ test('#buildSessionValue keys the signature on a key derived from the root token
 
   const signature = value.split('.').at(-1);
 
-  invariant(signature);
+  invariant(signature !== undefined);
 
   expect(signature).not.toBe(keyedOnToken);
 });

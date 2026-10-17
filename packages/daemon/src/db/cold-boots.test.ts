@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { rmSync } from 'node:fs';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { buildTestApp, createImpTest } from '../imps/test-imps';
 import { buildImpPaths } from '../storage/data-layout';
@@ -85,7 +85,7 @@ test('it records a wake that falls back to a cold boot as wake_fallback, with a 
   const boots = await listColdBoots(ctx.db, created.id);
   const imp = await findImpByName(ctx.db, 'dev');
 
-  invariant(imp?.pid);
+  invariant(typeof imp?.pid === 'number');
 
   expect(boots.map((boot) => boot.cause)).toStrictEqual(['wake_fallback', 'start']);
   expect(boots[0]?.bootId).toBe(buildStubBootId(imp.pid));
@@ -148,7 +148,7 @@ test('it records the boot after impd found the VM gone as recovery, and only tha
   const created = await ctx.client.imps.create({ name: 'dev' });
   const running = await findImpByName(ctx.db, 'dev');
 
-  invariant(running?.pid);
+  invariant(typeof running?.pid === 'number');
 
   // the guest crashed without impd seeing it
   ctx.fake.alive.delete(running.pid);
@@ -172,7 +172,7 @@ test('it answers an attach that boots a crashed imp with NO_SESSION and its cold
   const created = await ctx.client.imps.create({ name: 'dev' });
   const running = await findImpByName(ctx.db, 'dev');
 
-  invariant(running?.pid);
+  invariant(typeof running?.pid === 'number');
 
   await startStubAttachAgent(buildImpPaths(ctx.dataDir, created.id).vsockSocket, {
     bootId: 'boot-old',
@@ -294,7 +294,7 @@ test('it names the cold boots in a session’s started output', async () => {
 
   const imp = await findImpByName(ctx.db, 'dev');
 
-  invariant(imp?.pid);
+  invariant(typeof imp?.pid === 'number');
 
   // the cold boot's id is the stub guest's for the VM's pid, and its time the
   // clock's while the create ran (below)
@@ -414,7 +414,7 @@ test('it spends the pending cause on a boot without a boot_id, so a later boot d
   const created = await ctx.client.imps.create({ name: 'dev' });
   const running = await findImpByName(ctx.db, 'dev');
 
-  invariant(running?.pid);
+  invariant(typeof running?.pid === 'number');
 
   // the guest crashed without impd seeing it, and a read found it gone
   ctx.fake.alive.delete(running.pid);

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createRevocations } from './revocations';
 
 test('#readSignal gives a live signal for an id that was not revoked', () => {

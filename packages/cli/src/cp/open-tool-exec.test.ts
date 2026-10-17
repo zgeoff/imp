@@ -30,9 +30,9 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
 import { listLocalEntries, writeLocalEntries } from '@impz/local-tar';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import tar from 'tar-stream';
+import invariant from 'tiny-invariant';
 import { buildStubExecPeer } from '../test-utils/build-stub-exec-peer';
 import { openToolExec } from './open-tool-exec';
 
@@ -143,7 +143,7 @@ async function setupTest() {
     await app.stop(true);
   });
 
-  invariant(app.server?.port);
+  invariant(app.server?.port !== undefined);
 
   const url = `http://127.0.0.1:${String(app.server.port)}`;
 

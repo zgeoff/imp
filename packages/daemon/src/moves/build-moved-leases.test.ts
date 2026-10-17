@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
 import type { ImpEvent } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { findImpByName, updateImpActivity, updateImpExposure } from '../db/imps';
 import { listLeases, writeLease } from '../db/leases';
 import { createIdleLoop } from '../idle/idle-loop';
@@ -334,7 +334,7 @@ test("it refuses a target token the warm-moved lease of the source's token", asy
 
   const caller = ctx.target.tokens.authenticate(made.secret);
 
-  invariant(caller?.principal);
+  invariant(typeof caller?.principal === 'string');
 
   const holder = { principal: caller.principal, display: 'ci' };
 

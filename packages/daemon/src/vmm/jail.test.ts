@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubMounts } from '../test-utils/build-stub-mounts';
 import { buildStubUidProcesses } from '../test-utils/build-stub-uid-processes';

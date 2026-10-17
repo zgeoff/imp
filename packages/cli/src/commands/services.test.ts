@@ -23,8 +23,8 @@ import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubServiceAgent } from '@impz/daemon/src/test-utils/start-stub-service-agent';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { runCli } from '../test-utils/start-cli';
 import { UsageError } from '../usage-error';
 import { buildServiceDef, createLogPrinter, formatLogEvent } from './services';
@@ -139,7 +139,7 @@ async function setupTest() {
 
   const port = app.server?.port;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const client = createImpClient({
     url: 'http://impd.test',

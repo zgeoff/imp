@@ -3,7 +3,7 @@ import { closeSync, ftruncateSync, openSync, writeSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createStreamRunner } from '../process/run-stream';
 import {
   MOVE_BLOCK_BYTES,

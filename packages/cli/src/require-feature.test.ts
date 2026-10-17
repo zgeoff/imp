@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildMockSystemInfo } from '@impz/api/test-utils/build-mock-system-info';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { requireFeature } from './require-feature';
 
 test('it resolves when impd reports the feature on', () => {

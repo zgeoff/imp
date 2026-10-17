@@ -17,13 +17,13 @@ import { join } from 'node:path';
 import { connect as connectTls } from 'node:tls';
 import type { ImpContract } from '@impz/api';
 import { buildMockBrokerRule } from '@impz/api/test-utils/build-mock-broker-rule';
-import { invariant } from '@impz/test-utils/invariant';
 import { server } from '@impz/test-utils/mock-server';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { HttpResponse, http } from 'msw';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import {
@@ -752,7 +752,7 @@ test('it gives a new boot whose install fails no broker variables, and logs why'
 
   const imp = await findImpByName(ctx.db, 'dev');
 
-  invariant(imp?.pid);
+  invariant(typeof imp?.pid === 'number');
 
   const vsock = join(ctx.dataDir, 'vsock');
 
@@ -1167,7 +1167,7 @@ test('it logs an audit row it could not write and still answers the request', as
   const logged = await waitFor(() => {
     const line = ctx.logs.find((each) => each.startsWith('impd: broker: audit write failed'));
 
-    invariant(line);
+    invariant(line !== undefined);
 
     return line;
   });

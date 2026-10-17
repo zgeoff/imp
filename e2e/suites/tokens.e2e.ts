@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { listAuditCalls } from '../lib/audit';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -51,7 +51,7 @@ test('it prints a made read token once, lists it without its secret, and lets it
 
   const [, secretPart] = secret.split('.');
 
-  invariant(secretPart);
+  invariant(secretPart !== undefined);
 
   const tokens = await runImp('token', 'ls');
   const whoami = await tryImp(['token', 'whoami'], { token: secret });
@@ -304,7 +304,7 @@ test('it lets an ssh key bound to a dev-* exec token log in to its imp and no ot
 
   const keyPath = keys.publicKeyPaths.get(keyHost);
 
-  invariant(keyPath);
+  invariant(keyPath !== undefined);
 
   await runImp(
     'token',
@@ -344,7 +344,7 @@ test('it lets an ssh key bound to a dev-* exec token log in to its imp and no ot
 
   const [fingerprint] = bound.split(' ');
 
-  invariant(fingerprint);
+  invariant(fingerprint !== undefined);
 
   await runImp('token', 'key', 'rm', sshDev, fingerprint);
 
@@ -378,7 +378,7 @@ test('it opens no ssh session for a key bound to a read token', async () => {
 
   const keyPath = keys.publicKeyPaths.get(keyHost);
 
-  invariant(keyPath);
+  invariant(keyPath !== undefined);
 
   await runImp('token', 'new', sshReader, '--scope', 'read', '--ssh-key', keyPath);
 

@@ -3,11 +3,11 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createImpClient } from '@impz/client';
-import { invariant } from '@impz/test-utils/invariant';
 import { readImpEnv } from '@impz/test-utils/read-imp-env';
 import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import invariant from 'tiny-invariant';
 import { readMcpAnswer } from '../../../mcp/src/test-utils/read-mcp-answer';
 import { buildApiListenOptions } from '../api-listen-options';
 import { runWhois } from '../auth/tailnet-identity';
@@ -209,7 +209,7 @@ test('it names a nameless create under the one prefix its token may touch', asyn
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -270,7 +270,7 @@ test('it audits a tool call as the token that made it', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -337,7 +337,7 @@ test('it runs a command in an imp its token may touch', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -393,7 +393,7 @@ test('it refuses a create outside the patterns of its token', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -447,7 +447,7 @@ test('it lists only the read tools to a read token', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -503,7 +503,7 @@ test('it lists the imps to a read token', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -573,7 +573,7 @@ test.each([
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -638,7 +638,7 @@ test('it refuses a fork to a token that may grant secrets', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -700,7 +700,7 @@ test('it asks a token with two patterns to name the imp it creates', async () =>
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -761,7 +761,7 @@ test('it refuses a session to a caller other than the one that opened it', async
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -817,7 +817,7 @@ test('it ends the streamed call and running command of a token that is removed',
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const call = fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -845,7 +845,7 @@ test('it ends the streamed call and running command of a token that is removed',
   const text = await response.text();
 
   await waitFor(() => {
-    invariant(guest.closed[0]);
+    invariant(guest.closed[0] !== undefined);
   });
 
   expect(response.status).toBe(200);
@@ -887,7 +887,7 @@ test('it refuses the session of a removed token with 401', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   await ctx.client.tokens.delete({ name: 'agent' });
 
@@ -974,7 +974,7 @@ test('it serves a tailnet identity the wake proxy hands over the imps its rule a
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${ctx.url}/mcp`, {
     method: 'POST',
@@ -1084,7 +1084,7 @@ test('it answers a tool call through the wake proxy’s API route', async () => 
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await fetch(`${via}/mcp`, {
     method: 'POST',
@@ -1274,7 +1274,7 @@ test('it keeps a call answered as server-sent events open through the wake proxy
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const call = fetch(`${via}/mcp`, {
     method: 'POST',

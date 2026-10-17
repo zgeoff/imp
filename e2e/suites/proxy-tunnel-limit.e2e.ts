@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, runImp, runShellInImp } from '../lib/imp-cli';
@@ -59,8 +59,8 @@ test('it refuses only the connection past the tunnel cap with TUNNEL_LIMIT, and 
 
   const [echoPort, httpPort] = proxy.ports;
 
-  invariant(echoPort);
-  invariant(httpPort);
+  invariant(echoPort !== undefined);
+  invariant(httpPort !== undefined);
 
   const held: HeldSocket[] = [];
   const echoes: string[] = [];

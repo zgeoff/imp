@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { buildStubZfs } from './build-stub-zfs';
 import { createZfsTestDataset } from './create-zfs-test-dataset';
 
@@ -132,7 +132,7 @@ test('it refuses a dataset name zfs already shows and never touches that dataset
 
   const taken = ctx.fake.listDatasets().find((name) => name !== 'tank/imp');
 
-  invariant(taken);
+  invariant(taken !== undefined);
 
   await ctx.stack.disposeAsync();
 

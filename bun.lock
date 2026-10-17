@@ -26,6 +26,7 @@
         "oxlint": "catalog:",
         "oxlint-tsgolint": "catalog:",
         "ssh2": "catalog:",
+        "tiny-invariant": "catalog:",
         "tslib": "catalog:",
         "typescript": "catalog:",
         "yaml": "catalog:",
@@ -66,6 +67,7 @@
         "@impz/daemon": "workspace:*",
         "@impz/test-utils": "workspace:*",
         "msw": "catalog:",
+        "tiny-invariant": "catalog:",
       },
     },
     "packages/client": {
@@ -82,6 +84,7 @@
         "@impz/shared": "workspace:*",
         "@impz/test-utils": "workspace:*",
         "msw": "catalog:",
+        "tiny-invariant": "catalog:",
         "tsdown": "catalog:",
       },
       "peerDependencies": {
@@ -130,6 +133,7 @@
         "fast-check": "catalog:",
         "kysely-codegen": "catalog:",
         "msw": "catalog:",
+        "tiny-invariant": "catalog:",
       },
     },
     "packages/dashboard": {
@@ -163,6 +167,7 @@
         "@vitejs/plugin-react": "catalog:",
         "@zgeoff/bun-test-react": "catalog:",
         "msw": "catalog:",
+        "tiny-invariant": "catalog:",
         "vite": "catalog:",
         "zod": "catalog:",
       },
@@ -193,6 +198,7 @@
         "@impz/daemon": "workspace:*",
         "@impz/test-utils": "workspace:*",
         "@modelcontextprotocol/client": "catalog:",
+        "tiny-invariant": "catalog:",
       },
     },
     "packages/shared": {
@@ -281,6 +287,7 @@
     "reflect-metadata": "0.2.2",
     "ssh2": "1.17.0",
     "tar-stream": "3.2.1",
+    "tiny-invariant": "1.3.3",
     "tsdown": "0.23.0",
     "tslib": "2.8.1",
     "typescript": "7.0.2",
@@ -1640,6 +1647,8 @@
     "teex": ["teex@1.0.1", "", { "dependencies": { "streamx": "^2.12.5" } }, "sha512-eYE6iEI62Ni1H8oIa7KlDU6uQBtqr4Eajni3wX7rpfXD8ysFx8z0+dri+KWEPWpBsxXfxu58x/0jvTVT1ekOSg=="],
 
     "text-decoder": ["text-decoder@1.2.7", "", { "dependencies": { "b4a": "^1.6.4" } }, "sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ=="],
+
+    "tiny-invariant": ["tiny-invariant@1.3.3", "", {}, "sha512-+FbBPE1o9QAYvviau/qC5SE3caw21q3xkvWKBtja5vgqOWIHHJ3ioaq1VPfn/Szqctz2bU/oYeKd9/z5BL+PVg=="],
 
     "tinyexec": ["tinyexec@1.3.1", "", {}, "sha512-GCvB3aoys96IuDFBMcTB46JOR6mdMtAToqwiW8JlWhsoh1mhHi/xn9ss/Dg7N555GiJyEt2qzoG/NHCwM6h1EA=="],
 

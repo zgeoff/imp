@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { createInstanceClient, runImp, runShellInImp } from '../lib/imp-cli';
@@ -95,7 +95,7 @@ test('it delivers the reply to a client that half-closes', async () => {
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const reply = await sendRequest(port, 'hello');
 

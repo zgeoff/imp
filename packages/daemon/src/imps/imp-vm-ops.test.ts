@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import fc from 'fast-check';
+import invariant from 'tiny-invariant';
 import { createImp, findImpByName, listImps, updateImpActivity, updateImpState } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
@@ -365,9 +365,9 @@ test('it settles imps a restarted impd finds in every state', async () => {
   const deadOld = await findImpByName(ctx.db, 'dead-old-snapshot');
   const lostSnapshot = await findImpByName(ctx.db, 'asleep-lost-snapshot');
 
-  invariant(dead?.pid);
-  invariant(deadFresh?.pid);
-  invariant(deadOld?.pid);
+  invariant(typeof dead?.pid === 'number');
+  invariant(typeof deadFresh?.pid === 'number');
+  invariant(typeof deadOld?.pid === 'number');
   invariant(lostSnapshot);
 
   ctx.fake.alive.delete(dead.pid);

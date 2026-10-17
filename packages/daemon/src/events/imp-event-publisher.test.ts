@@ -3,11 +3,11 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract, ImpEvent } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { buildSessionValue } from '../auth/session-cookie';
 import { ROOT_TOKEN_ID } from '../auth/token-store';
 import { loadConfig } from '../config';
@@ -323,7 +323,7 @@ test('it sends a repaired event when a check finds an imp’s VM gone', async ()
 
   const dead = await findImpByName(ctx.db, 'dead');
 
-  invariant(dead?.pid);
+  invariant(typeof dead?.pid === 'number');
 
   const controller = new AbortController();
 

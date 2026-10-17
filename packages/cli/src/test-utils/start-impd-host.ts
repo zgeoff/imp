@@ -12,7 +12,7 @@ import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
 import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 
 interface ImpdHostOptions {
   // impd settings over the boot values, such as IMP_KSM
@@ -140,7 +140,7 @@ export async function startImpdHost(
     await app.stop(true);
   });
 
-  invariant(app.server?.port);
+  invariant(app.server?.port !== undefined);
 
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 

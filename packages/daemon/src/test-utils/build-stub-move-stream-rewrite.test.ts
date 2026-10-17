@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { MOVE_FRAMES, encodeJsonFrame, readJsonPayload } from '../moves/move-frames';
 import { MOVE_FINISH_HEADER, MOVE_PART_HEADER, MOVE_PATHS } from '../moves/move-header';
 import { TARGET_URL } from '../moves/test-moves';

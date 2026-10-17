@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import {
@@ -87,7 +87,7 @@ test.skipIf(tailnetMissing)(
     const row = await requireImp(name);
     const urls = await readImpUrls(name);
 
-    invariant(urls.tailnet);
+    invariant(urls.tailnet !== null);
 
     const url = urls.tailnet;
 

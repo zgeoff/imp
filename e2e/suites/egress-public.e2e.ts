@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { tryGetFromImp } from '../lib/guest-probe';
@@ -122,7 +122,7 @@ test.skipIf(hostTailnetMissing)('it refuses a public imp the host’s tailnet ad
   const ctx = await setupTest();
   const info = await readInfo();
 
-  invariant(info.tailscale.ip);
+  invariant(info.tailscale.ip !== null);
 
   const pub = `${ctx.prefix}tail-pub`;
 

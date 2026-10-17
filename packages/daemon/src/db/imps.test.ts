@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
 import { sql } from 'kysely';
+import invariant from 'tiny-invariant';
 import { buildMockMoveTicketRow } from '../test-utils/build-mock-move-ticket-row';
 import { buildMockNewImage } from '../test-utils/build-mock-new-image';
 import { buildMockNewImp } from '../test-utils/build-mock-new-imp';

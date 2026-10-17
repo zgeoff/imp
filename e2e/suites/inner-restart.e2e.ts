@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -152,8 +152,8 @@ test('it keeps forwards, reverse forwards and the service port working through a
     return parsed;
   });
 
-  invariant(forwards.localPort);
-  invariant(forwards.guestPort);
+  invariant(forwards.localPort !== undefined);
+  invariant(forwards.guestPort !== undefined);
 
   const local = `http://127.0.0.1:${forwards.localPort}/`;
   const fetchInGuest = `wget -qO- http://127.0.0.1:${forwards.guestPort}/`;

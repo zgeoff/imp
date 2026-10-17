@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import {
   buildMemoryMax,
   createCpuCgroups,

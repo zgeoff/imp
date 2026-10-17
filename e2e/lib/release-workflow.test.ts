@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { buildStubRegistryDocker } from '../../scripts/test-utils/build-stub-registry-docker';
 import { createStubBin } from '../../scripts/test-utils/create-stub-bin';
 import { parseReleaseWorkflow } from '../../scripts/test-utils/parse-release-workflow';
@@ -98,7 +98,7 @@ test('it pushes a tag the registry does not have', () => {
 
   const docker = createStubBin(ctx.dir, 'docker', buildStubRegistryDocker({ kind: 'missing' }));
 
-  invariant(plan);
+  invariant(plan !== undefined);
   writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
@@ -131,7 +131,7 @@ test('it pushes a missing tag of a tree that keeps its check script in host/', (
 
   const docker = createStubBin(ctx.dir, 'docker', buildStubRegistryDocker({ kind: 'missing' }));
 
-  invariant(plan);
+  invariant(plan !== undefined);
   writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
 
   writeFileSync(
@@ -171,7 +171,7 @@ test('it leaves an attested existing tag alone, with a notice', () => {
 
   const gh = createStubBin(ctx.dir, 'gh', 'exit 0');
 
-  invariant(plan);
+  invariant(plan !== undefined);
   writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
@@ -218,7 +218,7 @@ test('it fails the job on an existing tag without an attestation, and plans noth
   );
 
   createStubBin(ctx.dir, 'gh', 'exit 1');
-  invariant(plan);
+  invariant(plan !== undefined);
   writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
@@ -259,7 +259,7 @@ test('it fails the job on an existing tag whose digest is not a sha256', () => {
   );
 
   createStubBin(ctx.dir, 'gh', 'exit 0');
-  invariant(plan);
+  invariant(plan !== undefined);
   writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
@@ -299,7 +299,7 @@ test.each([
     buildStubRegistryDocker({ kind: 'failed', error }),
   );
 
-  invariant(plan);
+  invariant(plan !== undefined);
   writeFileSync(join(ctx.tree, 'scripts/release/check-base-image.sh'), '');
 
   writeFileSync(
@@ -335,7 +335,7 @@ test('it skips a release from before imp-base without asking the registry', () =
 
   const docker = createStubBin(ctx.dir, 'docker', buildStubRegistryDocker({ kind: 'missing' }));
 
-  invariant(plan);
+  invariant(plan !== undefined);
   writeFileSync(join(ctx.tree, 'images/base/Dockerfile'), 'FROM ubuntu:24.04\n');
 
   const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
@@ -455,7 +455,7 @@ test('it leaves latest on the newer release when the older run holds the lock af
   const gh = createStubBin(ctx.dir, 'gh', `cat '${newest}'`);
 
   createStubBin(ctx.dir, 'docker', 'exit 0');
-  invariant(step);
+  invariant(step !== undefined);
   writeFileSync(newest, 'v1.0.4\n');
 
   const runs = [
@@ -497,7 +497,7 @@ test('it leaves latest on the newer release when the older run holds the lock fi
   const gh = createStubBin(ctx.dir, 'gh', `cat '${newest}'`);
 
   createStubBin(ctx.dir, 'docker', 'exit 0');
-  invariant(step);
+  invariant(step !== undefined);
   writeFileSync(newest, 'v1.0.4\n');
 
   const runs = [
@@ -546,7 +546,7 @@ test('it moves latest forward when the older run holds the lock before the newer
   };
 
   createStubBin(ctx.dir, 'docker', 'exit 0');
-  invariant(step);
+  invariant(step !== undefined);
   writeFileSync(newest, 'v1.0.3\n');
 
   const older = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
@@ -583,7 +583,7 @@ test('it tells the formula and npm that a release behind the newest is not the n
   const gh = createStubBin(ctx.dir, 'gh', 'echo v1.0.4');
 
   createStubBin(ctx.dir, 'docker', 'exit 0');
-  invariant(step);
+  invariant(step !== undefined);
 
   const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
     env: {
@@ -614,7 +614,7 @@ test('it tells the formula and npm that the newest release is the newest', () =>
   const gh = createStubBin(ctx.dir, 'gh', 'echo v1.0.4');
 
   createStubBin(ctx.dir, 'docker', 'exit 0');
-  invariant(step);
+  invariant(step !== undefined);
 
   const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
     env: {
@@ -641,7 +641,7 @@ test('it fails the job, moving nothing, when the newest release cannot be read',
   const gh = createStubBin(ctx.dir, 'gh', 'echo "HTTP 502" >&2; exit 1');
 
   createStubBin(ctx.dir, 'docker', 'exit 0');
-  invariant(step);
+  invariant(step !== undefined);
 
   const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step], {
     env: {
@@ -668,7 +668,7 @@ test('it leaves the formula of a tag from before the rename, class Imp, out of t
     readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).tap.steps.find((candidate) => candidate.name === 'Update the formula')?.run;
 
-  invariant(step);
+  invariant(step !== undefined);
 
   const gitEnv = { ...createGitFreeEnv(process.env), HOME: ctx.dir };
 
@@ -754,7 +754,7 @@ test('it writes the formula of a tag after the rename to impz.rb with the genera
     readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).tap.steps.find((candidate) => candidate.name === 'Update the formula')?.run;
 
-  invariant(step);
+  invariant(step !== undefined);
 
   const gitEnv = { ...createGitFreeEnv(process.env), HOME: ctx.dir };
 
@@ -842,7 +842,7 @@ test('it fails the job, moving no formula, when the generator prints no formula 
     readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'),
   ).tap.steps.find((candidate) => candidate.name === 'Update the formula')?.run;
 
-  invariant(step);
+  invariant(step !== undefined);
 
   writeFileSync(
     join(ctx.tree, 'scripts', 'release', 'build-formula.sh'),

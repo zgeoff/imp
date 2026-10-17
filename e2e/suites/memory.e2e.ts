@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { readBalloonStats } from '../lib/balloon-stats';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';

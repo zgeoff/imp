@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import type { ImageBuildEvent } from '@impz/api';
 import { IMAGE_BUILD_STREAM_TYPE, ImageBuildEventSchema } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
 import { createBuildEventStream, runOnInterval } from './build-event-stream';
 
@@ -243,7 +243,7 @@ test('#runOnInterval ticks a repeat again and again on its interval', async () =
   onTestFinished(stop);
 
   await waitFor(() => {
-    invariant(ticks[1]);
+    invariant(ticks[1] !== undefined);
   });
 
   expect(ticks.slice(0, 2)).toStrictEqual([0, 1]);

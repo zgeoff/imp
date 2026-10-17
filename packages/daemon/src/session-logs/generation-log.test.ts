@@ -3,9 +3,9 @@ import { appendFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
+import invariant from 'tiny-invariant';
 import { buildStubClock } from '../test-utils/build-stub-clock';
 import { buildStubRoomCheck } from '../test-utils/build-stub-room-check';
 import {

@@ -3,8 +3,8 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { listImps } from '../db/imps';
 import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
@@ -29,7 +29,7 @@ test('#createImpTest boots imps on the stub VMM', async () => {
 
   const [imp] = await listImps(harness.db);
 
-  invariant(imp?.pid);
+  invariant(typeof imp?.pid === 'number');
 
   expect(imp.state).toBe('running');
   expect(harness.fake.alive.has(imp.pid)).toBeTrue();
@@ -402,7 +402,7 @@ test('#findBrokenInvariants reports a running imp whose VM died once liveness ra
 
   const [imp] = await listImps(harness.db);
 
-  invariant(imp?.pid);
+  invariant(typeof imp?.pid === 'number');
 
   harness.fake.alive.delete(imp.pid);
 

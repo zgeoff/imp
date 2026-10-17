@@ -11,12 +11,12 @@ import {
   ImageBuildResultSchema,
 } from '@impz/api';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { createApiAudit } from '../audit/api-audit';
 import { toApiImage } from '../build-router';
 import { loadConfig } from '../config';
@@ -509,7 +509,7 @@ test('it streams the step and output of a running build, and lists it in images.
   const running = await waitFor(async () => {
     const [build] = await ctx.client.images.builds();
 
-    invariant(build?.step);
+    invariant(typeof build?.step === 'string');
 
     return build;
   });
@@ -585,7 +585,7 @@ test('it sends a progress line through the proxy before the upload ends', async 
 
   const apiPort = ctx.impd.api.app.server?.port;
 
-  invariant(apiPort);
+  invariant(apiPort !== undefined);
 
   // the proxy forwards the API to the port the app took
   const proxy = startWakeProxy({

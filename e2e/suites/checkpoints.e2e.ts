@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { checkLimit } from '../lib/check-limit';
 import { hasCheckpointStorage, hasImpDir, writeCrossFiles } from '../lib/checkpoint-storage';
 import { config } from '../lib/config';
@@ -60,7 +60,7 @@ test('it restores the disk of a running imp from its checkpoint, within the limi
   // impd's own timing, without the CLI round trip
   const impdMs = await readImpdLoggedMs(`${source}: checkpoint ${cp1.id} in`);
 
-  invariant(impdMs);
+  invariant(impdMs !== null);
   checkLimit('checkpoint (impd)', impdMs, config.maxCheckpointMs);
 
   const row = await requireImp(source);

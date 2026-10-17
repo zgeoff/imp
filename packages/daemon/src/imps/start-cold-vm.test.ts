@@ -1,9 +1,9 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/client';
+import invariant from 'tiny-invariant';
 import { findImpByName } from '../db/imps';
 import { buildTemplateKey } from '../templates/boot-templates';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
@@ -383,7 +383,7 @@ test('it runs a jailed restore as the imp, with the template and its drive bound
 
   const dir = join(ctx.dataDir, 'templates');
 
-  invariant(second?.jailUid);
+  invariant(typeof second?.jailUid === 'number');
 
   // a restore that fell back to the kernel would be a boot here
   expect(ctx.fake.boots.map((boot) => boot.hostname)).toStrictEqual(['once', 'first']);

@@ -4,11 +4,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
 import { Client, utils } from 'ssh2';
 import type { PublicKeyAuthMethod } from 'ssh2';
+import invariant from 'tiny-invariant';
 import { AgentError } from '../agent-client/agent-connection';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import { buildMovingError } from '../api-errors';
@@ -848,7 +848,7 @@ test('it logs how long the wake of a login took', async () => {
   const logged = await waitFor(() => {
     const line = ctx.logs.find((message) => message.includes('woke'));
 
-    invariant(line);
+    invariant(line !== undefined);
 
     return line;
   });
@@ -2591,7 +2591,7 @@ test('it ends at once a login whose key was removed as it logged in', async () =
 
   const keyId = ctx.tokens.findSshKey(parsed.getPublicSSH())?.keyId;
 
-  invariant(keyId);
+  invariant(keyId !== undefined);
 
   ctx.revocations.revoke(keyId);
 

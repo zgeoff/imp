@@ -21,9 +21,9 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { createStubDockerCli } from '@impz/daemon/src/test-utils/create-stub-docker-cli';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubDockerEngine } from '@impz/daemon/src/test-utils/start-stub-docker-engine';
-import { invariant } from '@impz/test-utils/invariant';
 import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { runCli } from '../test-utils/start-cli';
 
@@ -151,7 +151,7 @@ async function setupTest() {
     await app.stop(true);
   });
 
-  invariant(app.server?.port);
+  invariant(app.server?.port !== undefined);
 
   return {
     rootToken,
@@ -333,7 +333,7 @@ test('#imageCommand lists a running build with its start and step from another s
       .array(z.object({ step: z.string().nullable() }))
       .parse(JSON.parse(result.stdout));
 
-    invariant(builds[0]?.step);
+    invariant(typeof builds[0]?.step === 'string');
 
     return result.stdout;
   });

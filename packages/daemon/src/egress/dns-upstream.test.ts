@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import * as dnsPacket from 'dns-packet';
+import invariant from 'tiny-invariant';
 import { buildMockDnsQuery } from '../test-utils/build-mock-dns-query';
 import { buildStubClock } from '../test-utils/build-stub-clock';
 import { findFreePorts } from '../test-utils/find-free-ports';
@@ -124,7 +124,7 @@ test('it gives an upstream 2 s to answer by default', async () => {
   const pendingMs = await waitFor(() => {
     const pending = clock.readPendingMs();
 
-    invariant(pending[0]);
+    invariant(pending[0] !== undefined);
 
     return pending;
   });

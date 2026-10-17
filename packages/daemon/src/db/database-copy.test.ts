@@ -3,8 +3,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { sql } from 'kysely';
+import invariant from 'tiny-invariant';
 import { createDiskBudget } from '../storage/disk-budget';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
 import { writeConsistentCopy, writeDatabaseCopy } from './database-copy';
@@ -55,7 +55,7 @@ test('#writeDatabaseCopy returns the copy’s path, size, schema version and int
   const lastMigration = Object.keys(MIGRATIONS).toSorted().at(-1);
   const written = statSync(join(ctx.dataDir, 'db-copies', 'nightly.sqlite'));
 
-  invariant(lastMigration);
+  invariant(lastMigration !== undefined);
 
   expect(copy).toStrictEqual({
     path: join(ctx.dataDir, 'db-copies', 'nightly.sqlite'),

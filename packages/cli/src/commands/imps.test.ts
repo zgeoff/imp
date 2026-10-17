@@ -8,8 +8,8 @@ import { buildImagePaths, buildImpPaths } from '@impz/daemon/src/storage/data-la
 import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
 import { buildMockNewImp } from '@impz/daemon/src/test-utils/build-mock-new-imp';
 import { startStubInnerAgent } from '@impz/daemon/src/test-utils/start-stub-inner-agent';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { writeHostConfig } from '../host-store';
 import { buildStubTimeouts } from '../test-utils/build-stub-timeouts';
 import { parseJsonOutput } from '../test-utils/parse-json-output';
@@ -397,7 +397,7 @@ test('#listAllImps gives up on a host that never answers once its timer runs out
 
   const table = print.mock.calls[0]?.[0];
 
-  invariant(table);
+  invariant(table !== undefined);
 
   expect(
     table

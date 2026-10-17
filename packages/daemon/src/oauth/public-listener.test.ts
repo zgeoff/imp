@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApprovalCodeSchema } from '@impz/api';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { readMcpAnswer } from '../../../mcp/src/test-utils/read-mcp-answer';
 import { loadConfig } from '../config';
@@ -533,8 +533,8 @@ test.each([
   const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'];
   const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'];
 
-  invariant(id);
-  invariant(signature);
+  invariant(id !== undefined);
+  invariant(signature !== undefined);
 
   const posted = await ctx.handle(
     new Request('http://127.0.0.1:7171/oauth/authorize', {
@@ -1636,7 +1636,7 @@ test.each([
 
     const data = text.split('\n').find((line) => line.startsWith('data: '));
 
-    invariant(data);
+    invariant(data !== undefined);
 
     const json: unknown = JSON.parse(data.slice('data: '.length));
     const item = z.object({ text: z.string() });

@@ -21,8 +21,8 @@ import { buildStubExecGuest } from '@impz/daemon/src/test-utils/build-stub-exec-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubExecAgent } from '@impz/daemon/src/test-utils/start-stub-exec-agent';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 
 // impd's real app on a loopback port, where the `impz mcp` subprocess reaches
 // it, the CLI's entry the tests run it from, a root client for the scenario,
@@ -253,7 +253,7 @@ test('it lists its tools over stdio', async () => {
 
   const [listed] = text.split('\n');
 
-  invariant(listed);
+  invariant(listed !== undefined);
 
   expect(code).toBe(0);
 
@@ -346,7 +346,7 @@ test('it creates an imp through impd over stdio', async () => {
     // the text after the first newline, empty once the answer's line is whole
     const [line, rest] = stdout.text.split('\n');
 
-    invariant(rest);
+    invariant(rest !== undefined);
 
     return line ?? '';
   });
@@ -420,7 +420,7 @@ test('it runs a command in the guest over stdio', async () => {
     // the text after the first newline, empty once the answer's line is whole
     const [line, rest] = stdout.text.split('\n');
 
-    invariant(rest);
+    invariant(rest !== undefined);
 
     return line ?? '';
   });
@@ -488,7 +488,7 @@ test('it stops a command still running in the guest when the client goes away', 
   const code = await proc.exited;
 
   await waitFor(() => {
-    invariant(guest.signals[0]);
+    invariant(guest.signals[0] !== undefined);
   });
 
   const text = await stdout;

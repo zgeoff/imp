@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Imp } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';

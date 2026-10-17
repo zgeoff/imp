@@ -3,10 +3,10 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
@@ -326,7 +326,7 @@ test('it takes a deleted network’s set out of the table', async () => {
 
   const script = ctx.nft.scripts.at(-1);
 
-  invariant(script);
+  invariant(script !== undefined);
 
   expect(script).not.toInclude('@net0');
 });

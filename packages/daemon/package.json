@@ -42,6 +42,7 @@
     "@types/ssh2": "catalog:",
     "fast-check": "catalog:",
     "kysely-codegen": "catalog:",
-    "msw": "catalog:"
+    "msw": "catalog:",
+    "tiny-invariant": "catalog:"
   }
 }

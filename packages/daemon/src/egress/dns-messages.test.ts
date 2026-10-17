@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
 import * as dnsPacket from 'dns-packet';
+import invariant from 'tiny-invariant';
 import { buildMockDnsQuery } from '../test-utils/build-mock-dns-query';
 import { buildMockDnsReply } from '../test-utils/build-mock-dns-reply';
 import { EDE_PROHIBITED, RCODE, buildEmptyReply, buildLocalReply, readQuery } from './dns-messages';

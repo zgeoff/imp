@@ -1,5 +1,5 @@
 import { expect, mock, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createCheckpoint } from '../db/checkpoints';
 import { createImage } from '../db/images';
 import { createImp } from '../db/imps';

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createCountedLimit } from './counted-limit';
 
 test('it grants claims on a key up to the limit', () => {

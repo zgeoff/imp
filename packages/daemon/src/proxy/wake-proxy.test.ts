@@ -2,8 +2,8 @@ import { expect, jest, mock, onTestFinished, test } from 'bun:test';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
@@ -233,7 +233,7 @@ test('it stops the listener of an imp the database lost', async () => {
 
   const port = proxy.readImpPort(imp.id);
 
-  invariant(port);
+  invariant(port !== null);
 
   await removeImp(ctx.db, imp.id);
 

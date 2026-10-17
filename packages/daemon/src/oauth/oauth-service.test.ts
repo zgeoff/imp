@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
 import { ApprovalCodeSchema } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createRevocations } from '../auth/revocations';
 import { ROOT_TOKEN_ID, loadTokenStore } from '../auth/token-store';
 import { createSecret } from '../db/secrets';
@@ -4139,8 +4139,8 @@ test('#removeExpired ends a grant with no refresh for 30 days, and keeps one ref
   const keptCaller = await ctx.oauth.resolveAccess(keptexchanged.body.access_token);
   const lapsedCaller = await ctx.oauth.resolveAccess(lapsedexchanged.body.access_token);
 
-  invariant(keptCaller?.grantId);
-  invariant(lapsedCaller?.grantId);
+  invariant(typeof keptCaller?.grantId === 'string');
+  invariant(typeof lapsedCaller?.grantId === 'string');
 
   ctx.advance(20 * 24 * 60 * 60 * 1000);
 
@@ -5045,7 +5045,7 @@ test('#removeGrant leaves another grant of the same token working', async () => 
 
   const removed = await ctx.oauth.resolveAccess(aexchanged.body.access_token);
 
-  invariant(removed?.grantId);
+  invariant(typeof removed?.grantId === 'string');
 
   await ctx.oauth.removeGrant(removed.grantId);
 

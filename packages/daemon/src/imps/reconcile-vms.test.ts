@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { findImpByName } from '../db/imps';
 import {
   readLoadingMeta,
@@ -81,7 +81,7 @@ test('it drops meta.json on a good wake, so a VM that dies later does not count 
 
   const woken = await findImpByName(ctx.db, 'dev');
 
-  invariant(woken?.pid);
+  invariant(typeof woken?.pid === 'number');
 
   // the guest dies with impd watching nothing
   ctx.fake.alive.delete(woken.pid);
@@ -108,7 +108,7 @@ test('it resumes a VM a cut sleep left paused, and removes the half-written file
 
   const running = await findImpByName(ctx.db, 'dev');
 
-  invariant(running?.pid);
+  invariant(typeof running?.pid === 'number');
 
   // the snapshot the cut sleep was writing
   mkdirSync(paths.snapshotDir, { recursive: true });
@@ -231,7 +231,7 @@ test('it kills a second VM on a running imp socket, and keeps the one on the rec
 
   const running = await findImpByName(ctx.db, 'dev');
 
-  invariant(running?.pid);
+  invariant(typeof running?.pid === 'number');
 
   const second = ctx.fake.spawnOrphan({ paths });
   const impd = ctx.restartImpd();
@@ -357,7 +357,7 @@ test('it ignores a VM forged on a sleeping imp socket from another jail, and kee
 
   const attacker = await findImpByName(ctx.db, 'evil');
 
-  invariant(attacker?.jailUid);
+  invariant(typeof attacker?.jailUid === 'number');
 
   // with no VM behind dev's socket, an adopt would find no state and drop the
   // snapshot; with the pid file pointing at it too
@@ -388,8 +388,8 @@ test('it does not kill a VM forged on a running imp socket from another jail as 
   const attacker = await findImpByName(ctx.db, 'evil');
   const running = await findImpByName(ctx.db, 'dev');
 
-  invariant(attacker?.jailUid);
-  invariant(running?.pid);
+  invariant(typeof attacker?.jailUid === 'number');
+  invariant(typeof running?.pid === 'number');
 
   const forged = ctx.fake.spawnOrphan({
     paths,
@@ -418,7 +418,7 @@ test('it adopts a jailed VM a cut wake left by its own uid', async () => {
 
   const dev = await findImpByName(ctx.db, 'dev');
 
-  invariant(dev?.jailUid);
+  invariant(typeof dev?.jailUid === 'number');
 
   const byUid = ctx.fake.spawnOrphan({ paths, owner: { uid: dev.jailUid, cgroup: '/init' } });
   const impd = ctx.restartImpd();
@@ -457,7 +457,7 @@ test('it does not kill a VM forged from another jail on the socket of an imp wit
   const evil = await ctx.client.imps.create({ name: 'evil' });
   const attacker = await findImpByName(ctx.db, 'evil');
 
-  invariant(attacker?.jailUid);
+  invariant(typeof attacker?.jailUid === 'number');
 
   const forged = ctx.fake.spawnOrphan({
     paths: buildImpPaths(ctx.dataDir, 'gone'),
@@ -495,8 +495,8 @@ test('it stops an imp whose recycled pid another jail forged, and leaves that pr
   const attacker = await findImpByName(ctx.db, 'evil');
   const running = await findImpByName(ctx.db, 'dev');
 
-  invariant(attacker?.jailUid);
-  invariant(running?.pid);
+  invariant(typeof attacker?.jailUid === 'number');
+  invariant(typeof running?.pid === 'number');
 
   // dev's VM died while impd was down, and evil's jail got its pid
   ctx.fake.setOwner(running.pid, { uid: attacker.jailUid, cgroup: `/imps/${evil.id}` });

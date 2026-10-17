@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { openDialStream } from '@impz/daemon/src/agent-client/dial-stream';
 import { openAccept, openListener } from '@impz/daemon/src/agent-client/listener-stream';
 import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { buildStubListenAgent } from './build-stub-listen-agent';
 
 // a socket path in a temp dir, as impd's agent client reaches the stub there

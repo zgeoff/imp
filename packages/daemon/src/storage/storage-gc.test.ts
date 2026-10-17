@@ -4,11 +4,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { createSecretFiles } from '../broker/secret-files';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
@@ -630,7 +630,7 @@ test('it lists the secret values kept aside when asked', async () => {
 
   const listed = await ctx.client.system.gc({ secretFiles: true });
 
-  invariant(kept.dir);
+  invariant(kept.dir !== null);
 
   expect(listed.kept?.filter((orphan) => orphan.kind === 'secrets')).toStrictEqual([
     {
@@ -661,7 +661,7 @@ test('it only lists the secret values kept aside when asked for orphans alone', 
   expect(orphans.kept).toPartiallyContain({ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' });
   expect(orphans.dropped).not.toPartiallyContain({ kind: 'secrets' });
 
-  invariant(kept.dir);
+  invariant(kept.dir !== null);
 
   expect(existsSync(kept.dir)).toBeTrue();
 });
@@ -682,7 +682,7 @@ test('it lists the secret values kept aside as dropped in a dry run told to remo
     dryRun: true,
   });
 
-  invariant(kept.dir);
+  invariant(kept.dir !== null);
 
   expect(dry.dropped).toStrictEqual([{ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' }]);
   expect(existsSync(kept.dir)).toBeTrue();
@@ -703,7 +703,7 @@ test('it removes the secret values kept aside when told to with orphans', async 
     orphans: true,
   });
 
-  invariant(kept.dir);
+  invariant(kept.dir !== null);
 
   expect(removed.dropped).toStrictEqual([{ kind: 'secrets', id: '2026-10-04T05-30-00.000Z' }]);
   expect(existsSync(kept.dir)).toBeFalse();

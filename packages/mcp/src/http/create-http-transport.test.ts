@@ -12,8 +12,8 @@ import { buildQueryGate } from '@impz/daemon/src/test-utils/build-query-gate';
 import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@impz/test-utils/invariant';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { buildMockMcpPrincipal } from '../test-utils/build-mock-mcp-principal';
 import { buildStubRepeat } from '../test-utils/build-stub-repeat';
@@ -242,7 +242,7 @@ test('it answers a request in the session that initialize opened', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -343,7 +343,7 @@ test("it refuses a request in another caller's session with 404", async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -389,7 +389,7 @@ test('it refuses a protocol version header it does not support with 400', async 
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -439,7 +439,7 @@ test('it answers a request that names a protocol version it supports', async () 
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -486,7 +486,7 @@ test('it accepts a notification with 202 and no body', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -538,7 +538,7 @@ test('it lists only the read tools to a read caller', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -605,7 +605,7 @@ test('it streams a tool call’s progress and response as server-sent events', a
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await transport.handle(
     new Request('http://impd.test/mcp', {
@@ -702,7 +702,7 @@ test('it ends a call only once impd answers, after its stream drops', async () =
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -813,7 +813,7 @@ test('it sends keepalive comments on the stream of a call still running', async 
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const call = transport.handle(
     new Request('http://impd.test/mcp', {
@@ -885,7 +885,7 @@ test('it refuses a POST from a client that takes no event stream with 406', asyn
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const response = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -932,7 +932,7 @@ test('it ends a cancelled call’s stream with no answer', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const call = ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -1150,7 +1150,7 @@ test('it ends a session on DELETE', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const ended = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -1227,7 +1227,7 @@ test('it ends a caller’s sessions when what it authenticated with ends', async
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   ends.abort();
 
@@ -1312,7 +1312,7 @@ test('it keeps another caller’s session when one caller’s credential ends', 
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   ends.abort();
 
@@ -1397,8 +1397,8 @@ test('it evicts the least recently used idle session of a caller at its limit', 
   const firstSession = first.headers.get('mcp-session-id');
   const secondSession = second.headers.get('mcp-session-id');
 
-  invariant(firstSession);
-  invariant(secondSession);
+  invariant(firstSession !== null);
+  invariant(secondSession !== null);
 
   await transport.handle(
     new Request('http://impd.test/mcp', {
@@ -1498,7 +1498,7 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
 
   const bobSession = bobOpened.headers.get('mcp-session-id');
 
-  invariant(bobSession);
+  invariant(bobSession !== null);
 
   const call = transport.handle(
     new Request('http://impd.test/mcp', {
@@ -1545,7 +1545,7 @@ test('it evicts an idle session, never a busy one, when the store is full', asyn
 
   const aliceSession = aliceOpened.headers.get('mcp-session-id');
 
-  invariant(aliceSession);
+  invariant(aliceSession !== null);
 
   ctx.clock.now = 2;
 
@@ -1630,7 +1630,7 @@ test('it frees a session whose tool call the SDK refuses before the tool runs', 
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   // a call with no tool name, which the SDK's schema answers itself
   const refused = await transport.handle(
@@ -1712,7 +1712,7 @@ test('it frees a session whose refused tool call’s stream the client drops unr
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   // a call with no tool name, which the SDK's schema answers itself
   const refused = await transport.handle(
@@ -1785,7 +1785,7 @@ test('it refuses a call in a session whose id a running call holds, and still an
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const first = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {
@@ -1880,7 +1880,7 @@ test('it refuses a new session with 429 to a caller whose sessions are all busy'
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const call = transport.handle(
     new Request('http://impd.test/mcp', {
@@ -1973,7 +1973,7 @@ test('it keeps a session used within the idle limit', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   ctx.clock.now = 1000;
 
@@ -2032,7 +2032,7 @@ test('it ends a session idle past the idle limit', async () => {
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   ctx.clock.now = 1001;
 
@@ -2091,7 +2091,7 @@ test('it restarts the idle clock of a session each time it is used', async () =>
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   ctx.clock.now = 1000;
 
@@ -2155,7 +2155,7 @@ test('it still answers a cancelled create in a session, so the agent learns what
 
   const session = opened.headers.get('mcp-session-id');
 
-  invariant(session);
+  invariant(session !== null);
 
   const call = await ctx.transport.handle(
     new Request('http://impd.test/mcp', {

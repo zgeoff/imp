@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { findImpByName, updateImpState } from '../db/imps';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildStubCpuCgroups } from '../test-utils/build-stub-cpu-cgroups';
@@ -326,8 +326,8 @@ test('it holds only the imp whose Firecracker owned the thread a kernel oops kil
   const hit = await findImpByName(ctx.db, 'hit');
   const other = await findImpByName(ctx.db, 'other');
 
-  invariant(hit?.pid);
-  invariant(other?.pid);
+  invariant(typeof hit?.pid === 'number');
+  invariant(typeof other?.pid === 'number');
 
   // each Firecracker's main thread and a vCPU thread
   mkdirSync(join(ctx.procRoot, String(hit.pid), 'task', '4242'), { recursive: true });
@@ -373,8 +373,8 @@ test('it starts an imp whose VM died after a kernel oops killed a thread of anot
   const hit = await findImpByName(ctx.db, 'hit');
   const other = await findImpByName(ctx.db, 'other');
 
-  invariant(hit?.pid);
-  invariant(other?.pid);
+  invariant(typeof hit?.pid === 'number');
+  invariant(typeof other?.pid === 'number');
   mkdirSync(join(ctx.procRoot, String(hit.pid), 'task', '4242'), { recursive: true });
   mkdirSync(join(ctx.procRoot, String(other.pid), 'task', '5151'), { recursive: true });
 
@@ -419,8 +419,8 @@ test('it holds every imp lost after a kernel oops killed a thread that no VM own
   const first = await findImpByName(ctx.db, 'first');
   const second = await findImpByName(ctx.db, 'second');
 
-  invariant(first?.pid);
-  invariant(second?.pid);
+  invariant(typeof first?.pid === 'number');
+  invariant(typeof second?.pid === 'number');
   mkdirSync(join(ctx.procRoot, String(first.pid), 'task', '4242'), { recursive: true });
   mkdirSync(join(ctx.procRoot, String(second.pid), 'task', '5151'), { recursive: true });
 

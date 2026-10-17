@@ -2,7 +2,7 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { findImpByName, updateImpActivity } from '../db/imps';
 import { hasSnapshot } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
@@ -192,7 +192,7 @@ test('it ends the awake span of a VM found dead at its last activity', async () 
   const awake = await findImpByName(ctx.db, 'dev');
 
   invariant(awake?.awakeSince);
-  invariant(awake.pid);
+  invariant(awake.pid !== null);
 
   // the VM was last active 2 s into its span, then died
   await updateImpActivity(ctx.db, created.id, new Date(awake.awakeSince.getTime() + 2000));
