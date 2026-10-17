@@ -73,6 +73,7 @@ test('it expands a set and drops a suite the set already holds', () => {
     'sleep',
     'restart',
     'mcp',
+    'mcp-oauth',
     'offsets',
     'session-logs',
     'services',
@@ -123,7 +124,7 @@ test.each([
     ],
   ],
   ['2', ['sleep', 'reverse', 'jail']],
-  ['3', ['mcp', 'inner', 'memory', 'ksm']],
+  ['3', ['mcp', 'mcp-oauth', 'inner', 'memory', 'ksm']],
 ])('it runs fast group %s with --group', (group, suites) => {
   expect(parseArgs(['--group', group]).suites).toStrictEqual(suites);
 });
