@@ -5,32 +5,30 @@ import { runAction } from '../run-action';
 import { jsonArg } from './common-args';
 
 export const infoCommand = defineCommand({
-  meta: {
-    name: 'info',
-    description: 'Show impd version, RAM budget and counts, or one imp with its container',
-  },
+  name: 'info',
+  description: 'Show impd version, RAM budget and counts, or one imp with its container',
   args: {
     name: { type: 'positional', description: 'an imp to show instead of impd', required: false },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const name = context.args.name;
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const name = ctx.values.name;
 
       if (name !== undefined) {
         const imp = await client.imps.get({ name });
 
-        const shown = context.args.json === true ? formatJson(imp) : formatImpInfo(imp);
+        const shown = ctx.values.json === true ? formatJson(imp) : formatImpInfo(imp);
 
-        console.log(shown);
+        ctx.extensions.impz.io.print(shown);
 
         return;
       }
 
       const info = await client.system.info();
 
-      if (context.args.json === true) {
-        console.log(formatJson(info));
+      if (ctx.values.json === true) {
+        ctx.extensions.impz.io.print(formatJson(info));
 
         return;
       }
@@ -69,7 +67,7 @@ export const infoCommand = defineCommand({
       ];
 
       for (const [label = '', value = ''] of lines) {
-        console.log(`${label.padEnd(12)}${value}`);
+        ctx.extensions.impz.io.print(`${label.padEnd(12)}${value}`);
       }
     }),
 });

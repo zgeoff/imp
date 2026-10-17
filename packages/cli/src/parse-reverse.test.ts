@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { listReverseSpecs, parseReverse } from './parse-reverse';
+import { parseReverse } from './parse-reverse';
 import type { ReverseSpec } from './parse-reverse';
 import { UsageError } from './usage-error';
 
@@ -34,14 +34,3 @@ test.each(['', 'app.sock:/x', '70000:80', '9000:0', '9000:host:80', 'x', '/a.soc
     );
   },
 );
-
-test('#listReverseSpecs keeps every value of a repeated --reverse in both spellings', () => {
-  expect(listReverseSpecs(['box', '--reverse', '/a:/b', '5432', '--reverse=9000'])).toStrictEqual([
-    '/a:/b',
-    '9000',
-  ]);
-});
-
-test('#listReverseSpecs skips a --reverse with no value after it', () => {
-  expect(listReverseSpecs(['box', '--reverse'])).toStrictEqual([]);
-});

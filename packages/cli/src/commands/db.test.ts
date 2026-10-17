@@ -16,7 +16,7 @@ import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { parseJsonOutput } from '../test-utils/parse-json-output';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
 // impd's real app, listening on a loopback port for the spawned CLI
@@ -153,7 +153,7 @@ test('it makes no database copy on an impd from before databaseCopy (0.30.0)', a
     withoutFeatures: ['databaseCopy'],
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['db', 'copy', 'before-upgrade', '--json'],
     env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -171,7 +171,7 @@ test('it makes no database copy on an impd from before databaseCopy (0.30.0)', a
 test('it prints the database copy’s fields in the order a restore script reads them', async () => {
   const ctx = await setupTest();
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['db', 'copy', 'before-upgrade', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -202,7 +202,7 @@ test('it prints the database copy’s fields in the order a restore script reads
 test('it prints the database copy as --json output in the shape of the committed schema', async () => {
   const ctx = await setupTest();
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['db', 'copy', 'before-upgrade', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });

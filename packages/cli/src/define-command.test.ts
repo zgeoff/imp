@@ -1,77 +1,26 @@
-import { expect, mock, test } from 'bun:test';
-import { runCommand } from 'citty';
-import { defineCommand } from './define-command';
-import { runCli } from './test-utils/start-cli';
+import { expect, test } from 'bun:test';
+import { runCLIInProcess } from './test-utils/run-cli-in-process';
 
-test.each([
-  [['fork', 'a', 'b', '--from', 'cp1'], 'cp1'],
-  [['fork', 'a', 'b', '--http-port', '80', '--httpPort=80', '-t', '--no-tty'], undefined],
-  [['fork', 'a', 'b', '--', '--anything', '-x'], undefined],
-])('it runs the command when given %p', async (rawArgs, from) => {
-  const ran = mock<(from: unknown) => void>();
-
-  const main = defineCommand({
-    meta: { name: 'imp' },
-    subCommands: {
-      fork: defineCommand({
-        meta: { name: 'fork' },
-        args: {
-          source: { type: 'positional', required: true },
-          target: { type: 'positional', required: true },
-          from: { type: 'string' },
-          'http-port': { type: 'string' },
-          tty: { type: 'boolean', alias: 't' },
-        },
-        run: (context) => {
-          ran(context.args.from);
-        },
-      }),
-    },
-  });
-
-  await runCommand(main, { rawArgs: [...rawArgs] });
-
-  expect(ran).toHaveBeenCalledExactlyOnceWith(from);
-});
-
-test('it hands the command the host that --host names, last as main puts it', async () => {
-  const ran = mock<(host: string | null) => void>();
-
-  const main = defineCommand({
-    meta: { name: 'imp' },
-    subCommands: {
-      ls: defineCommand({
-        meta: { name: 'ls' },
-        run: (context) => {
-          ran(context.host);
-        },
-      }),
-    },
-  });
-
-  await runCommand(main, { rawArgs: ['ls', '--host=work'] });
-
-  expect(ran).toHaveBeenCalledExactlyOnceWith('work');
-});
-
-test('it refuses flags the command does not declare, with exit code 2 and no call', async () => {
-  const result = await runCli({
-    args: ['fork', 'a', 'b', '--checkpoint', 'cp1', '-v'],
-    env: { IMP_URL: 'http://127.0.0.1:1' },
-  });
+test('#defineGroup prints its usage and fails as a usage error when run without a command', async () => {
+  const result = await runCLIInProcess({ args: ['host'] });
 
   expect(result).toStrictEqual({
-    stdout: '',
-    stderr: 'impz: unknown flags --checkpoint, -v for fork (see --help)\n',
+    stdout: [
+      'Manage saved impd hosts (see also impz login) (impz host v2.4.1)',
+      '',
+      'USAGE impz host ls|use|rm',
+      '',
+      'COMMANDS',
+      '',
+      '   ls    List saved hosts; * marks the current one',
+      '  use    Make a saved host the current one        ',
+      '   rm    Forget a saved host and its token        ',
+      '',
+      'Use impz host <command> --help for more information about a command.',
+      '',
+      '',
+    ].join('\n'),
+    stderr: 'impz: no command specified\n',
     code: 2,
   });
-});
-
-test('it names a single undeclared flag as a flag', async () => {
-  const result = await runCli({
-    args: ['fork', 'a', 'b', '--zzz'],
-    env: { IMP_URL: 'http://127.0.0.1:1' },
-  });
-
-  expect(result.stderr).toBe('impz: unknown flag --zzz for fork (see --help)\n');
 });

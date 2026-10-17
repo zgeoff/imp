@@ -162,7 +162,10 @@ test('#runImageAdd makes a template from an imp through the stream of a current 
 
   await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
 
-  const image = await runImageAdd(ctx.client, { imp: 'box', name: 'tpl' }, 'impz template create');
+  const image = await runImageAdd(ctx.client, { imp: 'box', name: 'tpl' }, 'impz template create', {
+    isTTY: false,
+    write: () => {},
+  });
 
   const received: unknown = image;
 
@@ -190,7 +193,11 @@ test.skipIf(!checkDockerBuildx())(
     await Bun.write(join(contextDir, 'Dockerfile'), 'FROM scratch\nCOPY hello /hello\n');
     await Bun.write(join(contextDir, 'hello'), 'hi');
 
-    const built = await runOnHostBuild(ctx.client, { contextDir, name: 'img' });
+    const built = await runOnHostBuild(
+      ctx.client,
+      { contextDir, name: 'img' },
+      { isTTY: false, write: () => {} },
+    );
 
     const received: unknown = built;
 
@@ -212,7 +219,11 @@ test.skipIf(!checkDockerBuildx())(
 test('#runOnHostBuild passes on a current impd’s refusal of a host build', async () => {
   const ctx = await setupTest();
 
-  const building = runOnHostBuild(ctx.client, { contextDir: '/nonexistent/ctx', name: 'img' });
+  const building = runOnHostBuild(
+    ctx.client,
+    { contextDir: '/nonexistent/ctx', name: 'img' },
+    { isTTY: false, write: () => {} },
+  );
 
   expect(building).rejects.toMatchObject({
     code: 'BAD_REQUEST',
@@ -240,6 +251,7 @@ test('#runImageAdd adds through the call that answers at the end on an impd from
     createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: older.fetch }),
     { imp: 'box', name: 'tpl' },
     'impz template create',
+    { isTTY: false, write: () => {} },
   );
 
   const received: unknown = added;
@@ -275,6 +287,7 @@ test.skipIf(!checkDockerBuildx())(
     const built = await runOnHostBuild(
       createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: older.fetch }),
       { contextDir, name: 'img' },
+      { isTTY: false, write: () => {} },
     );
 
     const received: unknown = built;
@@ -314,6 +327,7 @@ test('#runImageAdd rejects when impd faults by ending the stream before it answe
     createImpClient({ url: 'http://impd.test', token: ctx.rootToken, fetch: faulty.fetch }),
     { imp: 'box', name: 'tpl' },
     'impz template create',
+    { isTTY: false, write: () => {} },
   );
 
   expect(adding).rejects.toThrowWithMessage(

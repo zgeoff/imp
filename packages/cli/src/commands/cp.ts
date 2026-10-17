@@ -1,12 +1,11 @@
+import { toProgressOutput } from '../command-io';
 import { runCp } from '../cp/run-cp';
 import { defineCommand } from '../define-command';
 
 export const cpCommand = defineCommand({
-  meta: {
-    name: 'cp',
-    description:
-      'Copy a file or directory into or out of an imp (impz cp ./dir box:/srv/dir, impz cp box:/var/log/x .)',
-  },
+  name: 'cp',
+  description:
+    'Copy a file or directory into or out of an imp (impz cp ./dir box:/srv/dir, impz cp box:/var/log/x .)',
   args: {
     source: {
       type: 'positional',
@@ -24,11 +23,14 @@ export const cpCommand = defineCommand({
         'owner of what a copy into an imp makes: user, uid, user:group (default: the owner of the directory it lands in)',
     },
   },
-  run: (context) =>
+  run: (ctx) =>
     runCp({
-      host: context.host,
-      source: context.args.source,
-      target: context.args.target,
-      ...(context.args.owner !== undefined && { owner: context.args.owner }),
+      host: ctx.extensions.impz.host,
+      env: ctx.extensions.impz.io.env,
+      warn: ctx.extensions.impz.io.printError,
+      output: toProgressOutput(ctx.extensions.impz.io),
+      source: ctx.values.source,
+      target: ctx.values.target,
+      ...(ctx.values.owner !== undefined && { owner: ctx.values.owner }),
     }),
 });

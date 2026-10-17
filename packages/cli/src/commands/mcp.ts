@@ -7,11 +7,9 @@ import { UsageError } from '../usage-error';
 // stdout carries only JSON-RPC messages; anything else goes to stderr. The
 // server loads on use, so other commands do not build its tool schemas.
 export const mcpCommand = defineCommand({
-  meta: {
-    name: 'mcp',
-    description:
-      'Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes. For a real limit, run it with a scoped token (impz token new).',
-  },
+  name: 'mcp',
+  description:
+    'Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes. For a real limit, run it with a scoped token (impz token new).',
   args: {
     prefix: {
       type: 'string',
@@ -20,15 +18,15 @@ export const mcpCommand = defineCommand({
     allow: { type: 'string', description: 'touch these imps too (comma-separated names)' },
     all: { type: 'boolean', description: 'touch every imp on impd' },
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const mcp = await import('@impz/mcp');
 
       let guard: ImpGuard;
 
       // a missing or broken guard is a usage error: exit 2 with the reason
       try {
-        guard = mcp.createImpGuard(readGuardOptions(context.args));
+        guard = mcp.createImpGuard(readGuardOptions(ctx.values));
       } catch (error) {
         throw error instanceof mcp.GuardError ? new UsageError(error.message) : error;
       }

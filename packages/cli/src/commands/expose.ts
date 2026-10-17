@@ -13,28 +13,27 @@ export const authArgs = {
 } as const;
 
 export const exposeCommand = defineCommand({
-  meta: {
-    name: 'expose',
-    description: 'Serve an imp to the internet at https://<name>.<domain>, with optional auth',
-  },
+  name: 'expose',
+  description: 'Serve an imp to the internet at https://<name>.<domain>, with optional auth',
   args: { name: nameArg, ...authArgs, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const auth = parsePublicAuth(context.args.auth, context.args.user);
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const auth = parsePublicAuth(ctx.values.auth, ctx.values.user);
 
-      const result = await client.imps.expose({ name: context.args.name, ...auth });
+      const result = await client.imps.expose({ name: ctx.values.name, ...auth });
 
-      console.log(formatOutput(result, context.args.json, formatExposeResult));
+      ctx.extensions.impz.io.print(formatOutput(result, ctx.values.json, formatExposeResult));
     }),
 });
 
 export const unexposeCommand = defineCommand({
-  meta: { name: 'unexpose', description: 'Take an imp off the internet: tailnet only again' },
+  name: 'unexpose',
+  description: 'Take an imp off the internet: tailnet only again',
   args: { name: nameArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const imp = await client.imps.unexpose({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const imp = await client.imps.unexpose({ name: ctx.values.name });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });

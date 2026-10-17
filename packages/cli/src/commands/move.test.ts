@@ -20,7 +20,7 @@ import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startWarmMoveHosts } from '../test-utils/start-warm-move-hosts';
 import { UsageError } from '../usage-error';
 import { runMove } from './move';
@@ -700,7 +700,7 @@ test('it refuses --resume of an imp with no verified move', async () => {
 });
 
 test('it refuses --resume together with --abort', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['move', 'dev', 'b', '--resume', '--abort'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });

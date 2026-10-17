@@ -40,8 +40,8 @@ import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
 import { createImpClient } from './create-imp-client';
 import { formatTunnelClose, startProxy } from './proxy-client';
+import { runCLIInProcess } from './test-utils/run-cli-in-process';
 import { sendLocalRequest } from './test-utils/send-local-request';
-import { runCli } from './test-utils/start-cli';
 import { startStubTunnelFaultProxy } from './test-utils/start-stub-tunnel-fault-proxy';
 
 async function setupTest() {
@@ -738,7 +738,10 @@ test('#startProxy prints the notice again once the quiet time passed without a f
 });
 
 test('#runProxy prints the usage error for a proxy with no port and no reverse forward', async () => {
-  const result = await runCli({ args: ['proxy', 'box'], env: { IMP_URL: 'http://127.0.0.1:1' } });
+  const result = await runCLIInProcess({
+    args: ['proxy', 'box'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
 
   expect(result).toStrictEqual({
     stdout: '',

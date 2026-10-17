@@ -16,7 +16,8 @@ same PR, because `check-project-verbs.sh` fails when the lists differ.
 
 imp's verbs name the lifecycle an imp moves through, its disk, which only grows, and its elastic
 memory, which also shrinks. `watch` follows impd's event stream and calls back on each change until
-a signal ends it, opening the stream again when it drops.
+a signal ends it, opening the stream again when it drops. `dispatch` runs the handler that the first
+word of a command line names, for a command whose verbs share its arguments.
 
 - `allocate`
 - `list`
@@ -27,6 +28,7 @@ a signal ends it, opening the stream again when it drops.
 - `grow`
 - `shrink`
 - `watch`
+- `dispatch`
 
 ## Exempt names
 

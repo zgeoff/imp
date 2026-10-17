@@ -1,8 +1,9 @@
 import { ServiceRestartSchema } from '@impz/api';
 import type { ServiceDef, ServiceLog } from '@impz/api';
 import { ORPCError } from '@impz/client';
+import { choice, integer } from 'gunshi/combinators';
 import { match } from 'ts-pattern';
-import { defineCommand } from '../define-command';
+import { defineCommand, defineGroup } from '../define-command';
 import { formatOutput, formatServices } from '../format-output';
 import { formatError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
@@ -18,10 +19,10 @@ export interface ServiceAddArgs {
   readonly argv: readonly string[];
 
   // KEY=VALUE, one or more
-  readonly env?: string | readonly string[] | undefined;
+  readonly env?: readonly string[] | undefined;
   readonly cwd?: string | undefined;
   readonly user?: string | undefined;
-  readonly restart?: string | undefined;
+  readonly restart?: ServiceDef['restart'] | undefined;
 }
 
 // --cmd runs through the shell; a stop signals the whole process group, so
@@ -32,8 +33,8 @@ export function buildServiceDef(service: string, args: Readonly<ServiceAddArgs>)
   }
 
   const argv = args.cmd === undefined ? [...args.argv] : ['/bin/sh', '-c', args.cmd];
-  const env = readRepeated(args.env);
-  const restart = readRestart(args.restart);
+  const env = requireEnvEntries(args.env ?? []);
+  const restart = args.restart;
 
   return {
     name: service,
@@ -45,97 +46,55 @@ export function buildServiceDef(service: string, args: Readonly<ServiceAddArgs>)
   };
 }
 
-function readRepeated(value: string | readonly string[] | undefined): string[] {
-  const values = typeof value === 'string' ? [value] : [...(value ?? [])];
-
-  for (const entry of values) {
+function requireEnvEntries(entries: readonly string[]): readonly string[] {
+  for (const entry of entries) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*=/u.test(entry)) {
       throw new UsageError(`--env ${entry}: want KEY=VALUE`);
     }
   }
 
-  return values;
-}
-
-function readRestart(restart: string | undefined): ServiceDef['restart'] {
-  if (restart === undefined) {
-    return undefined;
-  }
-
-  const parsed = ServiceRestartSchema.safeParse(restart);
-
-  if (!parsed.success) {
-    throw new UsageError(`--restart must be one of ${ServiceRestartSchema.options.join(', ')}`);
-  }
-
-  return parsed.data;
-}
-
-// citty keeps only the last of a repeated string flag, so the values come
-// from the raw arguments before `--`
-function readFlagValues(rawArgs: readonly string[], flag: string): string[] {
-  const separator = rawArgs.indexOf('--');
-  const args = separator === -1 ? rawArgs : rawArgs.slice(0, separator);
-  const values: string[] = [];
-
-  for (const [index, arg] of args.entries()) {
-    const next = args[index + 1];
-
-    if (arg === `--${flag}` && next !== undefined) {
-      values.push(next);
-    } else if (arg.startsWith(`--${flag}=`)) {
-      values.push(arg.slice(flag.length + 3));
-    }
-  }
-
-  return values;
-}
-
-// main hands citty only the arguments before `--`, as for `impz exec`
-function splitAfterSeparator(argv: readonly string[]): string[] {
-  const separator = argv.indexOf('--');
-
-  return separator === -1 ? [] : argv.slice(separator + 1);
+  return entries;
 }
 
 const addCommand = defineCommand({
-  meta: {
-    name: 'add',
-    description:
-      'Add a service to an imp and start it (impz service add <name> <service> --cmd "…" or -- argv)',
-  },
+  name: 'add',
+  description:
+    'Add a service to an imp and start it (impz service add <name> <service> --cmd "…" or -- argv)',
   args: {
     name: nameArg,
     service: serviceArg,
     cmd: { type: 'string', description: 'the command, run by /bin/sh' },
-    env: { type: 'string', description: 'KEY=VALUE; give it once per variable' },
+    env: { type: 'string', multiple: true, description: 'KEY=VALUE; give it once per variable' },
     cwd: { type: 'string', description: 'working directory (default /)' },
     user: { type: 'string', description: "user to run as (default the image's)" },
-    restart: { type: 'string', description: 'always (default), on-failure or never' },
+    restart: choice(ServiceRestartSchema.options, {
+      description: 'always (default), on-failure or never',
+    }),
     replace: { type: 'boolean', description: 'replace a service by that name' },
-    'http-port': {
-      type: 'string',
+    'http-port': integer({
+      min: 1,
+      max: 65_535,
       description: "then point the imp's URL at this port (impz set; needs manage)",
-    },
+    }),
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const name = context.args.name;
-      const httpPort = readHttpPort(context.args['http-port']);
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const name = ctx.values.name;
+      const httpPort = ctx.values['http-port'];
 
-      const def = buildServiceDef(context.args.service, {
-        cmd: context.args.cmd,
-        argv: splitAfterSeparator(process.argv),
-        env: readFlagValues(context.rawArgs, 'env'),
-        cwd: context.args.cwd,
-        user: context.args.user,
-        restart: context.args.restart,
+      const def = buildServiceDef(ctx.values.service, {
+        cmd: ctx.values.cmd,
+        argv: ctx.rest,
+        env: ctx.values.env,
+        cwd: ctx.values.cwd,
+        user: ctx.values.user,
+        restart: ctx.values.restart,
       });
 
       await client.services.add({
         name,
         service: def,
-        ...(context.args.replace === true && { replace: true }),
+        ...(ctx.values.replace === true && { replace: true }),
       });
 
       if (httpPort === undefined) {
@@ -151,20 +110,6 @@ const addCommand = defineCommand({
     }),
 });
 
-function readHttpPort(text: string | undefined): number | undefined {
-  if (text === undefined) {
-    return undefined;
-  }
-
-  const port = Number(text);
-
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new UsageError('--http-port must be a port from 1 to 65535');
-  }
-
-  return port;
-}
-
 // The service runs either way; say so, and how to set the port after.
 function formatPortRefusal(name: string, service: string, port: number, error: unknown): string {
   const forbidden = error instanceof ORPCError && error.code === 'FORBIDDEN';
@@ -175,14 +120,13 @@ function formatPortRefusal(name: string, service: string, port: number, error: u
 }
 
 const lsCommand = defineCommand({
-  meta: {
-    name: 'ls',
-    description: "List an imp's services; a sleeping imp's as its last sleep left them",
-  },
+  name: 'ls',
+  description: "List an imp's services; a sleeping imp's as its last sleep left them",
   args: { name: nameArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const name = context.args.name;
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const io = ctx.extensions.impz.io;
+      const name = ctx.values.name;
 
       const [listed, imp] = await Promise.all([
         client.services.list({ name }),
@@ -190,38 +134,38 @@ const lsCommand = defineCommand({
       ]);
 
       if (!listed.recorded) {
-        console.error(`${name} is sleeping, and its last sleep recorded no services list`);
+        io.printError(`${name} is sleeping, and its last sleep recorded no services list`);
       } else if (imp.state === 'sleeping') {
-        console.error(`${name} is sleeping: its services as they were when it went to sleep`);
+        io.printError(`${name} is sleeping: its services as they were when it went to sleep`);
       }
 
-      console.log(formatOutput(listed.services, context.args.json, formatServices));
+      io.print(formatOutput(listed.services, ctx.values.json, formatServices));
     }),
 });
 
 const rmCommand = defineCommand({
-  meta: { name: 'rm', description: 'Stop a service and delete its file; its logs stay' },
+  name: 'rm',
+  description: 'Stop a service and delete its file; its logs stay',
   args: { name: nameArg, service: serviceArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      await client.services.remove({ name: context.args.name, service: context.args.service });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      await client.services.remove({ name: ctx.values.name, service: ctx.values.service });
     }),
 });
 
 const restartCommand = defineCommand({
-  meta: {
-    name: 'restart',
-    description: 'Stop a service and start it again from its file, so an edit applies',
-  },
+  name: 'restart',
+  description: 'Stop a service and start it again from its file, so an edit applies',
   args: { name: nameArg, service: serviceArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      await client.services.restart({ name: context.args.name, service: context.args.service });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      await client.services.restart({ name: ctx.values.name, service: ctx.values.service });
     }),
 });
 
-export const serviceCommand = defineCommand({
-  meta: { name: 'service', description: "Manage an imp's services: add, ls, rm, restart" },
+export const serviceCommand = defineGroup({
+  name: 'service',
+  description: "Manage an imp's services: add, ls, rm, restart",
   subCommands: { add: addCommand, ls: lsCommand, rm: rmCommand, restart: restartCommand },
 });
 
@@ -273,10 +217,8 @@ export function createLogPrinter(prefix: boolean, write: (text: string) => void)
 }
 
 export const logsCommand = defineCommand({
-  meta: {
-    name: 'logs',
-    description: "Print an imp's service logs (impz logs <name> [service] [-f] [-n lines])",
-  },
+  name: 'logs',
+  description: "Print an imp's service logs (impz logs <name> [service] [-f] [-n lines])",
   args: {
     name: nameArg,
     service: {
@@ -284,30 +226,33 @@ export const logsCommand = defineCommand({
       description: 'service name (default every service)',
       required: false,
     },
-    follow: { type: 'boolean', alias: 'f', description: 'keep printing what they write' },
-    lines: { type: 'string', alias: 'n', description: 'lines to print first (default 100)' },
+    follow: { type: 'boolean', short: 'f', description: 'keep printing what they write' },
+    lines: integer({
+      min: 0,
+      max: 100_000,
+      short: 'n',
+      description: 'lines to print first (default 100)',
+    }),
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const lines = readLineCount(context.args.lines);
-      const service = context.args.service;
-
-      const printer = createLogPrinter(service === undefined, (text) => {
-        process.stdout.write(text);
-      });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const io = ctx.extensions.impz.io;
+      const lines = ctx.values.lines;
+      const service = ctx.values.service;
+      const printer = createLogPrinter(service === undefined, io.writeOut);
 
       const stream = await client.services.logs({
-        name: context.args.name,
+        name: ctx.values.name,
         ...(service !== undefined && { service }),
         ...(lines !== undefined && { lines }),
-        ...(context.args.follow === true && { follow: true }),
+        ...(ctx.values.follow === true && { follow: true }),
       });
 
       for await (const event of stream) {
         if (event.type === 'log') {
           printer.print(event);
         } else {
-          console.error(`impz: ${formatLogEvent(context.args.name, event)}`);
+          io.printError(`impz: ${formatLogEvent(ctx.values.name, event)}`);
         }
       }
 
@@ -330,18 +275,4 @@ export function formatLogEvent(
     .with({ type: 'awake' }, () => `${name} runs again`)
     .with({ type: 'restarting' }, () => 'impd is restarting; the follow ends')
     .exhaustive();
-}
-
-function readLineCount(text: string | undefined): number | undefined {
-  if (text === undefined) {
-    return undefined;
-  }
-
-  const count = Number(text);
-
-  if (!Number.isInteger(count) || count < 0 || count > 100_000) {
-    throw new UsageError('--lines must be a whole number from 0 to 100000');
-  }
-
-  return count;
 }

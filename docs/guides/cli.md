@@ -46,13 +46,14 @@ imp's disk and checkpoints out of every backup ([backups](./backups.md)).
 tailnet identity. Commands that print imps, images, checkpoints or `info` take `--json`.
 `scripts/impz` runs the CLI from the repo.
 
-Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
-size, a relative `image build --on-host` path, an `IMP_URL` that is not an http URL, an unknown
-`--host`). `impz exec` and `impz console` exit with the command's own code, or 128 + n when signal n
-ended it, and set these codes themselves:
+Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown command or
+flag, a missing argument, a bad size, a relative `image build --on-host` path, an `IMP_URL` that is
+not an http URL, an unknown `--host`). `impz exec` and `impz console` exit with the command's own
+code, or 128 + n when signal n ended it, and set these codes themselves:
 
 | Code | When                                                                                  |
 | ---- | ------------------------------------------------------------------------------------- |
+| 1    | impd cannot ensure what `--require` asks for, so nothing ran (`PRECONDITION_FAILED`)  |
 | 2    | a usage error, such as no command after `--`                                          |
 | 127  | the command could not start (`EXEC_FAILED`)                                           |
 | 141  | the CLI's own output closed, as in `impz exec box -- cat big \| head`                 |

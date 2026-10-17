@@ -1,5 +1,6 @@
 import type { Image, ImageOpEvent } from '@impz/api';
 import { readFeatures } from '@impz/client';
+import type { ProgressOutput } from '../cp/copy-progress';
 import type { ImpClient } from '../create-imp-client';
 import { createBuildStatus } from './build-status';
 
@@ -13,6 +14,7 @@ export async function runImageAdd(
   client: Pick<ImpClient, 'images' | 'system'>,
   input: AddInput,
   label: string,
+  output: ProgressOutput,
 ): Promise<Image> {
   if (!(await hasImageOpStream(client))) {
     return client.images.add(input);
@@ -20,7 +22,7 @@ export async function runImageAdd(
 
   const events = await client.images.addStream(input);
 
-  return readImageOp(events, label);
+  return readImageOp(events, label, output);
 }
 
 // images.build from a directory on the impd host, as runImageAdd, with the
@@ -28,6 +30,7 @@ export async function runImageAdd(
 export async function runOnHostBuild(
   client: Pick<ImpClient, 'images' | 'system'>,
   input: Omit<BuildInput, 'logs'>,
+  output: ProgressOutput,
   quiet = false,
 ): Promise<Image> {
   if (!(await hasImageOpStream(client))) {
@@ -36,7 +39,7 @@ export async function runOnHostBuild(
 
   const events = await client.images.buildStream({ ...input, logs: !quiet });
 
-  return readImageOp(events, 'impz image build', quiet);
+  return readImageOp(events, 'impz image build', output, quiet);
 }
 
 // An impd from before the streams answers only when the work ends, so a
@@ -50,18 +53,10 @@ async function hasImageOpStream(client: Pick<ImpClient, 'system'>): Promise<bool
 async function readImageOp(
   events: Readonly<AsyncIterable<ImageOpEvent>>,
   label: string,
+  output: ProgressOutput,
   quiet = false,
 ): Promise<Image> {
-  const status = createBuildStatus(
-    {
-      isTTY: process.stderr.isTTY,
-      write: (text) => {
-        process.stderr.write(text);
-      },
-    },
-    label,
-    quiet,
-  );
+  const status = createBuildStatus(output, label, quiet);
 
   try {
     for await (const event of events) {

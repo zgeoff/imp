@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canUpdateReadOnly } from '@impz/test-utils/can-update-read-only';
 import { updateReadOnly } from '@impz/test-utils/update-read-only';
-import { runCli } from './test-utils/start-cli';
+import { runCLIInProcess } from './test-utils/run-cli-in-process';
 
 // the CLI's HOME; `stack` makes a read-only HOME writable again before it goes
 function setupTest() {
@@ -40,7 +40,7 @@ test.skipIf(!canUpdateReadOnly()).each([[['--version']], [['--help']], [['comple
 
     updateReadOnly(ctx.stack, ctx.home);
 
-    const result = await runCli({ args, env: { HOME: ctx.home } });
+    const result = await runCLIInProcess({ args, env: { HOME: ctx.home } });
 
     expect({ stderr: result.stderr, code: result.code }).toStrictEqual({ stderr: '', code: 0 });
   },
@@ -57,7 +57,7 @@ test('it moves a config from before the rename to impz on a command that reads i
     { mode: 0o600 },
   );
 
-  const result = await runCli({ args: ['hosts'], env: { HOME: ctx.home } });
+  const result = await runCLIInProcess({ args: ['hosts'], env: { HOME: ctx.home } });
 
   expect(result).toStrictEqual({
     stdout: [
@@ -74,4 +74,69 @@ test('it moves a config from before the rename to impz on a command that reads i
   expect(readFileSync(join(ctx.home, '.config', 'impz', 'config.json'), 'utf8')).toBe(
     '{"current":"home","hosts":{"home":{"url":"https://home.example","token":"secret"}}}\n',
   );
+});
+
+test('it refuses flags the command does not declare as a usage error, with no call', async () => {
+  const result = await runCLIInProcess({
+    args: ['fork', 'a', 'b', '--checkpoint', 'cp1', '-v'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'impz: unknown flags --checkpoint, -v for fork (see --help)\n',
+    code: 2,
+  });
+});
+
+test('it names a single undeclared flag as a flag', async () => {
+  const result = await runCLIInProcess({
+    args: ['fork', 'a', 'b', '--zzz'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
+
+  expect(result.stderr).toBe('impz: unknown flag --zzz for fork (see --help)\n');
+});
+
+test('it refuses a command line with no imp name as a usage error', async () => {
+  const result = await runCLIInProcess({ args: ['rm'], env: { IMP_URL: 'http://127.0.0.1:1' } });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'impz: missing NAME (see --help)\n',
+    code: 2,
+  });
+});
+
+test('it refuses a command it does not have as a usage error', async () => {
+  const result = await runCLIInProcess({ args: ['launch'] });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'impz: unknown command launch (see impz --help)\n',
+    code: 2,
+  });
+});
+
+test('it exits 1 with one line when the call fails', async () => {
+  const result: unknown = await runCLIInProcess({
+    args: ['ls'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: expect.stringMatching(/^impz: [^\n]+\n$/u) as unknown,
+    code: 1,
+  });
+});
+
+test('it prints its version alone', async () => {
+  const result: unknown = await runCLIInProcess({ args: ['--version'] });
+
+  expect(result).toStrictEqual({
+    stdout: expect.stringMatching(/^\d+\.\d+\.\d+\n$/u) as unknown,
+    stderr: '',
+    code: 0,
+  });
 });

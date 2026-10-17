@@ -45,7 +45,7 @@ const EMPTY_CONFIG: HostConfig = { current: null, hosts: {} };
 const HOST_FILES: readonly string[] = ['config.json'];
 
 export function resolveConfigDir(env: CliEnv): string {
-  const configHome = env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config');
+  const configHome = env['XDG_CONFIG_HOME'] ?? join(env['HOME'] ?? homedir(), '.config');
 
   return join(configHome, 'impz');
 }
@@ -108,8 +108,12 @@ export function readHostConfig(
 // Writes a temp file with mode 0600 and renames it over the config, so a
 // crash leaves the old file or the new one and no other user can read the
 // tokens at any point.
-export function writeHostConfig(env: CliEnv, config: HostConfig): void {
-  updateLegacyConfig(resolveConfigDir(env), console.error, HOST_FILES);
+export function writeHostConfig(
+  env: CliEnv,
+  config: HostConfig,
+  warn: (line: string) => void = console.error,
+): void {
+  updateLegacyConfig(resolveConfigDir(env), warn, HOST_FILES);
   mkdirSync(resolveConfigDir(env), { recursive: true, mode: 0o700 });
 
   // a symlinked config.json (dotfiles) stays a link: the rename replaces

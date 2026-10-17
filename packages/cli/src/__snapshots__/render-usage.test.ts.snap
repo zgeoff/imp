@@ -1,0 +1,1651 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`it prints the help of impz as it always has 1`] = `
+"Persistent Linux microVMs that sleep when idle and wake on request (impz v2.4.1)
+
+USAGE impz [OPTIONS] new|ls|rm|start|stop|exec|console|attach|sessions|service|logs|sleep|wake|hold|set|top|url|proxy|cp|policy|expose|unexpose|net|checkpoint|checkpoints|restore|fork|move|disk|gc|db|backup|image|template|secret|grant|revoke|grants|audit|token|events|info|mcp|oauth|login|host|hosts|completion
+
+OPTIONS
+
+  --host=<host>    saved host to call (see impz host ls)
+
+COMMANDS
+
+          new    Create an imp and boot it                                                                                                                                                           
+           ls    List imps                                                                                                                                                                           
+           rm    Destroy an imp and its disk and checkpoints                                                                                                                                         
+        start    Boot a stopped imp                                                                                                                                                                  
+         stop    Shut an imp down (its disk stays, its memory and leases do not)                                                                                                                     
+         exec    Run a command in an imp (impz exec [-t] <name> -- cmd args)                                                                                                                         
+      console    Open a shell in an imp, in a session that outlives the terminal (ctrl-] detaches)                                                                                                   
+       attach    Attach to a session in an imp: its recent output, then live (ctrl-] detaches)                                                                                                       
+     sessions    List an imp's sessions without waking it (impz sessions kill <name> <session> ends one; logs, log and log-rm read and delete session logs)                                          
+      service    Manage an imp's services: add, ls, rm, restart                                                                                                                                      
+         logs    Print an imp's service logs (impz logs <name> [service] [-f] [-n lines])                                                                                                            
+        sleep    Snapshot an imp to disk and free its RAM, ending its leases                                                                                                                         
+         wake    Resume a sleeping or stopped imp                                                                                                                                                    
+         hold    Keep an imp awake for a while (0 releases)                                                                                                                                          
+          set    Change an imp's CPU limit or weight (at once when running), its vCPUs (stopped only), or its HTTP port                                                                              
+          top    Watch every imp's CPU, memory and traffic                                                                                                                                           
+          url    Print an imp's URLs: https first when HTTPS is on, then its tailnet name, local and tailnet                                                                                         
+        proxy    Forward local ports to ports in an imp, waking it on connect (impz proxy <name> 5432 3001:3000), or with --reverse, a socket or port in the imp to this machine                     
+           cp    Copy a file or directory into or out of an imp (impz cp ./dir box:/srv/dir, impz cp box:/var/log/x .)                                                                               
+       policy    Show or set an imp's egress policy: open, public, box with --allow, or none                                                                                                         
+       expose    Serve an imp to the internet at https://<name>.<domain>, with optional auth                                                                                                         
+     unexpose    Take an imp off the internet: tailnet only again                                                                                                                                    
+          net    Manage private networks between imps                                                                                                                                                
+   checkpoint    Checkpoint an imp's disk (impz checkpoint rm <name> <checkpoint> deletes one)                                                                                                       
+  checkpoints    List an imp's checkpoints, newest first                                                                                                                                             
+      restore    Roll an imp's disk back to a checkpoint; an awake imp reboots                                                                                                                       
+         fork    Create an imp from another imp's disk or checkpoint                                                                                                                                 
+         move    Move an imp to another saved host: a stopped one cold, a sleeping one with its memory (see docs/guides/hosts.md)                                                                    
+         disk    Manage imp disks                                                                                                                                                                    
+           gc    Remove what a crash left that nothing names, and list the orphans it keeps                                                                                                          
+           db    impd's database                                                                                                                                                                     
+       backup    Off-host backups of every imp (restic)                                                                                                                                              
+        image    Manage images                                                                                                                                                                       
+     template    Manage templates: images made from an imp's disk                                                                                                                                    
+       secret    Manage the secrets the credential broker adds                                                                                                                                       
+        grant    Let an imp use a secret: the broker adds it to the imp's requests to its hosts                                                                                                      
+       revoke    Take a secret away from an imp                                                                                                                                                      
+       grants    List the secrets granted to an imp                                                                                                                                                  
+        audit    Show requests the broker sent with a credential or refused, or calls to impd, newest first                                                                                          
+        token    Manage API tokens and their scopes (needs manage)                                                                                                                                   
+       events    Follow impd: every imp, then each change, as one JSON object a line                                                                                                                 
+         info    Show impd version, RAM budget and counts, or one imp with its container                                                                                                             
+          mcp    Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes. For a real limit, run it with a scoped token (impz token new).
+        oauth    Manage sign-ins to the public MCP route: clients, grants and approvals                                                                                                              
+        login    Save an impd and its token, and make it the current host                                                                                                                            
+         host    Manage saved impd hosts (see also impz login)                                                                                                                                       
+        hosts    List saved hosts (impz host ls)                                                                                                                                                     
+   completion    Print the shell completion script (bash, zsh or fish)                                                                                                                               
+
+Use impz <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz new as it always has 1`] = `
+"Create an imp and boot it (impz new v2.4.1)
+
+USAGE impz new [OPTIONS] [NAME]
+
+ARGUMENTS
+
+  NAME    imp name (generated when left out)
+
+OPTIONS
+
+            --image=<image>    image name                                                                    
+              --cpus=<cpus>    vCPU count                                                                    
+          --memory=<memory>    memory: MiB, or with a unit (512m, 2g)                                        
+  --max-memory=<max_memory>    what the guest may grow to under pressure, at most 4 × memory                 
+              --disk=<disk>    disk size, with a unit (64g); 32g by default                                  
+    --http-port=<http_port>    guest port the proxy forwards to (default 8080)                               
+          --policy=<policy>    egress policy: open (default), public (the internet only), box or none        
+            --allow=<allow>    what a box may reach: hosts, *.domains, IP addresses or CIDRs, comma-separated
+    --cpu-limit=<cpu_limit>    cores the VM may use, such as 1.5, or none (default none)                     
+  --cpu-weight=<cpu_weight>    share of the host under contention, 1 to 10000 (default 100)                  
+                   --public    serve it to the internet too, as impz expose does                             
+              --auth=<auth>    what the imp asks for before it wakes: token (default), basic or none         
+              --user=<user>    the basic auth user (default imp)                                             
+                --net=<net>    networks to join, comma-separated (see impz net)                              
+                   --backup    hold the imp in the host’s backups (the default) (Default: true)              
+                --no-backup    leave its disk and checkpoints out of every backup, for its life              
+                    --place    create it on the saved host with the most free RAM (see impz host ls)         
+                     --json    print JSON                                                                    
+
+
+"
+`;
+
+exports[`it prints the help of impz ls as it always has 1`] = `
+"List imps (impz ls v2.4.1)
+
+USAGE impz ls [OPTIONS] 
+
+OPTIONS
+
+       --all    list the imps on every saved host (see impz host ls)
+  --builders    list the image builders impd runs for builds too    
+      --json    print JSON                                          
+
+
+"
+`;
+
+exports[`it prints the help of impz rm as it always has 1`] = `
+"Destroy an imp and its disk and checkpoints (impz rm v2.4.1)
+
+USAGE impz rm [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz start as it always has 1`] = `
+"Boot a stopped imp (impz start v2.4.1)
+
+USAGE impz start [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz stop as it always has 1`] = `
+"Shut an imp down (its disk stays, its memory and leases do not) (impz stop v2.4.1)
+
+USAGE impz stop [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz exec as it always has 1`] = `
+"Run a command in an imp (impz exec [-t] <name> -- cmd args) (impz exec v2.4.1)
+
+USAGE impz exec [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+            -t, --tty    run on a terminal                                                                                 
+              --agent    run as root in the imp's agent, outside its container, with busybox (host-wide manage scope)      
+  --require=<require>    start the command only if impd can ensure these, or fail and run nothing: broker (comma-separated)
+
+
+"
+`;
+
+exports[`it prints the help of impz console as it always has 1`] = `
+"Open a shell in an imp, in a session that outlives the terminal (ctrl-] detaches) (impz console v2.4.1)
+
+USAGE impz console [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+        --session=<session>    session to start or attach to (default main on a terminal); --no-session for a shell that ends with the terminal
+                      --log    impd keeps the output of the session this starts, for impz sessions log (docs/guides/session-logs.md)           
+  --detach-key=<detach_key>    key that detaches from the session: ctrl-<key>, or none (Default: ctrl-])                                       
+
+
+"
+`;
+
+exports[`it prints the help of impz attach as it always has 1`] = `
+"Attach to a session in an imp: its recent output, then live (ctrl-] detaches) (impz attach v2.4.1)
+
+USAGE impz attach [OPTIONS] <NAME> [SESSION]
+
+ARGUMENTS
+
+     NAME    imp name (Required)        
+  SESSION    session name (default main)
+
+OPTIONS
+
+  --detach-key=<detach_key>    key that detaches from the session: ctrl-<key>, or none (Default: ctrl-])
+
+
+"
+`;
+
+exports[`it prints the help of impz sessions as it always has 1`] = `
+"List an imp's sessions without waking it (impz sessions kill <name> <session> ends one; logs, log and log-rm read and delete session logs) (impz sessions v2.4.1)
+
+USAGE impz sessions [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+         --json    print JSON                                            
+  --from=<from>    impz sessions log: the offset to read from (default 0)
+
+
+"
+`;
+
+exports[`it prints the help of impz service as it always has 1`] = `
+"Manage an imp's services: add, ls, rm, restart (impz service v2.4.1)
+
+USAGE impz service add|ls|rm|restart
+
+COMMANDS
+
+      add    Add a service to an imp and start it (impz service add <name> <service> --cmd "…" or -- argv)
+       ls    List an imp's services; a sleeping imp's as its last sleep left them                         
+       rm    Stop a service and delete its file; its logs stay                                            
+  restart    Stop a service and start it again from its file, so an edit applies                          
+
+Use impz service <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz service add as it always has 1`] = `
+"Add a service to an imp and start it (impz service add <name> <service> --cmd "…" or -- argv) (service add)
+
+USAGE service add [OPTIONS] <NAME> <SERVICE>
+
+ARGUMENTS
+
+     NAME    imp name (Required)    
+  SERVICE    service name (Required)
+
+OPTIONS
+
+              --cmd=<cmd>    the command, run by /bin/sh                                   
+              --env=<env>    KEY=VALUE; give it once per variable                          
+              --cwd=<cwd>    working directory (default /)                                 
+            --user=<user>    user to run as (default the image's)                          
+      --restart=<restart>    always (default), on-failure or never                         
+                --replace    replace a service by that name                                
+  --http-port=<http_port>    then point the imp's URL at this port (impz set; needs manage)
+
+
+"
+`;
+
+exports[`it prints the help of impz service ls as it always has 1`] = `
+"List an imp's services; a sleeping imp's as its last sleep left them (service ls)
+
+USAGE service ls [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz service rm as it always has 1`] = `
+"Stop a service and delete its file; its logs stay (service rm)
+
+USAGE service rm [OPTIONS] <NAME> <SERVICE>
+
+ARGUMENTS
+
+     NAME    imp name (Required)    
+  SERVICE    service name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz service restart as it always has 1`] = `
+"Stop a service and start it again from its file, so an edit applies (service restart)
+
+USAGE service restart [OPTIONS] <NAME> <SERVICE>
+
+ARGUMENTS
+
+     NAME    imp name (Required)    
+  SERVICE    service name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz logs as it always has 1`] = `
+"Print an imp's service logs (impz logs <name> [service] [-f] [-n lines]) (impz logs v2.4.1)
+
+USAGE impz logs [OPTIONS] <NAME> [SERVICE]
+
+ARGUMENTS
+
+     NAME    imp name (Required)                 
+  SERVICE    service name (default every service)
+
+OPTIONS
+
+         -f, --follow    keep printing what they write     
+  -n, --lines=<lines>    lines to print first (default 100)
+
+
+"
+`;
+
+exports[`it prints the help of impz sleep as it always has 1`] = `
+"Snapshot an imp to disk and free its RAM, ending its leases (impz sleep v2.4.1)
+
+USAGE impz sleep [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz wake as it always has 1`] = `
+"Resume a sleeping or stopped imp (impz wake v2.4.1)
+
+USAGE impz wake [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz hold as it always has 1`] = `
+"Keep an imp awake for a while (0 releases) (impz hold v2.4.1)
+
+USAGE impz hold [OPTIONS] <NAME> <DURATION>
+
+ARGUMENTS
+
+      NAME    imp name (Required)         
+  DURATION    e.g. 90s, 15m, 2h (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz set as it always has 1`] = `
+"Change an imp's CPU limit or weight (at once when running), its vCPUs (stopped only), or its HTTP port (impz set v2.4.1)
+
+USAGE impz set [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+    --cpu-limit=<cpu_limit>    cores the VM may use, such as 1.5, or none (default none)   
+  --cpu-weight=<cpu_weight>    share of the host under contention, 1 to 10000 (default 100)
+              --cpus=<cpus>    vCPU count; the imp must be stopped                         
+    --http-port=<http_port>    the port the imp's URL reaches                              
+                     --json    print JSON                                                  
+
+
+"
+`;
+
+exports[`it prints the help of impz top as it always has 1`] = `
+"Watch every imp's CPU, memory and traffic (impz top v2.4.1)
+
+USAGE impz top [OPTIONS] 
+
+OPTIONS
+
+  --once    print the table once and exit
+  --json    print JSON                   
+
+
+"
+`;
+
+exports[`it prints the help of impz url as it always has 1`] = `
+"Print an imp's URLs: https first when HTTPS is on, then its tailnet name, local and tailnet (impz url v2.4.1)
+
+USAGE impz url [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz proxy as it always has 1`] = `
+"Forward local ports to ports in an imp, waking it on connect (impz proxy <name> 5432 3001:3000), or with --reverse, a socket or port in the imp to this machine (impz proxy v2.4.1)
+
+USAGE impz proxy [OPTIONS] <NAME> [PORTS]
+
+ARGUMENTS
+
+   NAME    imp name (Required)                                 
+  PORTS    port, or local:remote; a local 0 takes any free port
+
+OPTIONS
+
+  --reverse=<reverse>    GUEST:LOCAL, each an absolute socket path or a port, to relay clients in the imp to this machine; repeatable. The first listen wakes the imp. After a sleep the forward waits for something else to wake the imp, never waking it, then listens again; if its listener ended while the imp stayed awake, it listens again after 30 s
+
+
+"
+`;
+
+exports[`it prints the help of impz cp as it always has 1`] = `
+"Copy a file or directory into or out of an imp (impz cp ./dir box:/srv/dir, impz cp box:/var/log/x .) (impz cp v2.4.1)
+
+USAGE impz cp [OPTIONS] <SOURCE> <TARGET>
+
+ARGUMENTS
+
+  SOURCE    a local path, or NAME:PATH in an imp (Required)
+  TARGET    a local path, or NAME:PATH in an imp (Required)
+
+OPTIONS
+
+  --owner=<owner>    owner of what a copy into an imp makes: user, uid, user:group (default: the owner of the directory it lands in)
+
+
+"
+`;
+
+exports[`it prints the help of impz policy as it always has 1`] = `
+"Show or set an imp's egress policy: open, public, box with --allow, or none (impz policy v2.4.1)
+
+USAGE impz policy [OPTIONS] <NAME> [MODE]
+
+ARGUMENTS
+
+  NAME    imp name (Required)      
+  MODE    open, public, box or none
+
+OPTIONS
+
+  --allow=<allow>    what a box may reach: hosts, *.domains, IP addresses or CIDRs, comma-separated
+           --json    print JSON                                                                    
+
+
+"
+`;
+
+exports[`it prints the help of impz expose as it always has 1`] = `
+"Serve an imp to the internet at https://<name>.<domain>, with optional auth (impz expose v2.4.1)
+
+USAGE impz expose [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --auth=<auth>    what the imp asks for before it wakes: token (default), basic or none
+  --user=<user>    the basic auth user (default imp)                                    
+         --json    print JSON                                                           
+
+
+"
+`;
+
+exports[`it prints the help of impz unexpose as it always has 1`] = `
+"Take an imp off the internet: tailnet only again (impz unexpose v2.4.1)
+
+USAGE impz unexpose [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz net as it always has 1`] = `
+"Manage private networks between imps (impz net v2.4.1)
+
+USAGE impz net create|ls|rm|join|leave
+
+COMMANDS
+
+  create    Create a private network for imps                                        
+      ls    List networks and the imps on each                                       
+      rm    Delete a network; its imps' connections to each other end                
+    join    Put an imp on a network: it reaches the network's other imps, and they it
+   leave    Take an imp off a network; its connections to the network's imps end     
+
+Use impz net <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz net create as it always has 1`] = `
+"Create a private network for imps (net create)
+
+USAGE net create [OPTIONS] <NETWORK>
+
+ARGUMENTS
+
+  NETWORK    network name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz net ls as it always has 1`] = `
+"List networks and the imps on each (net ls)
+
+USAGE net ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz net rm as it always has 1`] = `
+"Delete a network; its imps' connections to each other end (net rm)
+
+USAGE net rm [OPTIONS] <NETWORK>
+
+ARGUMENTS
+
+  NETWORK    network name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz net join as it always has 1`] = `
+"Put an imp on a network: it reaches the network's other imps, and they it (net join)
+
+USAGE net join [OPTIONS] <NETWORK> <NAME>
+
+ARGUMENTS
+
+  NETWORK    network name (Required)
+     NAME    imp name (Required)    
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz net leave as it always has 1`] = `
+"Take an imp off a network; its connections to the network's imps end (net leave)
+
+USAGE net leave [OPTIONS] <NETWORK> <NAME>
+
+ARGUMENTS
+
+  NETWORK    network name (Required)
+     NAME    imp name (Required)    
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz checkpoint as it always has 1`] = `
+"Checkpoint an imp's disk (impz checkpoint rm <name> <checkpoint> deletes one) (impz checkpoint v2.4.1)
+
+USAGE impz checkpoint [OPTIONS] <NAME> [LABEL]
+
+ARGUMENTS
+
+   NAME    imp name (Required)     
+  LABEL    label for the checkpoint
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz checkpoints as it always has 1`] = `
+"List an imp's checkpoints, newest first (impz checkpoints v2.4.1)
+
+USAGE impz checkpoints [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz restore as it always has 1`] = `
+"Roll an imp's disk back to a checkpoint; an awake imp reboots (impz restore v2.4.1)
+
+USAGE impz restore [OPTIONS] <NAME> <CHECKPOINT>
+
+ARGUMENTS
+
+        NAME    imp name (Required)              
+  CHECKPOINT    checkpoint id or label (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz fork as it always has 1`] = `
+"Create an imp from another imp's disk or checkpoint (impz fork v2.4.1)
+
+USAGE impz fork [OPTIONS] <SOURCE> <NAME>
+
+ARGUMENTS
+
+  SOURCE    imp to fork (Required)        
+    NAME    name of the new imp (Required)
+
+OPTIONS
+
+  --from=<from>    checkpoint id or label (default: the live disk)
+         --json    print JSON                                     
+
+
+"
+`;
+
+exports[`it prints the help of impz move as it always has 1`] = `
+"Move an imp to another saved host: a stopped one cold, a sleeping one with its memory (see docs/guides/hosts.md) (impz move v2.4.1)
+
+USAGE impz move [OPTIONS] <NAME> <TO>
+
+ARGUMENTS
+
+  NAME    imp name (Required)                
+    TO    saved host to move it to (Required)
+
+OPTIONS
+
+    --stop    stop a running or sleeping imp first, ending its leases: a cold move
+  --resume    commit a move the target verified                                   
+   --abort    end a move; the imp stays here                                      
+
+
+"
+`;
+
+exports[`it prints the help of impz disk as it always has 1`] = `
+"Manage imp disks (impz disk v2.4.1)
+
+USAGE impz disk resize
+
+COMMANDS
+
+  resize    Grow an imp's disk; the guest's filesystem grows into it (never shrinks)
+
+Use impz disk <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz disk resize as it always has 1`] = `
+"Grow an imp's disk; the guest's filesystem grows into it (never shrinks) (disk resize)
+
+USAGE disk resize [OPTIONS] <NAME> <SIZE>
+
+ARGUMENTS
+
+  NAME    imp name (Required)                        
+  SIZE    new disk size, with a unit (64g) (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz gc as it always has 1`] = `
+"Remove what a crash left that nothing names, and list the orphans it keeps (impz gc v2.4.1)
+
+USAGE impz gc [OPTIONS] 
+
+OPTIONS
+
+       --dry-run    list what would go, and remove nothing                                                   
+       --orphans    also retire the disks and images no row names, with their snapshots                      
+  --secret-files    with --orphans, also delete the secret values impd kept aside; recover any you need first
+          --json    print JSON                                                                               
+
+
+"
+`;
+
+exports[`it prints the help of impz db as it always has 1`] = `
+"impd's database (impz db v2.4.1)
+
+USAGE impz db copy
+
+COMMANDS
+
+  copy    Copy impd's database, consistently and while it runs, under its data directory
+
+Use impz db <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz db copy as it always has 1`] = `
+"Copy impd's database, consistently and while it runs, under its data directory (db copy)
+
+USAGE db copy [OPTIONS] [NAME]
+
+ARGUMENTS
+
+  NAME    the copy is <data>/db-copies/<name>.sqlite (default: imp-<UTC time>)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz backup as it always has 1`] = `
+"Off-host backups of every imp (restic) (impz backup v2.4.1)
+
+USAGE impz backup ls|run|restore|check
+
+COMMANDS
+
+       ls    List the backups a restore can go back to, oldest first                  
+      run    Back up every imp now, as the schedule does                              
+  restore    Bring an imp, or every imp, back from a backup; restored imps are stopped
+    check    Read back part of the repository and verify it (restic check)            
+
+Use impz backup <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz backup ls as it always has 1`] = `
+"List the backups a restore can go back to, oldest first (backup ls)
+
+USAGE backup ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz backup run as it always has 1`] = `
+"Back up every imp now, as the schedule does (backup run)
+
+USAGE backup run [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz backup restore as it always has 1`] = `
+"Bring an imp, or every imp, back from a backup; restored imps are stopped (backup restore)
+
+USAGE backup restore [OPTIONS] [NAME]
+
+ARGUMENTS
+
+  NAME    the imp to restore
+
+OPTIONS
+
+      --all    every imp in the backup                         
+  --at=<at>    the newest backup at or before this time, in UTC
+  --as=<as>    the restored imp’s name, when not its own       
+    --merge    with --all: add to a host that has imps already 
+     --json    print JSON                                      
+
+
+"
+`;
+
+exports[`it prints the help of impz backup check as it always has 1`] = `
+"Read back part of the repository and verify it (restic check) (backup check)
+
+USAGE backup check [OPTIONS] 
+
+OPTIONS
+
+  --subset=<subset>    how much to read: 5% (default), 1/10 or 2G
+
+
+"
+`;
+
+exports[`it prints the help of impz image as it always has 1`] = `
+"Manage images (impz image v2.4.1)
+
+USAGE impz image add|build|builds|ls|rm
+
+COMMANDS
+
+     add    Import an image the host docker has or can pull        
+   build    Build a directory with its Dockerfile into an imp image
+  builds    List the image builds running now                      
+      ls    List images                                            
+      rm    Remove an image no imp uses                            
+
+Use impz image <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz image add as it always has 1`] = `
+"Import an image the host docker has or can pull (image add)
+
+USAGE image add [OPTIONS] <REF>
+
+ARGUMENTS
+
+  REF    docker image ref (Required)
+
+OPTIONS
+
+  --name=<name>    imp image name (defaults from the ref)
+         --json    print JSON                            
+
+
+"
+`;
+
+exports[`it prints the help of impz image build as it always has 1`] = `
+"Build a directory with its Dockerfile into an imp image (image build)
+
+USAGE image build [OPTIONS] <DIR> --name=<name>
+
+ARGUMENTS
+
+  DIR    build context directory (Required)
+
+OPTIONS
+
+  --name=<name>    imp image name (Required)                                              
+  --file=<file>    Dockerfile path inside the context                                     
+      --on-host    the directory is an absolute path on the impd host: nothing is uploaded
+    -q, --quiet    print no progress and no build output, only the result or the error    
+         --json    print JSON                                                             
+
+
+"
+`;
+
+exports[`it prints the help of impz image builds as it always has 1`] = `
+"List the image builds running now (image builds)
+
+USAGE image builds [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz image ls as it always has 1`] = `
+"List images (image ls)
+
+USAGE image ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz image rm as it always has 1`] = `
+"Remove an image no imp uses (image rm)
+
+USAGE image rm [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    image name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz template as it always has 1`] = `
+"Manage templates: images made from an imp's disk (impz template v2.4.1)
+
+USAGE impz template create|ls|rm
+
+COMMANDS
+
+  create    Make a template from an imp's disk
+      ls    List templates                    
+      rm    Remove a template no imp uses     
+
+Use impz template <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz template create as it always has 1`] = `
+"Make a template from an imp's disk (template create)
+
+USAGE template create [OPTIONS] <IMP> <NAME>
+
+ARGUMENTS
+
+   IMP    imp to copy (Required)                                              
+  NAME    template name; an existing template moves to the new disk (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz template ls as it always has 1`] = `
+"List templates (template ls)
+
+USAGE template ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz template rm as it always has 1`] = `
+"Remove a template no imp uses (template rm)
+
+USAGE template rm [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    template name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz secret as it always has 1`] = `
+"Manage the secrets the credential broker adds (impz secret v2.4.1)
+
+USAGE impz secret add|refresh|ls|rm
+
+COMMANDS
+
+      add    Store a secret in impd; the value comes from stdin or a prompt, never a flag
+  refresh    Refresh an oauth secret now; exits 1 unless it is ready after it            
+       ls    List secrets: their hosts and the imps they are granted to                  
+       rm    Delete a secret and revoke it from every imp                                
+
+Use impz secret <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz secret add as it always has 1`] = `
+"Store a secret in impd; the value comes from stdin or a prompt, never a flag (secret add)
+
+USAGE secret add [OPTIONS] <NAME> --kind=<kind>
+
+ARGUMENTS
+
+  NAME    secret name (Required)
+
+OPTIONS
+
+                  --kind=<kind>    github, anthropic, npm, custom or oauth (both with --hosts) (Required)                                        
+                --hosts=<hosts>    custom, oauth: the hosts it is for, comma-separated                                                           
+              --header=<header>    custom, oauth: the header to set (default authorization)                                                      
+              --scheme=<scheme>    custom, oauth: bearer (default), basic or raw                                                                 
+                  --user=<user>    custom, oauth: the user name for basic                                                                        
+          --upstream=<upstream>    custom, one host: send its requests here (http or https origin) instead of the host; the credential goes there
+        --token-url=<token_url>    oauth: the https token endpoint                                                                               
+        --client-id=<client_id>    oauth: the client the refresh token is for                                                                    
+  --token-format=<token_format>    oauth: form (default) or json, the token request body                                                         
+                      --replace    replace the value of a secret by that name                                                                    
+                       --rebind    with --replace: let the kind or hosts change, and revoke it from every imp                                    
+                         --json    print JSON                                                                                                    
+
+
+"
+`;
+
+exports[`it prints the help of impz secret refresh as it always has 1`] = `
+"Refresh an oauth secret now; exits 1 unless it is ready after it (secret refresh)
+
+USAGE secret refresh [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    secret name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz secret ls as it always has 1`] = `
+"List secrets: their hosts and the imps they are granted to (secret ls)
+
+USAGE secret ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz secret rm as it always has 1`] = `
+"Delete a secret and revoke it from every imp (secret rm)
+
+USAGE secret rm [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    secret name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz grant as it always has 1`] = `
+"Let an imp use a secret: the broker adds it to the imp's requests to its hosts (impz grant v2.4.1)
+
+USAGE impz grant [OPTIONS] <NAME> <SECRET>
+
+ARGUMENTS
+
+    NAME    imp name (Required)   
+  SECRET    secret name (Required)
+
+OPTIONS
+
+  --methods=<methods>    only requests with one of these methods get the secret, comma-separated (GET,HEAD)                
+      --paths=<paths>    only requests to one of these paths get it, comma-separated; * is one segment, a last /** the rest
+
+
+"
+`;
+
+exports[`it prints the help of impz revoke as it always has 1`] = `
+"Take a secret away from an imp (impz revoke v2.4.1)
+
+USAGE impz revoke [OPTIONS] <NAME> <SECRET>
+
+ARGUMENTS
+
+    NAME    imp name (Required)   
+  SECRET    secret name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz grants as it always has 1`] = `
+"List the secrets granted to an imp (impz grants v2.4.1)
+
+USAGE impz grants [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    imp name (Required)
+
+OPTIONS
+
+     --json    print JSON                                  
+  --filters    show the methods and paths each grant covers
+
+
+"
+`;
+
+exports[`it prints the help of impz audit as it always has 1`] = `
+"Show requests the broker sent with a credential or refused, or calls to impd, newest first (impz audit v2.4.1)
+
+USAGE impz audit [OPTIONS] [NAME]
+
+ARGUMENTS
+
+  NAME    imp name (default: every imp)
+
+OPTIONS
+
+    --kind=<kind>    broker: requests with a credential (default); refused: requests the broker refused; api: calls that changed impd
+  --limit=<limit>    how many rows (default 100, at most 1000)                                                                       
+           --json    print JSON                                                                                                      
+
+
+"
+`;
+
+exports[`it prints the help of impz token as it always has 1`] = `
+"Manage API tokens and their scopes (needs manage) (impz token v2.4.1)
+
+USAGE impz token new|set|ls|rm|key|whoami
+
+COMMANDS
+
+     new    Make a token; its secret prints once, on stdout, and impd keeps only a hash                                                              
+     set    Change a token's grantable secrets or its image ref prefix; its secret stays, and a secret taken off loses its grants on the token's imps
+      ls    List tokens: their scopes, imps, grantable secrets and image ref prefixes, never their secrets                                           
+      rm    Delete a token; its dashboard sessions, streams, sockets and ssh logins end at once                                                      
+     key    Bind SSH keys to a token, list or unbind them                                                                                            
+  whoami    Show who impd takes this CLI for, and what it may do                                                                                     
+
+Use impz token <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz token new as it always has 1`] = `
+"Make a token; its secret prints once, on stdout, and impd keeps only a hash (token new)
+
+USAGE token new [OPTIONS] <NAME> --scope=<scope>
+
+ARGUMENTS
+
+  NAME    token name (Required)
+
+OPTIONS
+
+                        --scope=<scope>    read, exec (read and run things in imps) or manage (everything) (Required)                                                                    
+                          --imps=<imps>    limit it to these imps, such as 'dev-*' (comma-separated; default every imp)                                                                  
+                --grantable=<grantable>    secrets it may grant to its imps and revoke, such as 'gh,npm' (comma-separated; needs manage and --imps)                                      
+  --image-ref-prefix=<image_ref_prefix>    let it add images under its imps from refs that start with this and are pinned by digest, such as 'ghcr.io/org/app-' (needs manage and --imps)
+                    --ssh-key=<ssh_key>    a public key file whose keys log in over ssh as this token                                                                                    
+                                 --json    print JSON                                                                                                                                    
+
+
+"
+`;
+
+exports[`it prints the help of impz token set as it always has 1`] = `
+"Change a token's grantable secrets or its image ref prefix; its secret stays, and a secret taken off loses its grants on the token's imps (token set)
+
+USAGE token set [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    token name (Required)
+
+OPTIONS
+
+                --grantable=<grantable>    the whole new list, such as 'gh,npm' (comma-separated; '' for none; non-empty needs a manage token with imps)                
+  --image-ref-prefix=<image_ref_prefix>    the start of the pinned refs it may add images from, such as 'ghcr.io/org/app-' ('' for none; needs a manage token with imps)
+                                 --json    print JSON                                                                                                                   
+
+
+"
+`;
+
+exports[`it prints the help of impz token ls as it always has 1`] = `
+"List tokens: their scopes, imps, grantable secrets and image ref prefixes, never their secrets (token ls)
+
+USAGE token ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz token rm as it always has 1`] = `
+"Delete a token; its dashboard sessions, streams, sockets and ssh logins end at once (token rm)
+
+USAGE token rm [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    token name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz token key as it always has 1`] = `
+"Bind SSH keys to a token, list or unbind them (token key)
+
+USAGE token key add|ls|rm
+
+COMMANDS
+
+  add    Bind the keys in a public key file to a token: an ssh login with one runs as it
+   ls    List the SSH keys bound to a token, by fingerprint                             
+   rm    Unbind a key from a token; the ssh logins made with it end at once             
+
+Use token key <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz token key add as it always has 1`] = `
+"Bind the keys in a public key file to a token: an ssh login with one runs as it (key add)
+
+USAGE key add [OPTIONS] <NAME> <FILE>
+
+ARGUMENTS
+
+  NAME    token name (Required)                                    
+  FILE    public key file, such as ~/.ssh/id_ed25519.pub (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz token key ls as it always has 1`] = `
+"List the SSH keys bound to a token, by fingerprint (key ls)
+
+USAGE key ls [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    token name (Required)
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz token key rm as it always has 1`] = `
+"Unbind a key from a token; the ssh logins made with it end at once (key rm)
+
+USAGE key rm [OPTIONS] <NAME> <FINGERPRINT>
+
+ARGUMENTS
+
+         NAME    token name (Required)            
+  FINGERPRINT    the key, as SHA256:... (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz token whoami as it always has 1`] = `
+"Show who impd takes this CLI for, and what it may do (token whoami)
+
+USAGE token whoami [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz events as it always has 1`] = `
+"Follow impd: every imp, then each change, as one JSON object a line (impz events v2.4.1)
+
+USAGE impz events [OPTIONS] [NAME]
+
+ARGUMENTS
+
+  NAME    imp name (default: every imp)
+
+
+"
+`;
+
+exports[`it prints the help of impz info as it always has 1`] = `
+"Show impd version, RAM budget and counts, or one imp with its container (impz info v2.4.1)
+
+USAGE impz info [OPTIONS] [NAME]
+
+ARGUMENTS
+
+  NAME    an imp to show instead of impd
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz mcp as it always has 1`] = `
+"Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes. For a real limit, run it with a scoped token (impz token new). (impz mcp v2.4.1)
+
+USAGE impz mcp [OPTIONS] 
+
+OPTIONS
+
+  --prefix=<prefix>    touch only imps whose names start with this; new imps get it
+    --allow=<allow>    touch these imps too (comma-separated names)                
+              --all    touch every imp on impd                                     
+
+
+"
+`;
+
+exports[`it prints the help of impz oauth as it always has 1`] = `
+"Manage sign-ins to the public MCP route: clients, grants and approvals (impz oauth v2.4.1)
+
+USAGE impz oauth client|grant|approve
+
+COMMANDS
+
+   client    Add, list, change or remove the clients that may sign in                                       
+    grant    List or end the grants sign-ins made                                                           
+  approve    Approve a sign-in by the code its page shows, as this named token; approve only one you started
+
+Use impz oauth <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz oauth client as it always has 1`] = `
+"Add, list, change or remove the clients that may sign in (oauth client)
+
+USAGE oauth client add|set|ls|rm
+
+COMMANDS
+
+  add    Add a client; its client ID prints on stdout, for the connector's settings
+  set    Replace a client's redirect URIs; its client ID and grants stay           
+   ls    List clients, their client IDs and redirect URIs                          
+   rm    Remove a client; its grants end, and their sessions and commands with them
+
+Use oauth client <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz oauth client add as it always has 1`] = `
+"Add a client; its client ID prints on stdout, for the connector's settings (client add)
+
+USAGE client add [OPTIONS] <NAME> --redirect-uri=<redirect_uri>
+
+ARGUMENTS
+
+  NAME    client name (Required)
+
+OPTIONS
+
+  --redirect-uri=<redirect_uri>    the client's redirect URIs, matched exactly (comma-separated) (Required)
+                         --json    print JSON                                                              
+
+
+"
+`;
+
+exports[`it prints the help of impz oauth client set as it always has 1`] = `
+"Replace a client's redirect URIs; its client ID and grants stay (client set)
+
+USAGE client set [OPTIONS] <NAME> --redirect-uri=<redirect_uri>
+
+ARGUMENTS
+
+  NAME    client name (Required)
+
+OPTIONS
+
+  --redirect-uri=<redirect_uri>    the client's redirect URIs, matched exactly (comma-separated) (Required)
+                         --json    print JSON                                                              
+
+
+"
+`;
+
+exports[`it prints the help of impz oauth client ls as it always has 1`] = `
+"List clients, their client IDs and redirect URIs (client ls)
+
+USAGE client ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz oauth client rm as it always has 1`] = `
+"Remove a client; its grants end, and their sessions and commands with them (client rm)
+
+USAGE client rm [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    client name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz oauth grant as it always has 1`] = `
+"List or end the grants sign-ins made (oauth grant)
+
+USAGE oauth grant ls|rm
+
+COMMANDS
+
+  ls    List grants: their client, approving token, scope and imps        
+  rm    End a grant; its tokens, sessions and running commands end at once
+
+Use oauth grant <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz oauth grant ls as it always has 1`] = `
+"List grants: their client, approving token, scope and imps (grant ls)
+
+USAGE grant ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz oauth grant rm as it always has 1`] = `
+"End a grant; its tokens, sessions and running commands end at once (grant rm)
+
+USAGE grant rm [OPTIONS] <ID>
+
+ARGUMENTS
+
+  ID    grant ID (impz oauth grant ls) (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz oauth approve as it always has 1`] = `
+"Approve a sign-in by the code its page shows, as this named token; approve only one you started (oauth approve)
+
+USAGE oauth approve [OPTIONS] <CODE>
+
+ARGUMENTS
+
+  CODE    the code on the sign-in page (Required)
+
+OPTIONS
+
+  --scope=<scope>    read (the default), exec or manage; at most what the client asked for (Default: read)
+    --imps=<imps>    limit it to these imps, such as 'dev-*' (comma-separated; default the token's)       
+            --yes    approve without asking; needed when stdin is no terminal                             
+
+
+"
+`;
+
+exports[`it prints the help of impz login as it always has 1`] = `
+"Save an impd and its token, and make it the current host (impz login v2.4.1)
+
+USAGE impz login [OPTIONS] <URL>
+
+ARGUMENTS
+
+  URL    impd URL, e.g. https://imp.example.ts.net (Required)
+
+OPTIONS
+
+  --name=<name>    host name (default: the URL's first label)                            
+       --verify    check the token with impd first (--no-verify skips it) (Default: true)
+    --no-verify                                                                          
+
+
+"
+`;
+
+exports[`it prints the help of impz host as it always has 1`] = `
+"Manage saved impd hosts (see also impz login) (impz host v2.4.1)
+
+USAGE impz host ls|use|rm
+
+COMMANDS
+
+   ls    List saved hosts; * marks the current one
+  use    Make a saved host the current one        
+   rm    Forget a saved host and its token        
+
+Use impz host <command> --help for more information about a command.
+
+"
+`;
+
+exports[`it prints the help of impz host ls as it always has 1`] = `
+"List saved hosts; * marks the current one (host ls)
+
+USAGE host ls [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz host use as it always has 1`] = `
+"Make a saved host the current one (host use)
+
+USAGE host use [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    host name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz host rm as it always has 1`] = `
+"Forget a saved host and its token (host rm)
+
+USAGE host rm [OPTIONS] <NAME>
+
+ARGUMENTS
+
+  NAME    host name (Required)
+
+
+"
+`;
+
+exports[`it prints the help of impz hosts as it always has 1`] = `
+"List saved hosts (impz host ls) (impz hosts v2.4.1)
+
+USAGE impz hosts [OPTIONS] 
+
+OPTIONS
+
+  --json    print JSON
+
+
+"
+`;
+
+exports[`it prints the help of impz completion as it always has 1`] = `
+"Print the shell completion script (bash, zsh or fish) (impz completion v2.4.1)
+
+USAGE impz completion [OPTIONS] <SHELL>
+
+ARGUMENTS
+
+  SHELL    bash, zsh or fish (Required)
+
+
+"
+`;

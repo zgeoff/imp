@@ -37,6 +37,7 @@ import { runExec } from './exec-client';
 import type { ExecIo } from './exec-client';
 import { buildStubCongestedSocket } from './test-utils/build-stub-congested-socket';
 import { buildStubTerminal } from './test-utils/build-stub-terminal';
+import { runCLIInProcess } from './test-utils/run-cli-in-process';
 import { startCli } from './test-utils/start-cli';
 import { startStubPrefixProxy } from './test-utils/start-stub-prefix-proxy';
 
@@ -287,13 +288,44 @@ test('it names the cause and runs nothing when impd refuses a required broker', 
     ctx.io,
   );
 
-  expect(code).toBe(255);
+  expect(code).toBe(1);
 
   expect(ctx.errors as unknown).toStrictEqual([
     expect.stringMatching(
       /^impz: PRECONDITION_FAILED: the broker is not ready for this exec: .*no grant/u,
     ) as unknown,
   ]);
+
+  expect(agent.received).toBeEmpty();
+});
+
+test('it exits 1 from impz exec --require when impd cannot ensure the requirement, and runs nothing', async () => {
+  const ctx = await setupTest();
+
+  const image = buildMockNewImage({ name: 'ubuntu', sizeBytes: 6 });
+
+  await Bun.write(buildImagePaths(ctx.dataDir, image.digest).rootfs, 'rootfs');
+
+  await createImage(ctx.db, image);
+
+  const imp = await ctx.client.imps.create({ name: 'box', image: 'ubuntu' });
+
+  const agent = await startStubAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 7 }));
+  });
+
+  const result: unknown = await runCLIInProcess({
+    args: ['exec', 'box', '--require', 'broker', '--', 'cmd'],
+    env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: expect.stringMatching(
+      /^impz: PRECONDITION_FAILED: the broker is not ready for this exec: .*no grant.*\n$/u,
+    ) as unknown,
+    code: 1,
+  });
 
   expect(agent.received).toBeEmpty();
 });

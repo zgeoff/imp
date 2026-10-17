@@ -1,14 +1,12 @@
 import { requireFeatures } from '@impz/client';
-import { defineCommand } from '../define-command';
+import { defineCommand, defineGroup } from '../define-command';
 import { formatOutput } from '../format-output';
 import { runAction } from '../run-action';
 import { jsonArg } from './common-args';
 
 const copyCommand = defineCommand({
-  meta: {
-    name: 'copy',
-    description: "Copy impd's database, consistently and while it runs, under its data directory",
-  },
+  name: 'copy',
+  description: "Copy impd's database, consistently and while it runs, under its data directory",
   args: {
     name: {
       type: 'positional',
@@ -17,16 +15,16 @@ const copyCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       await requireFeatures(client, { databaseCopy: 'not know the call' });
 
       const copy = await client.system.copyDatabase({
-        ...(context.args.name !== undefined && { name: context.args.name }),
+        ...(ctx.values.name !== undefined && { name: ctx.values.name }),
       });
 
-      console.log(
-        formatOutput(copy, context.args.json, (made) =>
+      ctx.extensions.impz.io.print(
+        formatOutput(copy, ctx.values.json, (made) =>
           [
             made.path,
             `${String(made.sizeBytes)} bytes, schema at migration ${made.lastMigration}, from impd ${made.impVersion}`,
@@ -37,7 +35,8 @@ const copyCommand = defineCommand({
     }),
 });
 
-export const dbCommand = defineCommand({
-  meta: { name: 'db', description: "impd's database" },
+export const dbCommand = defineGroup({
+  name: 'db',
+  description: "impd's database",
   subCommands: { copy: copyCommand },
 });

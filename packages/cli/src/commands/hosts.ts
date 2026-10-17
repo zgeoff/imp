@@ -1,17 +1,14 @@
 import { ORPCError } from '@impz/client';
 import { isHttpUrl } from '../cli-config';
+import type { CommandIO } from '../command-io';
 import { createImpClient } from '../create-imp-client';
-import { defineCommand } from '../define-command';
+import { defineCommand, defineGroup } from '../define-command';
 import { formatJson, formatTable } from '../format-output';
 import { checkHostName, readHostConfig, writeHostConfig } from '../host-store';
-import type { CliEnv, HostConfig } from '../host-store';
-import { PromptCancelledError, readToken } from '../read-token';
-import { printError } from '../run-action';
+import type { HostConfig } from '../host-store';
+import { buildTokenTerminal, readToken } from '../read-token';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
-
-// 128 + SIGINT, as a shell reports a Ctrl-C
-const CANCELLED_CODE = 130;
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -20,13 +17,12 @@ interface LoginOptions {
   readonly name: string | null;
   readonly verify: boolean;
   readonly readToken: () => Promise<string>;
-  readonly warn: (message: string) => void;
 }
 
 // Saves a host and makes it current. Every check (a damaged config, an
 // empty token, a refused token, an impd out of reach) comes before the
 // write, so a failed login never changes config.json.
-async function runLogin(env: CliEnv, options: LoginOptions): Promise<string> {
+async function runLogin(io: CommandIO, options: LoginOptions): Promise<string> {
   if (!isHttpUrl(options.url)) {
     throw new UsageError(`not an http(s) URL: ${options.url}`);
   }
@@ -35,11 +31,11 @@ async function runLogin(env: CliEnv, options: LoginOptions): Promise<string> {
 
   const name = checkHostName(options.name ?? url.hostname.split('.')[0] ?? '');
 
-  readHostConfig(env);
+  readHostConfig(io.env, io.printError);
 
   if (url.protocol === 'http:' && !LOOPBACK.has(url.hostname)) {
-    options.warn(
-      `warning: ${options.url} is plain http; the token crosses the network unencrypted`,
+    io.printError(
+      `impz: warning: ${options.url} is plain http; the token crosses the network unencrypted`,
     );
   }
 
@@ -55,18 +51,20 @@ async function runLogin(env: CliEnv, options: LoginOptions): Promise<string> {
 
   // read again after the prompt; two logins at the same moment can still
   // lose one host, as the config has no lock
-  const config = readHostConfig(env);
+  const config = readHostConfig(io.env, io.printError);
 
-  writeHostConfig(env, {
-    current: name,
-    hosts: { ...config.hosts, [name]: { url: options.url, token } },
-  });
+  writeHostConfig(
+    io.env,
+    { current: name, hosts: { ...config.hosts, [name]: { url: options.url, token } } },
+    io.printError,
+  );
 
   return name;
 }
 
 export const loginCommand = defineCommand({
-  meta: { name: 'login', description: 'Save an impd and its token, and make it the current host' },
+  name: 'login',
+  description: 'Save an impd and its token, and make it the current host',
   args: {
     url: {
       type: 'positional',
@@ -76,83 +74,87 @@ export const loginCommand = defineCommand({
     name: { type: 'string', description: "host name (default: the URL's first label)" },
     verify: {
       type: 'boolean',
+      negatable: true,
       description: 'check the token with impd first (--no-verify skips it)',
       default: true,
     },
   },
-  run: async (context) => {
-    try {
-      const name = await runLogin(process.env, {
-        url: context.args.url,
-        name: context.args.name ?? null,
-        verify: context.args.verify,
-        readToken: () => readToken(),
-        warn: (message) => {
-          console.error(`impz: ${message}`);
-        },
-      });
+  run: async (ctx) => {
+    const io = ctx.extensions.impz.io;
 
-      console.log(`logged in to ${context.args.url} as ${name}, now the current host`);
-    } catch (error) {
-      if (error instanceof PromptCancelledError) {
-        process.exitCode = CANCELLED_CODE;
+    const name = await runLogin(io, {
+      url: ctx.values.url,
+      name: ctx.values.name ?? null,
+      verify: ctx.values.verify,
+      readToken: () => readToken('token: ', buildTokenTerminal(io)),
+    });
 
-        return;
-      }
-
-      printError(error);
-    }
+    io.print(`logged in to ${ctx.values.url} as ${name}, now the current host`);
   },
 });
 
 const lsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List saved hosts; * marks the current one' },
+  name: 'ls',
+  description: 'List saved hosts; * marks the current one',
   args: { json: jsonArg },
-  run: (context) => {
-    listHosts(context.args.json === true);
+  run: (ctx) => {
+    ctx.extensions.impz.io.print(
+      formatHosts(
+        readHostConfig(ctx.extensions.impz.io.env, ctx.extensions.impz.io.printError),
+        ctx.values.json === true,
+      ),
+    );
   },
 });
 
 const useCommand = defineCommand({
-  meta: { name: 'use', description: 'Make a saved host the current one' },
+  name: 'use',
+  description: 'Make a saved host the current one',
   args: { name: { type: 'positional', description: 'host name', required: true } },
-  run: (context) => {
-    runLocal((env) => {
-      const config = readHostConfig(env);
-      const name = requireHost(config, context.args.name);
+  run: (ctx) => {
+    const io = ctx.extensions.impz.io;
+    const config = readHostConfig(io.env, io.printError);
+    const name = requireHost(config, ctx.values.name);
 
-      writeHostConfig(env, { ...config, current: name });
-    });
+    writeHostConfig(io.env, { ...config, current: name }, io.printError);
   },
 });
 
 const rmCommand = defineCommand({
-  meta: { name: 'rm', description: 'Forget a saved host and its token' },
+  name: 'rm',
+  description: 'Forget a saved host and its token',
   args: { name: { type: 'positional', description: 'host name', required: true } },
-  run: (context) => {
-    runLocal((env) => {
-      const config = readHostConfig(env);
-      const name = requireHost(config, context.args.name);
+  run: (ctx) => {
+    const io = ctx.extensions.impz.io;
+    const config = readHostConfig(io.env, io.printError);
+    const name = requireHost(config, ctx.values.name);
+    const hosts = Object.fromEntries(Object.entries(config.hosts).filter(([key]) => key !== name));
 
-      const hosts = Object.fromEntries(
-        Object.entries(config.hosts).filter(([key]) => key !== name),
-      );
-
-      writeHostConfig(env, { current: config.current === name ? null : config.current, hosts });
-    });
+    writeHostConfig(
+      io.env,
+      { current: config.current === name ? null : config.current, hosts },
+      io.printError,
+    );
   },
 });
 
-export const hostCommand = defineCommand({
-  meta: { name: 'host', description: 'Manage saved impd hosts (see also impz login)' },
+export const hostCommand = defineGroup({
+  name: 'host',
+  description: 'Manage saved impd hosts (see also impz login)',
   subCommands: { ls: lsCommand, use: useCommand, rm: rmCommand },
 });
 
 export const hostsCommand = defineCommand({
-  meta: { name: 'hosts', description: 'List saved hosts (impz host ls)' },
+  name: 'hosts',
+  description: 'List saved hosts (impz host ls)',
   args: { json: jsonArg },
-  run: (context) => {
-    listHosts(context.args.json === true);
+  run: (ctx) => {
+    ctx.extensions.impz.io.print(
+      formatHosts(
+        readHostConfig(ctx.extensions.impz.io.env, ctx.extensions.impz.io.printError),
+        ctx.values.json === true,
+      ),
+    );
   },
 });
 
@@ -181,12 +183,6 @@ function formatHosts(config: HostConfig, json: boolean): string {
   );
 }
 
-function listHosts(json: boolean): void {
-  runLocal((env) => {
-    console.log(formatHosts(readHostConfig(env), json));
-  });
-}
-
 async function verifyToken(url: string, token: string): Promise<void> {
   try {
     await createImpClient({ url, token }).system.info();
@@ -209,12 +205,4 @@ function requireHost(config: HostConfig, name: string): string {
   }
 
   return name;
-}
-
-function runLocal(action: (env: CliEnv) => void): void {
-  try {
-    action(process.env);
-  } catch (error) {
-    printError(error);
-  }
 }

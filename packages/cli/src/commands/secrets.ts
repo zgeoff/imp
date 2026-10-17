@@ -6,7 +6,8 @@ import {
 } from '@impz/api';
 import type { BrokerRule, GrantFilter, OAuthConfig, Secret, SecretKind } from '@impz/api';
 import { requireFeatures } from '@impz/client';
-import { defineCommand } from '../define-command';
+import { choice, integer } from 'gunshi/combinators';
+import { defineCommand, defineGroup } from '../define-command';
 import {
   formatApiCalls,
   formatAudit,
@@ -15,7 +16,7 @@ import {
   formatRefusedRequests,
   formatSecrets,
 } from '../format-output';
-import { readToken } from '../read-token';
+import { buildTokenTerminal, readToken } from '../read-token';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
@@ -148,28 +149,15 @@ function formatRefreshFailure(secret: Readonly<Secret>): string | null {
   return `${secret.name} is ${oauth.status}${reason}`;
 }
 
-function parseKind(kind: string): SecretKind {
-  const parsed = SecretKindSchema.safeParse(kind);
-
-  if (!parsed.success) {
-    throw new UsageError(`--kind must be one of ${SecretKindSchema.options.join(', ')}`);
-  }
-
-  return parsed.data;
-}
-
 const addCommand = defineCommand({
-  meta: {
-    name: 'add',
-    description: 'Store a secret in impd; the value comes from stdin or a prompt, never a flag',
-  },
+  name: 'add',
+  description: 'Store a secret in impd; the value comes from stdin or a prompt, never a flag',
   args: {
     name: secretArg,
-    kind: {
-      type: 'string',
+    kind: choice(SecretKindSchema.options, {
       description: 'github, anthropic, npm, custom or oauth (both with --hosts)',
       required: true,
-    },
+    }),
 
     // not --host, which names the impd to call
     hosts: {
@@ -200,18 +188,18 @@ const addCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const kind = parseKind(context.args.kind);
-      const rules = buildCustomRules(kind, context.args);
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const kind = ctx.values.kind;
+      const rules = buildCustomRules(kind, ctx.values);
 
       const oauth = buildOAuthConfig(kind, {
-        tokenUrl: context.args['token-url'],
-        clientId: context.args['client-id'],
-        tokenFormat: context.args['token-format'],
+        tokenUrl: ctx.values['token-url'],
+        clientId: ctx.values['client-id'],
+        tokenFormat: ctx.values['token-format'],
       });
 
-      if (context.args.rebind === true && context.args.replace !== true) {
+      if (ctx.values.rebind === true && ctx.values.replace !== true) {
         throw new UsageError('--rebind needs --replace');
       }
 
@@ -219,10 +207,10 @@ const addCommand = defineCommand({
       // the upstream unread and send the credential to the host; or refuse
       // the oauth kind, or drop its config unread
       await requireFeatures(client, {
-        ...(context.args.replace === true && {
+        ...(ctx.values.replace === true && {
           secretRebind: 'let --replace change the hosts and keep every grant',
         }),
-        ...(context.args.upstream !== undefined && {
+        ...(ctx.values.upstream !== undefined && {
           secretUpstream: 'send the credential to the host itself',
         }),
         ...(kind === 'oauth' && { oauthSecrets: 'refuse the oauth kind' }),
@@ -230,24 +218,27 @@ const addCommand = defineCommand({
 
       const prompt = kind === 'oauth' ? 'refresh token' : 'value';
 
-      const value = await readToken(`${prompt} for ${context.args.name}: `);
+      const value = await readToken(
+        `${prompt} for ${ctx.values.name}: `,
+        buildTokenTerminal(ctx.extensions.impz.io),
+      );
 
       if (value === '') {
         throw new UsageError('no value given; nothing stored');
       }
 
       const secret = await client.secrets.add({
-        name: context.args.name,
+        name: ctx.values.name,
         kind,
         value,
         ...(rules !== undefined && { rules }),
         ...(oauth !== undefined && { oauth }),
-        ...(context.args.replace === true && { replace: true }),
-        ...(context.args.rebind === true && { rebind: true }),
+        ...(ctx.values.replace === true && { replace: true }),
+        ...(ctx.values.rebind === true && { rebind: true }),
       });
 
       if (secret.droppedGrants > 0) {
-        console.error(
+        ctx.extensions.impz.io.printError(
           `impz: ${secret.name} rebound; revoked from ${String(secret.droppedGrants)} imp(s)`,
         );
       }
@@ -255,26 +246,28 @@ const addCommand = defineCommand({
       const outcome = formatOAuthOutcome(secret);
 
       if (outcome !== null) {
-        console.error(outcome);
+        ctx.extensions.impz.io.printError(outcome);
       }
 
-      console.log(formatOutput(secret, context.args.json, (one) => formatSecrets([one])));
+      ctx.extensions.impz.io.print(
+        formatOutput(secret, ctx.values.json, (one) => formatSecrets([one])),
+      );
     }),
 });
 
 const refreshCommand = defineCommand({
-  meta: {
-    name: 'refresh',
-    description: 'Refresh an oauth secret now; exits 1 unless it is ready after it',
-  },
+  name: 'refresh',
+  description: 'Refresh an oauth secret now; exits 1 unless it is ready after it',
   args: { name: secretArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       await requireFeatures(client, { oauthSecrets: 'not know the command' });
 
-      const secret = await client.secrets.refresh({ name: context.args.name });
+      const secret = await client.secrets.refresh({ name: ctx.values.name });
 
-      console.log(formatOutput(secret, context.args.json, (one) => formatSecrets([one])));
+      ctx.extensions.impz.io.print(
+        formatOutput(secret, ctx.values.json, (one) => formatSecrets([one])),
+      );
 
       const failure = formatRefreshFailure(secret);
 
@@ -285,35 +278,36 @@ const refreshCommand = defineCommand({
 });
 
 const lsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List secrets: their hosts and the imps they are granted to' },
+  name: 'ls',
+  description: 'List secrets: their hosts and the imps they are granted to',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const secrets = await client.secrets.list();
 
-      console.log(formatOutput(secrets, context.args.json, formatSecrets));
+      ctx.extensions.impz.io.print(formatOutput(secrets, ctx.values.json, formatSecrets));
     }),
 });
 
 const rmCommand = defineCommand({
-  meta: { name: 'rm', description: 'Delete a secret and revoke it from every imp' },
+  name: 'rm',
+  description: 'Delete a secret and revoke it from every imp',
   args: { name: secretArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      await client.secrets.delete({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      await client.secrets.delete({ name: ctx.values.name });
     }),
 });
 
-export const secretCommand = defineCommand({
-  meta: { name: 'secret', description: 'Manage the secrets the credential broker adds' },
+export const secretCommand = defineGroup({
+  name: 'secret',
+  description: 'Manage the secrets the credential broker adds',
   subCommands: { add: addCommand, refresh: refreshCommand, ls: lsCommand, rm: rmCommand },
 });
 
 export const grantCommand = defineCommand({
-  meta: {
-    name: 'grant',
-    description: "Let an imp use a secret: the broker adds it to the imp's requests to its hosts",
-  },
+  name: 'grant',
+  description: "Let an imp use a secret: the broker adds it to the imp's requests to its hosts",
   args: {
     name: nameArg,
     secret: secretArg,
@@ -328,9 +322,9 @@ export const grantCommand = defineCommand({
         'only requests to one of these paths get it, comma-separated; * is one segment, a last /** the rest',
     },
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const filter = buildGrantFilter(context.args);
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const filter = buildGrantFilter(ctx.values);
 
       // an older impd drops the filter unread and would grant the whole host
       if (filter !== undefined) {
@@ -338,8 +332,8 @@ export const grantCommand = defineCommand({
       }
 
       await client.grants.add({
-        name: context.args.name,
-        secret: context.args.secret,
+        name: ctx.values.name,
+        secret: ctx.values.secret,
         ...(filter !== undefined && { filter }),
       });
     }),
@@ -372,78 +366,68 @@ function buildGrantFilter(args: GrantFilterArgs): GrantFilter | undefined {
 }
 
 export const revokeCommand = defineCommand({
-  meta: { name: 'revoke', description: 'Take a secret away from an imp' },
+  name: 'revoke',
+  description: 'Take a secret away from an imp',
   args: { name: nameArg, secret: secretArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      await client.grants.delete({ name: context.args.name, secret: context.args.secret });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      await client.grants.delete({ name: ctx.values.name, secret: ctx.values.secret });
     }),
 });
 
 export const grantsCommand = defineCommand({
-  meta: { name: 'grants', description: 'List the secrets granted to an imp' },
+  name: 'grants',
+  description: 'List the secrets granted to an imp',
   args: {
     name: nameArg,
     json: jsonArg,
     filters: { type: 'boolean', description: 'show the methods and paths each grant covers' },
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      if (context.args.filters === true) {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      if (ctx.values.filters === true) {
         await requireFeatures(client, { grantFilters: 'not know the call' });
 
-        const grants = await client.grants.details({ name: context.args.name });
+        const grants = await client.grants.details({ name: ctx.values.name });
 
-        console.log(formatOutput(grants, context.args.json, formatGrants));
+        ctx.extensions.impz.io.print(formatOutput(grants, ctx.values.json, formatGrants));
 
         return;
       }
 
-      const names = await client.grants.list({ name: context.args.name });
+      const names = await client.grants.list({ name: ctx.values.name });
 
-      console.log(formatOutput(names, context.args.json, (list) => list.join('\n')));
+      ctx.extensions.impz.io.print(formatOutput(names, ctx.values.json, (list) => list.join('\n')));
     }),
 });
 
 export const auditCommand = defineCommand({
-  meta: {
-    name: 'audit',
-    description:
-      'Show requests the broker sent with a credential or refused, or calls to impd, newest first',
-  },
+  name: 'audit',
+  description:
+    'Show requests the broker sent with a credential or refused, or calls to impd, newest first',
   args: {
     name: { type: 'positional', description: 'imp name (default: every imp)', required: false },
-    kind: {
-      type: 'string',
+    kind: choice(['broker', 'refused', 'api'] as const, {
       description:
         'broker: requests with a credential (default); refused: requests the broker refused; api: calls that changed impd',
-    },
-    limit: { type: 'string', description: 'how many rows (default 100, at most 1000)' },
+    }),
+    limit: integer({ min: 1, max: 1000, description: 'how many rows (default 100, at most 1000)' }),
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const limit = context.args.limit === undefined ? undefined : Number(context.args.limit);
-
-      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000)) {
-        throw new UsageError('--limit must be a whole number from 1 to 1000');
-      }
-
-      const kind = context.args.kind ?? 'broker';
-
-      if (kind !== 'broker' && kind !== 'refused' && kind !== 'api') {
-        throw new UsageError('--kind is broker, refused or api');
-      }
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const limit = ctx.values.limit;
+      const kind = ctx.values.kind ?? 'broker';
 
       const input = {
-        ...(context.args.name !== undefined && { name: context.args.name }),
+        ...(ctx.values.name !== undefined && { name: ctx.values.name }),
         ...(limit !== undefined && { limit }),
       };
 
       if (kind === 'api') {
         const calls = await client.audit.calls(input);
 
-        console.log(formatOutput(calls, context.args.json, formatApiCalls));
+        ctx.extensions.impz.io.print(formatOutput(calls, ctx.values.json, formatApiCalls));
 
         return;
       }
@@ -453,13 +437,13 @@ export const auditCommand = defineCommand({
 
         const refused = await client.audit.refused(input);
 
-        console.log(formatOutput(refused, context.args.json, formatRefusedRequests));
+        ctx.extensions.impz.io.print(formatOutput(refused, ctx.values.json, formatRefusedRequests));
 
         return;
       }
 
       const entries = await client.audit.list(input);
 
-      console.log(formatOutput(entries, context.args.json, formatAudit));
+      ctx.extensions.impz.io.print(formatOutput(entries, ctx.values.json, formatAudit));
     }),
 });

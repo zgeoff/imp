@@ -12,7 +12,7 @@ import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import invariant from 'tiny-invariant';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startStubInfoFaultImpd } from '../test-utils/start-stub-info-fault-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
@@ -145,7 +145,7 @@ async function setupTest() {
 }
 
 test('it refuses a scope a token cannot have', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'new', 'ci', '--scope', 'root'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -158,7 +158,7 @@ test('it refuses a scope a token cannot have', async () => {
 });
 
 test('it refuses an imp pattern that is not an imp name', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'new', 'ci', '--scope', 'exec', '--imps', 'Dev*'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -180,7 +180,7 @@ test('it refuses a private key where a .pub file belongs', async () => {
 
   await writeFile(privateKey, '-----BEGIN OPENSSH PRIVATE KEY-----\n');
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'key', 'add', 'ci', privateKey],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -201,7 +201,7 @@ test('it refuses a .pub file that holds no key', async () => {
 
   await writeFile(empty, '# nothing\n');
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'key', 'add', 'ci', empty],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -216,7 +216,7 @@ test('it refuses an --ssh-key file that is missing', async () => {
 
   const missing = join(dir, 'missing.pub');
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'new', 'ci', '--scope', 'exec', '--ssh-key', missing],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -284,7 +284,7 @@ test.each([
   ],
   [['token', 'set', 'agent'], 'impz: give --grantable, --image-ref-prefix or both\n'],
 ])('it refuses %p before any call to impd', async (args, stderr) => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args,
     env: { IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'root-token' },
   });
@@ -330,7 +330,10 @@ test.each([
 
     const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { withoutFeatures: [feature] });
 
-    const result = await runCli({ args, env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' } });
+    const result = await runCLIInProcess({
+      args,
+      env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
+    });
 
     expect(result).toStrictEqual({
       stdout: '',
@@ -347,7 +350,7 @@ test('it creates no token on an impd from before SystemInfo.features', async () 
 
   const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { isWithoutFeatureList: true });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
     env: { IMP_URL: older.url, IMP_TOKEN: 'root-token' },
   });
@@ -361,7 +364,7 @@ test('it creates no token when the feature check’s connection drops', async ()
 
   const impd = startStubInfoFaultImpd(ctx.stack, ctx.sendRequest);
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
     env: { IMP_URL: impd.url, IMP_TOKEN: 'root-token' },
   });
@@ -384,7 +387,7 @@ test('it creates a grantable token on an impd with the feature', async () => {
 
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-secret-value' });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'new', 'agent', '--scope', 'manage', '--imps', 'agent-*', '--grantable', 'gh'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
@@ -418,7 +421,7 @@ test('it sends the grantable list on token set to an impd with tokens.update', a
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-secret-value' });
   await ctx.client.tokens.create({ name: 'agent', scope: 'manage', imps: ['agent-*'] });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'set', 'agent', '--grantable', 'gh', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
@@ -448,7 +451,7 @@ test('it clears the grantable list on token set with an empty --grantable', asyn
     grantable: ['gh'],
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'set', 'agent', '--grantable', '', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
@@ -469,7 +472,7 @@ test('it clears the grantable list on token set with an empty --grantable', asyn
 test('it creates a token with an image ref prefix and shows it in token ls', async () => {
   const ctx = await setupTest();
 
-  await runCli({
+  await runCLIInProcess({
     args: [
       'token',
       'new',
@@ -484,7 +487,7 @@ test('it creates a token with an image ref prefix and shows it in token ls', asy
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
 
-  const listed = await runCli({
+  const listed = await runCLIInProcess({
     args: ['token', 'ls'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
@@ -505,7 +508,7 @@ test('it gives a token an image ref prefix on token set', async () => {
 
   await ctx.client.tokens.create({ name: 'nixie', scope: 'manage', imps: ['nixie-*'] });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'set', 'nixie', '--image-ref-prefix', 'ghcr.io/zgeoff/nixie-', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
@@ -533,7 +536,7 @@ test('it takes a token’s image ref prefix away on token set with an empty --im
     imageRefPrefix: 'ghcr.io/zgeoff/nixie-',
   });
 
-  await runCli({
+  await runCLIInProcess({
     args: ['token', 'set', 'nixie', '--image-ref-prefix', ''],
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });
@@ -546,7 +549,7 @@ test('it takes a token’s image ref prefix away on token set with an empty --im
 test('it names a token it cannot find on token key ls', async () => {
   const ctx = await setupTest();
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['token', 'key', 'ls', 'ci'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: 'root-token' },
   });

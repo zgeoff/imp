@@ -1,81 +1,30 @@
-import { defineCommand as defineCittyCommand } from 'citty';
-import type { ArgsDef, CommandContext, CommandDef } from 'citty';
+import { defineWithTypes } from 'gunshi';
+import type { SubCommandable } from 'gunshi';
+import type { ImpzExtension } from './impz-plugin';
+import { renderUsage } from './render-usage';
+import { UsageError } from './usage-error';
 
-// what a command's run gets: citty's context and the saved host `--host`
-// named, which main hands every command as `--host=<name>`
-type ImpCommandContext<T extends ArgsDef> = CommandContext<T> & {
-  readonly host: string | null;
-};
+interface ImpzParams {
+  readonly extensions: { readonly impz: ImpzExtension };
+}
 
-type ImpCommandDef<T extends ArgsDef> = Omit<CommandDef<T>, 'run'> & {
-  args?: T;
+// gunshi's define, with `ctx.extensions.impz` typed for every command
+export const defineCommand = defineWithTypes<ImpzParams>();
 
-  run?: (context: ImpCommandContext<T>) => unknown;
-};
+interface GroupDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly subCommands: Readonly<Record<string, SubCommandable>>;
+}
 
-// citty's defineCommand, but a flag the command does not declare is an
-// error: citty keeps it (`--checkpoint cp1` parses to `checkpoint: true`) and
-// the command would run as if it were not there.
-export function defineCommand<T extends ArgsDef>(def: ImpCommandDef<T>): CommandDef<T> {
-  const { run, ...rest } = def;
-
-  if (run === undefined) {
-    return defineCittyCommand(rest);
-  }
-
-  const known = listKnownKeys(def.args ?? {}).add('host');
-  const command = typeof def.meta === 'object' && 'name' in def.meta ? def.meta.name : undefined;
-
-  return defineCittyCommand({
-    ...rest,
-    run: async (context) => {
-      const unknown = Object.keys(context.args).filter((key) => !known.has(key));
-
-      if (unknown.length > 0) {
-        const flags = unknown.map((flag) => (flag.length === 1 ? `-${flag}` : `--${flag}`));
-        const noun = flags.length === 1 ? 'flag' : 'flags';
-        const where = command === undefined ? '' : ` for ${command}`;
-
-        console.error(`impz: unknown ${noun} ${flags.join(', ')}${where} (see --help)`);
-
-        process.exitCode = 2;
-
-        return;
-      }
-
-      await run({ ...context, host: readHost(context.args) });
+// A command that only holds others, such as `impz token`: alone, it prints
+// its usage and fails as a usage error.
+export function defineGroup(definition: Readonly<GroupDefinition>) {
+  return defineCommand({
+    ...definition,
+    run: (ctx) => {
+      ctx.extensions.impz.io.print(renderUsage(ctx));
+      throw new UsageError('no command specified');
     },
   });
-}
-
-// the keys citty can parse for these arguments: each name in its camelCase
-// and kebab-case spellings, and its aliases
-function listKnownKeys(args: ArgsDef): Set<string> {
-  const known = new Set(['_', 'help', 'h']);
-
-  for (const [name, arg] of Object.entries(args)) {
-    known.add(name).add(toCamelCase(name)).add(toKebabCase(name));
-
-    const aliases = 'alias' in arg ? arg.alias : undefined;
-
-    for (const alias of typeof aliases === 'string' ? [aliases] : (aliases ?? [])) {
-      known.add(alias);
-    }
-  }
-
-  return known;
-}
-
-function toCamelCase(name: string): string {
-  return name.replaceAll(/-(?<letter>[a-z0-9])/gu, (_, letter: string) => letter.toUpperCase());
-}
-
-function toKebabCase(name: string): string {
-  return name.replaceAll(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
-}
-
-function readHost(args: Readonly<Record<string, unknown>>): string | null {
-  const host = args['host'];
-
-  return typeof host === 'string' ? host : null;
 }

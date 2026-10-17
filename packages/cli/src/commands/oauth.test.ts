@@ -15,7 +15,7 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { createPendingSignIn } from '@impz/daemon/src/test-utils/create-pending-sign-in';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import * as z from 'zod';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { UsageError } from '../usage-error';
 import { runApprove } from './oauth';
 
@@ -381,7 +381,10 @@ test.each([
     'impz: --imps takes imp names, or a name prefix and a trailing *, such as dev-*; not d*v',
   ],
 ])('it refuses %s before it calls impd', async (_case, args, message) => {
-  const result = await runCli({ args: ['oauth', ...args], env: { IMP_URL: 'http://127.0.0.1:1' } });
+  const result = await runCLIInProcess({
+    args: ['oauth', ...args],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
 
   expect(result).toStrictEqual({ stdout: '', stderr: `${message}\n`, code: 2 });
 });

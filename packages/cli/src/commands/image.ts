@@ -1,8 +1,10 @@
 import { isAbsolute } from 'node:path';
 import type { Image } from '@impz/api';
 import { requireFeatures } from '@impz/client';
+import { toProgressOutput } from '../command-io';
+import type { ProgressOutput } from '../cp/copy-progress';
 import type { ImpClient } from '../create-imp-client';
-import { defineCommand } from '../define-command';
+import { defineCommand, defineGroup } from '../define-command';
 import { formatImageBuilds, formatImages, formatOutput } from '../format-output';
 import { runImageBuild } from '../image/run-image-build';
 import { runImageAdd, runOnHostBuild } from '../image/run-image-op';
@@ -11,31 +13,36 @@ import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 const addCommand = defineCommand({
-  meta: { name: 'add', description: 'Import an image the host docker has or can pull' },
+  name: 'add',
+  description: 'Import an image the host docker has or can pull',
   args: {
     ref: { type: 'positional', description: 'docker image ref', required: true },
     name: { type: 'string', description: 'imp image name (defaults from the ref)' },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const image = await runImageAdd(
         client,
         {
-          ref: context.args.ref,
-          ...(context.args.name !== undefined && { name: context.args.name }),
+          ref: ctx.values.ref,
+          ...(ctx.values.name !== undefined && { name: ctx.values.name }),
         },
         'impz image add',
+        toProgressOutput(ctx.extensions.impz.io),
       );
 
-      console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
+      ctx.extensions.impz.io.print(
+        formatOutput(image, ctx.values.json, (one) => formatImages([one])),
+      );
     }),
 });
 
 // The context is packed here and uploaded, honoring its .dockerignore;
 // --on-host names a directory on the impd host instead, which never leaves it
 const buildCommand = defineCommand({
-  meta: { name: 'build', description: 'Build a directory with its Dockerfile into an imp image' },
+  name: 'build',
+  description: 'Build a directory with its Dockerfile into an imp image',
   args: {
     dir: { type: 'positional', description: 'build context directory', required: true },
     name: { type: 'string', description: 'imp image name', required: true },
@@ -46,22 +53,25 @@ const buildCommand = defineCommand({
     },
     quiet: {
       type: 'boolean',
-      alias: 'q',
+      short: 'q',
       description: 'print no progress and no build output, only the result or the error',
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const image = await buildImage(client, {
-        dir: context.args.dir,
-        name: context.args.name,
-        dockerfile: context.args.file,
-        onHost: context.args['on-host'] === true,
-        quiet: context.args.quiet === true,
+        dir: ctx.values.dir,
+        name: ctx.values.name,
+        dockerfile: ctx.values.file,
+        onHost: ctx.values['on-host'] === true,
+        quiet: ctx.values.quiet === true,
+        output: toProgressOutput(ctx.extensions.impz.io),
       });
 
-      console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
+      ctx.extensions.impz.io.print(
+        formatOutput(image, ctx.values.json, (one) => formatImages([one])),
+      );
     }),
 });
 
@@ -71,6 +81,7 @@ interface BuildArgs {
   readonly dockerfile: string | undefined;
   readonly onHost: boolean;
   readonly quiet: boolean;
+  readonly output: ProgressOutput;
 }
 
 function buildImage(client: ImpClient, args: Readonly<BuildArgs>): Promise<Image> {
@@ -91,48 +102,53 @@ function buildImage(client: ImpClient, args: Readonly<BuildArgs>): Promise<Image
       name: args.name,
       ...(args.dockerfile !== undefined && { dockerfile: args.dockerfile }),
     },
+    args.output,
     args.quiet,
   );
 }
 
 // the builds impd runs now, from any client or shell
 const buildsCommand = defineCommand({
-  meta: { name: 'builds', description: 'List the image builds running now' },
+  name: 'builds',
+  description: 'List the image builds running now',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       await requireFeatures(client, { imageBuilds: 'answer images.builds with not found' });
 
       const builds = await client.images.builds();
 
-      console.log(
-        formatOutput(builds, context.args.json, (all) => formatImageBuilds(all, Date.now())),
+      ctx.extensions.impz.io.print(
+        formatOutput(builds, ctx.values.json, (all) => formatImageBuilds(all, Date.now())),
       );
     }),
 });
 
 const lsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List images' },
+  name: 'ls',
+  description: 'List images',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const images = await client.images.list();
 
-      console.log(formatOutput(images, context.args.json, formatImages));
+      ctx.extensions.impz.io.print(formatOutput(images, ctx.values.json, formatImages));
     }),
 });
 
 const rmCommand = defineCommand({
-  meta: { name: 'rm', description: 'Remove an image no imp uses' },
+  name: 'rm',
+  description: 'Remove an image no imp uses',
   args: { name: { type: 'positional', description: 'image name', required: true } },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      await client.images.delete({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      await client.images.delete({ name: ctx.values.name });
     }),
 });
 
-export const imageCommand = defineCommand({
-  meta: { name: 'image', description: 'Manage images' },
+export const imageCommand = defineGroup({
+  name: 'image',
+  description: 'Manage images',
   subCommands: {
     add: addCommand,
     build: buildCommand,
@@ -145,7 +161,8 @@ export const imageCommand = defineCommand({
 // `impz template`: the images API with an imp as the source
 // (docs/guides/templates.md)
 const templateCreateCommand = defineCommand({
-  meta: { name: 'create', description: "Make a template from an imp's disk" },
+  name: 'create',
+  description: "Make a template from an imp's disk",
   args: {
     imp: { type: 'positional', description: 'imp to copy', required: true },
     name: {
@@ -155,51 +172,57 @@ const templateCreateCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const image = await runImageAdd(
         client,
-        { imp: context.args.imp, name: context.args.name },
+        { imp: ctx.values.imp, name: ctx.values.name },
         'impz template create',
+        toProgressOutput(ctx.extensions.impz.io),
       );
 
-      console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
+      ctx.extensions.impz.io.print(
+        formatOutput(image, ctx.values.json, (one) => formatImages([one])),
+      );
     }),
 });
 
 const templateLsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List templates' },
+  name: 'ls',
+  description: 'List templates',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const images = await client.images.list();
 
       const templates = images.filter((image) => image.source === 'imp');
 
-      console.log(formatOutput(templates, context.args.json, formatImages));
+      ctx.extensions.impz.io.print(formatOutput(templates, ctx.values.json, formatImages));
     }),
 });
 
 const templateRmCommand = defineCommand({
-  meta: { name: 'rm', description: 'Remove a template no imp uses' },
+  name: 'rm',
+  description: 'Remove a template no imp uses',
   args: { name: { type: 'positional', description: 'template name', required: true } },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const images = await client.images.list();
 
-      const image = images.find((one) => one.name === context.args.name);
+      const image = images.find((one) => one.name === ctx.values.name);
 
       if (image !== undefined && image.source !== 'imp') {
         throw new UsageError(
-          `${context.args.name} is a docker image, not a template: use impz image rm`,
+          `${ctx.values.name} is a docker image, not a template: use impz image rm`,
         );
       }
 
-      await client.images.delete({ name: context.args.name });
+      await client.images.delete({ name: ctx.values.name });
     }),
 });
 
-export const templateCommand = defineCommand({
-  meta: { name: 'template', description: "Manage templates: images made from an imp's disk" },
+export const templateCommand = defineGroup({
+  name: 'template',
+  description: "Manage templates: images made from an imp's disk",
   subCommands: { create: templateCreateCommand, ls: templateLsCommand, rm: templateRmCommand },
 });

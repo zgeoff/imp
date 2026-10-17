@@ -3,11 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runShellcheck } from '@impz/test-utils/run-shellcheck';
-import { defineCommand } from 'citty';
+import { define, lazy } from 'gunshi';
 import { mainCommand } from './command-tree';
 import { buildCompletionTree, renderCompletion } from './completion';
 import type { CompletionNode } from './completion';
-import { runCli } from './test-utils/start-cli';
+import { runCLIInProcess } from './test-utils/run-cli-in-process';
 
 test('#renderCompletion renders the bash script of a tree', () => {
   const tree = {
@@ -217,17 +217,18 @@ test.skipIf(Bun.which('shellcheck') === null)(
   },
 );
 
-test('#buildCompletionTree lists the subcommands, flags, aliases and negations of a command', async () => {
-  const command = defineCommand({
-    meta: { name: 'impz' },
+test('#buildCompletionTree lists the subcommands, flags, short names and negations of a command', async () => {
+  const command = define({
+    name: 'impz',
     args: {
       name: { type: 'positional' },
-      verbose: { type: 'boolean', alias: 'v' },
-      color: { type: 'boolean', default: true },
-      output: { type: 'string', alias: ['o', 'out'] },
+      verbose: { type: 'boolean', short: 'v' },
+      color: { type: 'boolean', negatable: true, default: true },
+      output: { type: 'string', short: 'o' },
+      legacy: { type: 'string', hidden: true },
     },
     subCommands: {
-      ls: () => defineCommand({ args: { json: { type: 'boolean' } } }),
+      ls: lazy(() => define({ name: 'ls', args: { json: { type: 'boolean' } } }), { name: 'ls' }),
     },
   });
 
@@ -246,7 +247,6 @@ test('#buildCompletionTree lists the subcommands, flags, aliases and negations o
       '--no-color',
       '--output',
       '-o',
-      '--out',
     ],
     children: [{ path: 'impz ls', subcommands: [], flags: ['--json', '--help'], children: [] }],
   });
@@ -254,17 +254,17 @@ test('#buildCompletionTree lists the subcommands, flags, aliases and negations o
 
 test('#completionCommand prints the bash script for the whole CLI', async () => {
   const tree = await buildCompletionTree(mainCommand);
-  const result = await runCli({ args: ['completion', 'bash'] });
+  const result = await runCLIInProcess({ args: ['completion', 'bash'] });
 
   expect(result).toStrictEqual({ stdout: renderCompletion('bash', tree), stderr: '', code: 0 });
 });
 
 test('#completionCommand refuses a shell it has no script for', async () => {
-  const result = await runCli({ args: ['completion', 'tcsh'] });
+  const result = await runCLIInProcess({ args: ['completion', 'tcsh'] });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'impz: no completion for tcsh (try bash, zsh, fish)\n',
+    stderr: 'impz: shell must be one of bash, zsh, fish\n',
     code: 2,
   });
 });

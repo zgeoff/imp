@@ -1,3 +1,5 @@
+import type { CommandIO } from './command-io';
+
 // A terminal's input, as much of it as the prompt needs; process.stdin is
 // one.
 interface TokenInput {
@@ -59,13 +61,29 @@ function buildProcessTerminal(): TokenTerminal {
   };
 }
 
+// what a prompt touches when the command's stdin is piped: no keys to read,
+// only the text piped in
+const NO_KEYS: TokenInput = {
+  isTTY: false,
+  setRawMode: () => null,
+  on: () => null,
+  off: () => null,
+  resume: () => null,
+  pause: () => null,
+};
+
+export function buildTokenTerminal(io: CommandIO): TokenTerminal {
+  if (io.isStdinTerminal) {
+    return buildProcessTerminal();
+  }
+
+  return { input: NO_KEYS, write: () => {}, readPiped: io.readStdin, signals: process };
+}
+
 // A token for `impz login` or `impz secret add`: the first line of piped
 // stdin, else typed at a prompt that does not echo. Never an argument,
 // which would land in the shell history and in `ps`.
-export async function readToken(
-  prompt = 'token: ',
-  terminal: TokenTerminal = buildProcessTerminal(),
-): Promise<string> {
+export async function readToken(prompt: string, terminal: TokenTerminal): Promise<string> {
   if (terminal.input.isTTY === true) {
     return readHiddenToken(terminal, prompt);
   }

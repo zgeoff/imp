@@ -24,8 +24,11 @@ export type HostAnswer<T> =
 
 // Every saved host, in name order. IMP_URL, IMP_HOST and IMP_TOKEN name one
 // impd, so a call to all of them reads the saved hosts alone.
-export function listSavedTargets(env: CliEnv): SavedTarget[] {
-  const hosts = Object.entries(readHostConfig(env).hosts);
+export function listSavedTargets(
+  env: CliEnv,
+  warn: (line: string) => void = console.error,
+): SavedTarget[] {
+  const hosts = Object.entries(readHostConfig(env, warn).hosts);
 
   if (hosts.length === 0) {
     throw new UsageError('no saved hosts (see impz login)');

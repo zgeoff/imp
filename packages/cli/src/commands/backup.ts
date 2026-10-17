@@ -1,4 +1,4 @@
-import { defineCommand } from '../define-command';
+import { defineCommand, defineGroup } from '../define-command';
 import { formatBackupRun, formatBackupStatus, formatImps, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
@@ -22,32 +22,32 @@ export function parseUtcTime(text: string): Date {
 }
 
 const lsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List the backups a restore can go back to, oldest first' },
+  name: 'ls',
+  description: 'List the backups a restore can go back to, oldest first',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const status = await client.backups.list();
 
-      console.log(formatOutput(status, context.args.json, formatBackupStatus));
+      ctx.extensions.impz.io.print(formatOutput(status, ctx.values.json, formatBackupStatus));
     }),
 });
 
 const runCommand = defineCommand({
-  meta: { name: 'run', description: 'Back up every imp now, as the schedule does' },
+  name: 'run',
+  description: 'Back up every imp now, as the schedule does',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const run = await client.backups.run();
 
-      console.log(formatOutput(run, context.args.json, formatBackupRun));
+      ctx.extensions.impz.io.print(formatOutput(run, ctx.values.json, formatBackupRun));
     }),
 });
 
 const restoreCommand = defineCommand({
-  meta: {
-    name: 'restore',
-    description: 'Bring an imp, or every imp, back from a backup; restored imps are stopped',
-  },
+  name: 'restore',
+  description: 'Bring an imp, or every imp, back from a backup; restored imps are stopped',
   args: {
     name: { type: 'positional', description: 'the imp to restore', required: false },
     all: { type: 'boolean', description: 'every imp in the backup' },
@@ -56,9 +56,9 @@ const restoreCommand = defineCommand({
     merge: { type: 'boolean', description: 'with --all: add to a host that has imps already' },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const args = context.args;
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const args = ctx.values;
 
       if ((args.all === true) === (args.name !== undefined)) {
         throw new UsageError('usage: impz backup restore <name> [--as <name>] | --all [--merge]');
@@ -67,7 +67,7 @@ const restoreCommand = defineCommand({
       // two hosts with one repository and one host name drop each other's
       // live locks (docs/architecture/storage/backups.md#a-run)
       if (args.all === true) {
-        console.error(
+        ctx.extensions.impz.io.printError(
           'impz: before a whole-host restore, stop the old impd or remove its IMP_BACKUP_* settings',
         );
       }
@@ -81,11 +81,13 @@ const restoreCommand = defineCommand({
       });
 
       for (const skipped of result.skippedGrants) {
-        console.error(`impz: ${skipped.imp}: grant ${skipped.secret} left off: ${skipped.reason}`);
+        ctx.extensions.impz.io.printError(
+          `impz: ${skipped.imp}: grant ${skipped.secret} left off: ${skipped.reason}`,
+        );
       }
 
       for (const left of result.notRestorable ?? []) {
-        console.error(
+        ctx.extensions.impz.io.printError(
           `impz: ${left.imp}: not restorable, the backup holds none of its files: ${left.reason}`,
         );
       }
@@ -95,43 +97,44 @@ const restoreCommand = defineCommand({
         const database = result.database;
 
         if (database.tokens.length > 0) {
-          console.error(`impz: tokens restored: ${database.tokens.join(', ')}`);
+          ctx.extensions.impz.io.printError(`impz: tokens restored: ${database.tokens.join(', ')}`);
         }
 
         if (database.secrets.length > 0) {
-          console.error(
+          ctx.extensions.impz.io.printError(
             `impz: secrets restored without values: ${database.secrets.join(', ')}; add each with impz secret add <name> --replace`,
           );
         }
 
         for (const skipped of database.skipped) {
-          console.error(`impz: ${skipped.name} left out: ${skipped.reason}`);
+          ctx.extensions.impz.io.printError(`impz: ${skipped.name} left out: ${skipped.reason}`);
         }
       }
 
-      console.log(formatOutput(result, args.json, (restored) => formatImps(restored.imps)));
+      ctx.extensions.impz.io.print(
+        formatOutput(result, args.json, (restored) => formatImps(restored.imps)),
+      );
     }),
 });
 
 const checkCommand = defineCommand({
-  meta: {
-    name: 'check',
-    description: 'Read back part of the repository and verify it (restic check)',
-  },
+  name: 'check',
+  description: 'Read back part of the repository and verify it (restic check)',
   args: {
     subset: { type: 'string', description: 'how much to read: 5% (default), 1/10 or 2G' },
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       await client.backups.check({
-        ...(context.args.subset !== undefined && { subset: context.args.subset }),
+        ...(ctx.values.subset !== undefined && { subset: ctx.values.subset }),
       });
 
-      console.log('the repository checks out');
+      ctx.extensions.impz.io.print('the repository checks out');
     }),
 });
 
-export const backupCommand = defineCommand({
-  meta: { name: 'backup', description: 'Off-host backups of every imp (restic)' },
+export const backupCommand = defineGroup({
+  name: 'backup',
+  description: 'Off-host backups of every imp (restic)',
   subCommands: { ls: lsCommand, run: runCommand, restore: restoreCommand, check: checkCommand },
 });

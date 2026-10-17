@@ -1,5 +1,6 @@
 import { ORPCError, UnknownProcedureError, watchEvents } from '@impz/client';
 import type { EventSource as ClientEventSource, ServerCheck } from '@impz/client';
+import pRetry, { AbortError } from 'p-retry';
 import { defineCommand } from '../define-command';
 import { runAction } from '../run-action';
 
@@ -30,29 +31,52 @@ export async function printEvents(
   name: string | null,
   print: (line: string) => void,
 ): Promise<void> {
-  let failures = 0;
+  const streak = { failures: 0 };
 
-  for (;;) {
+  const readUntilEnd = async (): Promise<void> => {
     const startedAt = source.now();
 
     const ended = await readStream(source, name, print);
 
     if (source.now() - startedAt >= HEALTHY_MS) {
-      failures = 0;
+      streak.failures = 0;
     }
 
-    failures += 1;
+    streak.failures += 1;
 
-    if (failures >= MAX_FAILURES) {
-      throw new Error(`the event stream ended ${String(failures)} times in a row: ${ended}`);
+    if (streak.failures >= MAX_FAILURES) {
+      throw new AbortError(
+        `the event stream ended ${String(streak.failures)} times in a row: ${ended}`,
+      );
     }
 
-    const backoffMs = Math.min(FIRST_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
+    throw new StreamEndedError(ended);
+  };
 
-    source.warn(`impz: the event stream ended (${ended}); reconnecting in ${String(backoffMs)}ms`);
+  await pRetry(readUntilEnd, {
+    retries: Number.POSITIVE_INFINITY,
+    minTimeout: 0,
+    shouldRetry: async (context) => {
+      if (!(context.error instanceof StreamEndedError)) {
+        return false;
+      }
 
-    await source.wait(backoffMs);
-  }
+      const backoffMs = Math.min(FIRST_BACKOFF_MS * 2 ** (streak.failures - 1), MAX_BACKOFF_MS);
+
+      source.warn(
+        `impz: the event stream ended (${context.error.message}); reconnecting in ${String(backoffMs)}ms`,
+      );
+
+      await source.wait(backoffMs);
+
+      return true;
+    },
+  });
+}
+
+// one stream's end, and why: impd closed it, or how it failed
+class StreamEndedError extends Error {
+  override name = 'StreamEndedError';
 }
 
 // Prints the stream until it ends, and says why it ended. An impd that
@@ -100,15 +124,13 @@ function isMissingStream(error: unknown): boolean {
 }
 
 export const eventsCommand = defineCommand({
-  meta: {
-    name: 'events',
-    description: 'Follow impd: every imp, then each change, as one JSON object a line',
-  },
+  name: 'events',
+  description: 'Follow impd: every imp, then each change, as one JSON object a line',
   args: {
     name: { type: 'positional', description: 'imp name (default: every imp)', required: false },
   },
-  run: (context) =>
-    runAction(context.host, (client) =>
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, (client) =>
       printEvents(
         {
           events: client.events,
@@ -116,12 +138,12 @@ export const eventsCommand = defineCommand({
           now: Date.now,
           wait: (ms) => Bun.sleep(ms),
           warn: (line) => {
-            console.error(line);
+            ctx.extensions.impz.io.printError(line);
           },
         },
-        context.args.name ?? null,
+        ctx.values.name ?? null,
         (line) => {
-          console.log(line);
+          ctx.extensions.impz.io.print(line);
         },
       ),
     ),

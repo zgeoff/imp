@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildMockImp } from '@impz/api/test-utils/build-mock-imp';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { formatTop, readCpuArgs } from './cpu';
 
 test('#formatTop lists the busiest imp first, with disk use, traffic, wakes and awake time', () => {
@@ -93,7 +93,10 @@ test('#readCpuArgs reads no CPU flags as no change', () => {
 
 test('#setCommand refuses a set with no change before any call', async () => {
   // a call that slipped through would fail on the dead address instead
-  const result = await runCli({ args: ['set', 'box'], env: { IMP_URL: 'http://127.0.0.1:1' } });
+  const result = await runCLIInProcess({
+    args: ['set', 'box'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
 
   expect(result).toStrictEqual({
     stdout: '',

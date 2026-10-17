@@ -4,7 +4,7 @@ import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
 import type { ImpClient } from './create-imp-client';
-import { UsageError } from './usage-error';
+import type { ImpzExtension } from './impz-plugin';
 
 const TOKEN_HINT =
   'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run impz login <url>';
@@ -14,28 +14,30 @@ const PathKeySchema = z.union([z.string(), z.number(), z.object({ key: z.unknown
 const IssueSchema = z.object({ message: z.string(), path: z.array(PathKeySchema).optional() });
 const ValidationDataSchema = z.object({ issues: z.array(IssueSchema) });
 
-// One line on stderr for any failure, instead of citty's stack dump, and
-// exit code 2 for a usage error, else 1; a 401 gets a hint about where the
-// token comes from.
+// Calls impd with the config and client the command's host and IO pick. A
+// failure goes on to main, which prints it; a 401 names the saved host to log
+// in to again, which only this call knows.
 export async function runAction(
-  host: string | null,
+  impz: ImpzExtension,
   action: (client: ImpClient) => Promise<void>,
 ): Promise<void> {
-  let config: CliConfig | null = null;
+  const config = loadCliConfig(impz.io.env, impz.host, impz.io.printError);
 
   try {
-    config = loadCliConfig(process.env, host);
-
     await action(createImpClient(config));
   } catch (error) {
-    printError(error, config);
+    throw toCallError(error, config);
   }
 }
 
-export function printError(error: unknown, config: CliConfig | null = null): void {
-  console.error(`impz: ${formatError(error, config)}`);
+// a failure of a call to the impd `config` names, as main prints it: a 401
+// says which saved host to log in to again
+export function toCallError(error: unknown, config: CliConfig): unknown {
+  if (error instanceof ORPCError && error.status === 401) {
+    return new Error(formatUnauthorized(config), { cause: error });
+  }
 
-  process.exitCode = error instanceof UsageError ? 2 : 1;
+  return error;
 }
 
 // `config` names the impd that was called, so a 401 can say which saved
