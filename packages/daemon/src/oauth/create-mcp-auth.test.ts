@@ -180,7 +180,7 @@ test('it refuses the access token of a removed grant, and ends what the grant op
 
   const caller = await ctx.auth.resolveAccess(issued.access_token);
 
-  invariant(caller?.grantId);
+  invariant(typeof caller?.grantId === 'string');
 
   const ends = ctx.revocations.readSignal(caller.grantId);
 

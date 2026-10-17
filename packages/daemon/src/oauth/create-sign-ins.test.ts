@@ -65,7 +65,7 @@ test('#approve records the approver’s token, the scope and the imps', () => {
 
   const approver = buildMockCaller({ name: 'laptop', scope: 'exec', imps: ['dev-*'] });
 
-  invariant(approver.tokenId);
+  invariant(approver.tokenId !== null);
 
   signIns.approve(started.signIn.approvalCode, approver, 'exec', ['dev-a']);
 
