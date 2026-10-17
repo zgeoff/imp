@@ -127,6 +127,29 @@ test('it prints each inspect of a sequence in turn, then the last again', async 
   expect(ids).toStrictEqual(['sha256:1', 'sha256:2', 'sha256:2']);
 });
 
+test('it prints the inspect of each of many parallel calls for one image', async () => {
+  const ctx = await setupTest();
+
+  const docker = createStubDockerCli({
+    dir: ctx.dir,
+    images: [{ refs: ['shared:1', 'shared:2'], inspects: [{ Id: 'sha256:1' }] }],
+  });
+
+  // parallel builds inspect one image at once, through either of its refs
+  const results = await Promise.all(
+    Array.from({ length: 100 }, (_, call) =>
+      runCommand(
+        ['docker', 'image', 'inspect', '--format', '{{.Id}}', `shared:${String((call % 2) + 1)}`],
+        { env: { PATH: docker.path } },
+      ),
+    ),
+  );
+
+  expect(results).toStrictEqual(
+    Array.from({ length: 100 }, () => ({ exitCode: 0, stdout: 'sha256:1\n', stderr: '' })),
+  );
+});
+
 test('it fails the inspect of an image that is not on the host yet', async () => {
   const ctx = await setupTest();
 

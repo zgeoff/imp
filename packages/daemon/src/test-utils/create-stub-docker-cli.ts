@@ -87,7 +87,8 @@ function buildPullArm(index: number, ref: string, pull: StubDockerPull, state: s
 }
 
 // One image's inspect arm for one format: the next inspect of its
-// sequence, once the image is on the host.
+// sequence, once the image is on the host. Each call appends a line to the
+// count: a count rewritten in place reads empty to a parallel call.
 function buildInspectArm(
   index: number,
   image: StubDockerImage,
@@ -107,7 +108,7 @@ function buildInspectArm(
       : '';
 
   return [
-    `  ${formatShellWord(argv)}) ${present}n=$(cat ${count} 2>/dev/null || echo 0); echo $((n + 1)) >${count}`,
+    `  ${formatShellWord(argv)}) ${present}echo >>${count}; n=$(($(wc -l <${count}) - 1))`,
     `    [ "$n" -gt ${last} ] && n=${last}; cat ${output}"$n"-${formatKey} ;;`,
   ].join('\n');
 }
