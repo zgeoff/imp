@@ -41,7 +41,7 @@ test('#readCookies sends back each cookie a response sets, without its attribute
   headers.append('set-cookie', 'session=abc; Path=/; HttpOnly');
   headers.append('set-cookie', 'data=xyz; Max-Age=60');
 
-  expect(readCookies({ headers })).toBe('session=abc; data=xyz');
+  expect(readCookies(new Response(null, { headers }))).toBe('session=abc; data=xyz');
 });
 
 test('#parseMcpBody reads the last event of a stream', () => {

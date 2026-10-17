@@ -59,7 +59,7 @@ export function parseMcpBody(text: string): unknown {
 }
 
 // the cookies a response sets, as a request sends them back
-export function readCookies(response: Readonly<Pick<Response, 'headers'>>): string {
+export function readCookies(response: Response): string {
   return response.headers
     .getSetCookie()
     .map((line) => line.split(';')[0])
