@@ -59,13 +59,15 @@ lacks what a row needs, push and read that CI job's result instead of working ar
 - **MSW sees only `fetch`, and not all of it.** A `fetch` to loopback or a unix socket skips MSW and
   goes to the real network. `node:http` clients and WebSockets bypass MSW too, so those boundaries
   need a real stand-in server.
-- **Reuse a stand-in before writing one.** imp has about a hundred, indexed by boundary in
-  [stand-ins.md](./references/stand-ins.md). To boot a real impd, use `createImpd` on the stubs, or
-  `createImpTest(stack, …)` for the governed-imps harness.
+- **Reuse a stand-in before writing one.** imp has a tested stand-in for nearly every boundary;
+  [stand-ins.md](./references/stand-ins.md) sorts them by kind and links each package's folder. To
+  boot a real impd, use `createImpd` on the stubs, or `createImpTest(stack, …)` for the
+  governed-imps harness.
 - **`createImpd` disks are 32 GiB.** A test whose storage clones with `copyFile` sets
   `defaultDiskBytes` to 0, or each checkpoint copy or fork takes minutes.
 - **`createImpd`'s `now` does not reach every clock.** Some services stay on the wall clock;
-  [Booting impd](./references/stand-ins.md#booting-impd) lists the gaps and their own time seams.
+  [Booting impd](./references/stand-ins.md#booting-impd) lists the gaps and the clocks those
+  components take instead.
 - **Ports come from `findFreePorts`.** It claims each port until the test ends, so parallel test
   processes never share one. A fixed port collides.
 - **tmpfs lacks disk features.** `tmpdir()` is a tmpfs on some hosts; a test that needs FIEMAP or
@@ -81,10 +83,10 @@ lacks what a row needs, push and read that CI job's result instead of working ar
 ## References
 
 - [preloads-and-utils.md](./references/preloads-and-utils.md): the root and dashboard preloads, the
-  utils that register their own cleanup or take a stack, and what each `setupTest()` returns.
-- [stand-ins.md](./references/stand-ins.md): every stand-in by boundary, the mcp, cli and client
-  test setups, booting impd with `createImpd`, and the broker's test upstreams.
-- [e2e.md](./references/e2e.md): the harness step by step, suite settings and fixtures, baseline
-  resets, groups, variables, tailnet suites, and host safety.
-- [zfs-nixos-go-ci.md](./references/zfs-nixos-go-ci.md): the ZFS fake and real-pool scripts, the
-  NixOS checks, agent Go timer seams, and what each CI job runs.
+  two kinds of util for cleanup order, and what a daemon `setupTest()` returns.
+- [stand-ins.md](./references/stand-ins.md): the kinds of stand-in and when to use each, booting
+  impd and its harnesses, Bun's timer and transport facts, and the broker's test upstreams.
+- [e2e.md](./references/e2e.md): what a run does around each journey, what the baseline reset
+  covers, how to write a journey, sets and groups, and host safety.
+- [zfs-nixos-go-ci.md](./references/zfs-nixos-go-ci.md): when to use the ZFS fake or a real pool,
+  the NixOS checks, agent Go timer and golden tests, and the CI facts that a test change touches.

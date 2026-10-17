@@ -1,360 +1,98 @@
 # Stand-ins and booting impd
 
-## By boundary
+imp has a tested stand-in for nearly every boundary that impd, its clients and its scripts cross.
+Before you write a stand-in, look for one in the `test-utils` folder of the package that owns the
+boundary, where the shared naming rule makes the file name say what it impersonates. Each stand-in's
+own test shows what it models and what it refuses. The folders are
+[the daemon's](../../../../packages/daemon/src/test-utils/),
+[the client's](../../../../packages/client/src/test-utils/),
+[the CLI's](../../../../packages/cli/src/test-utils/),
+[the MCP server's](../../../../packages/mcp/src/test-utils/) and
+[the scripts'](../../../../scripts/test-utils/). The end-to-end harness keeps its own in
+[`e2e/lib/`](../../../../e2e/lib/).
 
-Paths are under `packages/daemon/src/` unless they start with `e2e/`, `scripts/` or `packages/`.
+## Kinds of stand-in
 
-| Boundary                     | Stand-in                                                                                                        | What it replaces                                                                       |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| VMM                          | `test-utils/build-stub-vmm.ts` (`buildStubVmm`) (12)                                                            | The `VmRunner`, with `ok`, `fail`, `die`, `hang` per step                              |
-| impd                         | `create-impd.ts` (`createImpd`) with stubs as its deps                                                          | The host: see [Booting impd](#booting-impd)                                            |
-| Governed imps                | `imps/test-imps.ts` (`createImpTest`, `buildTestApp`)                                                           | A shim over createImpd's parts, without its start steps                                |
-| Firecracker API              | `test-utils/start-stub-firecracker-api.ts` (1); `test-utils/start-stub-firecracker.ts` (2)                      | Firecracker's HTTP API on its socket                                                   |
-| Firecracker process          | `test-utils/start-stub-firecracker-process.ts` (3)                                                              | A process whose cmdline matches Firecracker's                                          |
-| Jails for the runner         | `test-utils/build-stub-jails.ts` (`buildStubJails`)                                                             | The `Jails` a runner prepares and seals; each call in order, refusals on request       |
-| Template agent               | `test-utils/start-stub-parked-agent.ts`                                                                         | A template guest's agent, parked until a claim                                         |
-| Template VM                  | `test-utils/build-stub-template-vm.ts` (`buildStubTemplateVm`)                                                  | The VMM's `buildTemplateVm` for the boot template store: writes the snapshot files     |
-| KSM merge wrapper            | `test-utils/create-stub-ksm-exec.ts`                                                                            | The wrapper that turns on merging for Firecracker: records its argv and fails          |
-| Guest agent                  | `test-utils/start-stub-agent.ts` (`startStubAgent`)                                                             | The agent on the vsock socket: CONNECT and frames                                      |
-| Builder guest                | `test-utils/build-stub-guest.ts` (`buildStubGuest`)                                                             | A builder's agent: output and exit per exec                                            |
-| zfs                          | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)                                                                 | `zfs`, send and receive, and the mount table                                           |
-| FIEMAP                       | `test-utils/build-stub-fiemap.ts` (`buildStubFiemap`)                                                           | `readFileExtents` of the XFS backend: extents, cuts, failures, removals per path       |
-| Wide directory               | `test-utils/build-stub-wide-dir.ts` (`buildStubWideDir`)                                                        | `countTreeBytes`' listing, with empty subdirectories past what a test can make         |
-| Loop device host             | Temp dirs as `procDir` and `sysDir` (`storage/loop-backing-file.ts`)                                            | `/proc/self/mountinfo` and a loop device's `backing_file` in `/sys`                    |
-| Docker engine                | `test-utils/start-stub-docker-engine.ts` (4)                                                                    | The engine API on its unix socket                                                      |
-| Docker CLI                   | `test-utils/create-stub-docker-cli.ts` (`createStubDockerCli`)                                                  | The host's `docker` binary, first on `PATH`                                            |
-| Image builder                | `test-utils/build-stub-image-builder.ts` (`buildStubImageBuilder`)                                              | A builder's engine: pull, pin, build, create and export                                |
-| mkfs.ext4                    | `test-utils/create-stub-image-mkfs.ts` (`createStubImageMkfs`)                                                  | `mkfs.ext4` held until the test releases or fails it                                   |
-| Silent build engine          | `test-utils/start-stub-silent-build-engine.ts` (4)                                                              | An engine silent through a build's quiet RUN step                                      |
-| CLIs a script calls          | `scripts/test-utils/create-stub-bin.ts` (7)                                                                     | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`                                |
-| Docker for upgrade           | `scripts/test-utils/build-stub-host-docker.ts`                                                                  | The docker that `deploy/upgrade.sh` drives on a host                                   |
-| Docker for dev.sh            | `scripts/test-utils/build-stub-dev-docker.ts`                                                                   | The images, labels and containers `dev.sh prune` reads                                 |
-| Docker for dev.sh up         | `scripts/test-utils/build-stub-dev-host-docker.ts`                                                              | Host image, containers, proxy build, socket and logs of `up` and `restart`             |
-| Docker for bootstrap.sh      | `scripts/test-utils/build-stub-bootstrap-docker.ts`                                                             | The daemon, the imp-host network, images, seccomp and the container it reads           |
-| Block devices                | `scripts/test-utils/build-stub-block-devices.ts`                                                                | `stat`, `findmnt`, `lsblk` and `blkid` over a table of devices, for bootstrap.sh       |
-| tailscale for tailscale-up   | `scripts/test-utils/create-stub-tailscale.ts`                                                                   | The `tailscale` CLI that `host/scripts/tailscale-up.sh` drives: status, up, down       |
-| tailscale in the NixOS VM    | `scripts/test-utils/run-stub-vm-tailscale.sh`                                                                   | The `tailscale` CLI in `vm.nix`'s stub image: saved states, key files, a used key      |
-| Registry for base            | `scripts/test-utils/build-stub-registry-docker.ts`                                                              | `docker buildx imagetools inspect` in the release Plan step                            |
-| impd for the client          | `packages/client/smoke/run-stub-impd.ts`                                                                        | impd's app on loopback, run by `check-client-runtimes.sh`                              |
-| nft                          | `test-utils/build-stub-nft.ts` (`buildStubNft`) (10)                                                            | `nft` from the egress service                                                          |
-| nft binary                   | `test-utils/create-stub-nft-bin.ts` (`createStubNftBin`)                                                        | The `nft` that `createNftRunner` spawns                                                |
-| Upstream DNS                 | `test-utils/start-stub-dns-upstream.ts`                                                                         | An IMP_DNS server over UDP and TCP, with chosen faults                                 |
-| Egress for resolver          | `test-utils/build-stub-egress-service.ts`                                                                       | The egress service as `createQueryHandler`'s deps                                      |
-| Host routes                  | `test-utils/build-stub-host-routes.ts` (`buildStubHostRoutes`)                                                  | The container's links and default routes egress reads                                  |
-| Tunnel far end               | `test-utils/start-stub-echo-server.ts` (`startStubEchoServer`)                                                  | A host a broker tunnel dials: it echoes and holds open                                 |
-| ip and sysctl                | `test-utils/build-stub-ip-command.ts` (`buildStubIpCommand`)                                                    | `ip`, `ip6tables` and `sysctl -n`, as the `run` of taps, host routes, IPv6 checks      |
-| tailscale serve              | `test-utils/build-stub-tailscale-serve.ts` (`buildStubTailscaleServe`)                                          | `tailscale serve status --json`, set and clear, as the serve reads' `run`              |
-| Tailscale API                | `test-utils/build-stub-tailscale-api.ts` (15)                                                                   | The OAuth token endpoint and the Services API                                          |
-| SSH gateway's impd side      | `test-utils/build-stub-ssh-backend.ts` (`buildStubSshBackend`)                                                  | Imp lookup, wake, exec, dial, listen and accept for the gateway                        |
-| SSH client gone silent       | `test-utils/start-stub-silent-tcp-proxy.ts` (`startStubSilentTcpProxy`)                                         | A client link that stops relaying, for the gateway's keepalive                         |
-| User's ssh-agent             | `test-utils/start-stub-ssh-agent.ts` (`startStubSshAgent`)                                                      | An ssh-agent socket the client forwards                                                |
-| SSH server for the client    | `test-utils/start-stub-ssh-server.ts` (`startStubSshServer`)                                                    | A server for `openSshClient`: one password, scripted execs, no forwards                |
-| Agent dial and accept relay  | `test-utils/build-stub-dial-stream.ts` (`buildStubDialStream`)                                                  | A `DialStream`: records writes, sends guest events, holds `drained`                    |
-| Guest listener               | `test-utils/build-stub-guest-listener.ts` (`buildStubGuestListener`)                                            | A `GuestListener` for tunnel listens and reverse forwards                              |
-| Tunnel client                | `test-utils/build-stub-tunnel-peer.ts` (`buildStubTunnelPeer`)                                                  | The client end of a `/tunnel` socket: parsed messages, decoded bytes, the close        |
-| Wake proxy's listen          | `test-utils/build-stub-proxy-listen.ts` (`buildStubProxyListen`)                                                | The wake proxy's port binds, so a test can make one fail                               |
-| Ticker timers                | `test-utils/build-stub-ticker-timer.ts` (`buildStubTickerTimer`)                                                | The timers `startTicker` waits on: a tick runs only when the test fires its label      |
-| mount                        | `test-utils/build-stub-mounts.ts` (`buildStubMounts`)                                                           | `mount` and `umount` for the jailer, over a `/proc/self/mounts` table                  |
-| Jail user processes          | `test-utils/build-stub-uid-processes.ts` (`buildStubUidProcesses`)                                              | The kills of a jail's uid, slow exits, the scan pauses and the chroot's owner          |
-| cgroups and `/proc`          | Temp dirs as `root` and `procRoot` (5)                                                                          | The cgroup tree and `/proc`                                                            |
-| cgroups for impd             | `test-utils/build-stub-cpu-cgroups.ts`                                                                          | `CpuCgroups`: an in-memory tree that records each change                               |
-| Guest virtio-mem             | `test-utils/build-stub-guest-memory.ts`; `test-utils/build-stub-elastic-guest.ts` (13)                          | `readGuestMemory` and `requestPluggedMib` of running guests                            |
-| Governor's host              | `test-utils/build-stub-governed-host.ts` (`buildStubGovernedHost`) (14)                                         | The awake imps, their RSS, sleeps and reclaims, as the RAM governor's deps             |
-| Timers and sleeps            | `test-utils/build-stub-clock.ts` (`buildStubClock`)                                                             | The one `Clock`: `runFor` moves time and fires due timers; `firePending` fires by hand |
-| Slow usage measure           | `test-utils/build-stub-slow-measure.ts` (`buildStubSlowMeasure`)                                                | A backend's `measureUsage` that moves `buildStubClock` on during each call             |
-| Disk room check              | `test-utils/build-stub-room-check.ts` (`buildStubRoomCheck`)                                                    | The disk budget's `requireRoom`: room for a set number of checks, then a refusal       |
-| Exec replies                 | `test-utils/build-stub-exec-replies.ts` (`buildStubExecReplies`)                                                | A `startStubAgent` handler for an exec that reads all its stdin, then exits            |
-| restic                       | `test-utils/build-stub-restic.ts` (`buildStubRestic`)                                                           | `Restic` over a directory: snapshots in `snapshots.json`, which two hosts share        |
-| restic's process             | `test-utils/build-stub-restic-runner.ts`, `build-stub-restic-lock-runner.ts`                                    | `createRestic`'s runner: queued results; restic's lock rule, held until stopped        |
-| ZFS for moves                | `test-utils/build-stub-zfs-storage.ts` (`buildStubZfsStorage`)                                                  | An impd's ZFS backend on `buildStubZfs`, as a harness's `createStorage`                |
-| Storage faults               | `test-utils/build-stub-storage-faults.ts` (`buildStubStorageFaults`)                                            | A backend whose next `openMoveSource` rejects                                          |
-| Older move target            | `test-utils/build-stub-older-move-target.ts` (`buildStubOlderMoveTarget`)                                       | A target whose offer reply lacks a `keeps*` field, as a `setupMoveHosts` hook          |
-| Switched storage             | `test-utils/build-stub-switched-storage-target.ts`                                                              | A target whose offer reply names another storage backend                               |
-| Lost commits                 | `test-utils/build-stub-dropped-commit.ts` (`buildStubDroppedCommit`)                                            | A network that drops a move's first commits, or their answers                          |
-| lseek and fstat              | `test-utils/build-stub-lseek.ts`                                                                                | `SEEK_DATA`/`SEEK_HOLE` over chosen extents, for `findDataBlocks`                      |
-| Move stream faults           | `test-utils/build-stub-move-stream-rewrite.ts`                                                                  | A hook that rewrites the frames of a move's first stream part                          |
-| Session log files            | `test-utils/build-stub-generation-log-gate.ts` (`buildStubGenerationLogGate`)                                   | The session logs' `createLog` over real logs, holding one chosen call until freed      |
-| Imp guest agent              | `test-utils/build-stub-exec-guest.ts`                                                                           | An imp's agent for the MCP tools: files and shell verbs                                |
-| Session agent                | `test-utils/start-stub-session-agent.ts` (`startStubSessionAgent`)                                              | Runs, resumes, takes over, kills and lists sessions; `release` is an older agent       |
-| Attach agent                 | `test-utils/start-stub-attach-agent.ts` (`startStubAttachAgent`)                                                | A 0.15.0 agent: a ping with a boot id, then scripted session replies                   |
-| Disk clone and grow          | `test-utils/build-stub-disk-tools.ts` (`buildStubDiskTools`)                                                    | `createImpTest`'s `cloneDisk` and `growFilesystem`: fail, land empty, or hold          |
-| Imp exec agent               | `test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`)                                                    | An imp's agent on its vsock socket, driving `buildStubExecGuest`                       |
-| Imp service agent            | `test-utils/start-stub-service-agent.ts` (`startStubServiceAgent`)                                              | An imp's agent's services API: definitions, states and log files                       |
-| Agent exec stream            | `test-utils/build-stub-agent-exec-stream.ts`, `build-stub-tap-stream.ts`                                        | The `ExecStream` an exec, attach or session tap opens, fed by the test                 |
-| Session tap opener           | `test-utils/build-stub-tap-opener.ts` (`buildStubTapOpener`)                                                    | The session logs' `openTap`: records each call, answers from the test's queue          |
-| Dial agent                   | `test-utils/start-stub-dial-agent.ts` (`startStubDialAgent`)                                                    | An agent whose dial target answers once the request's stdin ends                       |
-| Echo exec agent              | `test-utils/start-stub-echo-exec-agent.ts` (`startStubEchoExecAgent`)                                           | An agent whose exec echoes stdin as `cat` does, then writes stderr and exits           |
-| Exec socket and backend      | `test-utils/build-stub-exec-socket.ts`, `build-stub-exec-backend.ts`                                            | The client's `/exec` WebSocket, and the imp service an `/exec` session opens on        |
-| tailscale CLI                | `test-utils/build-stub-tailscale.ts` (`buildStubTailscale`)                                                     | `tailscale whois --json` and `status --json`, as `runWhois`'s `run`                    |
-| MCP upstream                 | `test-utils/build-stub-mcp-transport.ts`                                                                        | The `HttpTransport` to an imp's MCP server: calls held open until ended                |
-| tailscale whois              | A `whois` function passed to `createTailnetIdentities`                                                          | `tailscale whois --json` (`runWhois`)                                                  |
-| Connector upstreams          | `test-utils/start-stub-broker-tls-upstream.ts` (6); `e2e/lib/start-stub-upstream.ts`                            | github.com, api.github.com, an OAuth token endpoint                                    |
-| Git over SSH                 | `e2e/lib/start-stub-git-ssh-server.ts` (`startStubGitSshServer`)                                                | A forge's SSH git: one allowed key, push to `repo.git` only                            |
-| Cloudflare API               | `test-utils/build-stub-cloudflare-api.ts` (15)                                                                  | `api.cloudflare.com/client/v4`, with each token scoped to its zones                    |
-| ACME server                  | `test-utils/start-stub-acme-server.ts` (`startStubAcmeServer`)                                                  | A CA up to the challenge, on loopback: acme-client's axios is outside MSW              |
-| Host networks                | `test-utils/build-stub-public-network.ts` (8)                                                                   | Guests on taps, an uplink to the internet, a tailnet peer                              |
-| GitHub releases              | `packages/test-utils/src/start-stub-github-releases.ts` (9)                                                     | The releases pages `install.sh` fetches with curl                                      |
-| gh and uname                 | `packages/test-utils/src/create-stub-gh-attestation.ts`, `create-stub-uname.ts` (9)                             | `gh auth status`, `gh attestation verify`, `uname -s -m`                               |
-| shasum and PATH              | `packages/test-utils/src/create-stub-shasum.ts`, `create-command-links.ts` (9)                                  | macOS's `shasum -a 256`; a PATH of only the linked commands                            |
-| Client's exec agent          | `packages/client/src/test-utils/build-stub-exec-agent.ts`                                                       | An imp's agent for exec and attach, scripted by argv                                   |
-| Client's fwd agent           | `packages/client/src/test-utils/build-stub-forward-agent.ts`                                                    | An imp's agent for reverse forwards: listen and accept                                 |
-| impd's /exec socket          | `packages/client/src/test-utils/start-stub-impd-socket.ts`                                                      | Protocol faults a real impd never sends                                                |
-| Node's WebSocket             | `packages/client/src/test-utils/create-stub-undici-web-socket.ts`                                               | undici's socket on a refused upgrade: an `error` event and no `close`                  |
-| Host engine for client       | `packages/client/src/test-utils/start-stub-docker-engine.ts`                                                    | Docker's POST /build on a unix socket                                                  |
-| Docker CLI for client        | `packages/client/src/test-utils/create-stub-docker-bin.ts`                                                      | inspect, create, export and rm of the images a test names                              |
-| impd before the build stream | `packages/client/src/test-utils/build-stub-impd-before-build-stream.ts`                                         | Real impd, with no Accept read on POST /images/build                                   |
-| A newer impd                 | `packages/client/src/test-utils/build-stub-impd-with-new-reason.ts`                                             | Real impd's events, with an ImpChanged reason it lacks                                 |
-| impd before 0.30.0           | `packages/client/src/test-utils/build-stub-impd-before-exec-require.ts`                                         | Real impd's answers, with system.info lacking execRequire                              |
-| OAuth token endpoint         | `test-utils/build-stub-broker-token-endpoint.ts` (11)                                                           | A token endpoint: queued answers per refresh token                                     |
-| Rule upstreams               | Per-test MSW handlers in `broker/create-broker-proxy.test.ts`; `test-utils/start-stub-broker-plain-upstream.ts` | A secret rule's own `upstream` origin; the plain listener for the Host on the wire     |
-| Guest's HTTPS tools          | `test-utils/build-stub-broker-guest.ts` (`curl`)                                                                | A guest's client through the broker's front port                                       |
-| Guest's CONNECT              | `test-utils/start-stub-broker-tunnel.ts`                                                                        | A raw CONNECT a guest holds open through the front port                                |
-| Tunnel targets               | `test-utils/start-stub-broker-reply-target.ts`, `start-stub-broker-hold-target.ts`                              | The far end of a plain tunnel: a reply after the request, or a held socket             |
-| Guest's raw socket           | `test-utils/start-stub-broker-guest-socket.ts`                                                                  | A guest's socket to the front port, read until it closes                               |
+Choose the kind by the boundary that the code under test reaches:
 
-1. `vmm/firecracker-client.test.ts`: a `Bun.serve({ unix })` that records each call and answers from
-   a table, or never answers.
-2. `vmm/template-vm.test.ts` and `vmm/vm-runner.test.ts` run `test-utils/run-stub-firecracker.ts` as
-   the VMM process, with the API socket in its argv.
-3. `vmm/firecracker-process.test.ts`: `bash` run under the name `firecracker`; it serves nothing.
-4. `startStubDockerEngine`: a `Bun.serve({ unix })` in the test's temp dir, over `@msw/data`
-   collections of containers and images; a call it does not model gets a 500 that names it and lands
-   in `unexpected`, which each test that uses it asserts empty. It reads image names as the engine
-   does (`busybox` is `docker.io/library/busybox:latest`). MSW's passthrough drops `unix`, so the
-   engine stays a server. `docker-proxy/proxy.test.ts` serves the proxy on a unix socket as its main
-   does. `test-utils/start-stub-silent-build-engine.ts` is a raw socket engine that stays silent
-   through a build, for `images/docker-build.test.ts`'s idle-limit test: a child Bun with
-   `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1` runs `test-utils/run-idle-limited-docker-build.ts`, whose
-   unprotected fetch starts once both builds are silent (`started`) and expires after about 8 s.
-5. Options of `vmm/cpu-cgroups.ts`, and the `procRoot` parameter of `vmm/process-owner.ts`, of the
-   readers in `vmm/vm-stats.ts` and of `isFirecrackerAlive`.
-6. Used by `broker/create-broker-proxy.test.ts`, `broker/forward-request.test.ts` and
-   `broker/oauth-refresher.test.ts`: real TLS on loopback with a CA of its own, since the broker's
-   verification of the upstream and the guest's view of an untrusted certificate are under test.
-   Like the other broker stand-ins, it takes the caller's stack and defers its release into it.
-7. The shell tests in `scripts/` and `deploy/`: a stub on a temp `PATH` logs each call to one file
-   and answers from a bash script the test gives it. `run-sourced-function.ts` beside it calls a
-   function of a sourced script with only `PATH` and the variables a test passes.
-8. Bash that the host tests of `egress/egress-ruleset.test.ts` run in a mount and network namespace.
-9. `install.test.ts` at the repo root, which runs `install.sh` with `sh`.
-10. `createImpTest`'s default `runNft` still records scripts for the suites that use it.
-11. An MSW handler a test adds with `server.use`; an unissued refresh token gets `invalid_grant`.
-12. `countHungCalls` and `countParkedCalls` count the calls that wait on a `hang` or on a runner of
-    an older generation; a test waits for them with `waitFor` before it peeks at the call.
-    `whenTemplateBuildParks(runner)` settles once a template build of that runner parks.
-13. The three guest-memory stand-ins apply an unplug at different times. `buildStubVmm` applies it
-    when the request comes, down to the guest's floor. `buildStubGuestMemory` shows it done on the
-    next read, for the memory controller. `buildStubElasticGuest` unplugs one step per read, for
-    `memory/shrink-guest.ts`. The last two refuse a size that is not whole 2 MiB blocks within the
-    region, with Firecracker's 400.
-14. The property tests of `governor/ram-governor.test.ts` draw their cases from
-    `test-utils/build-stub-governed-host-arbitraries.ts`. Each case builds its own host and
-    governor, which hold nothing to release.
-15. MSW handlers over `@msw/data` collections, built fresh in each test and registered with
-    `server.use(...stub.handlers)`, so the preload's handler reset drops them and no state carries
-    to the next test. The production clients call the real origins, which are not loopback, so the
-    run's MSW server sees them.
+- **The fake VMM** stands in for the VM runner, which starts and drives each Firecracker, under
+  every impd test above the VM layer. A test scripts each VM step to succeed, fail, die or hang, and
+  it waits for the count of hung calls to rise before it inspects a held call.
+- **Guest agent stand-ins** listen on an imp's vsock socket and speak the agent protocol. Pick the
+  one whose protocol area the test drives: exec, sessions, attach, services, dial or echo.
+- **Command-layer fakes** answer the CLIs that impd spawns, such as `zfs`, `nft`, `ip`, `tailscale`,
+  `mount`, `restic` and `docker`. Each one keeps a model of the state behind the CLI and records the
+  argv it got, so a test asserts on the resulting state rather than on the argv alone.
+- **Real servers on loopback or a unix socket** stand in where MSW cannot reach: a unix socket, a
+  `node:http` client, a WebSocket, real TLS verification, or a request from a child process. The
+  Docker engine, the Firecracker API, the DNS upstream, SSH, ACME and the broker's upstreams are
+  this kind. The Docker engine stand-ins answer a call they do not model with a 500 that lands in a
+  list of unexpected calls, and each test that uses one asserts that list empty.
+- **MSW handler sets** stand in for remote HTTP APIs that impd calls at their real origins, such as
+  Tailscale, Cloudflare and an OAuth token endpoint. A test builds the set fresh and registers it
+  per test, so the preload's handler reset drops it.
+- **Temporary directories** stand in for `/proc`, `/sys` and the cgroup tree, because their readers
+  take a root path from the caller.
+- **Timer stand-ins** fire only when the test says so. Use the stub clock for impd's one clock, and
+  the matching repeat, delay or ticker stand-in where a component takes its own timer.
+- **Version-skew proxies** sit in front of the real impd app and drop or add fields, procedures or
+  events, so the client, CLI and MCP tests can check behaviour against an older or a newer impd.
+- **Stub binaries on a temporary `PATH`** stand in for the commands that the shell scripts in
+  `scripts/` and `deploy/` run. Each stub logs its calls to one file and answers from a script that
+  the test gives it.
 
-The mcp package's tests boot impd's real app with `createImpd` and reach it through the real
-`@impz/client`, on a loopback port where a tool call's exec needs a socket, or with
-`impd.api.app.handle` as its `fetch`. A test that needs a tool call to wait holds impd's read of the
-imps with `buildQueryGate`. One stand-in models an impd release from before the fork's grant report:
-`packages/mcp/src/test-utils/build-stub-older-impd-fetch.ts` (`buildStubOlderImpdFetch`) takes
-`grantsNotCopied` and `grantsError` out of the real `imps.fork` answer. The progress timer of
-`createImpServer` takes a `repeat`, and the tests pass
-`packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks only when the
-test says so. The SSE keepalive is the MCP SDK's own interval, which takes only a period, so its
-test passes a short `keepaliveMs` and reads the first frame of a held call's stream. A tool call's
-deadline (`timeoutSeconds`) and kill grace take `createImpServer`'s `after`, `setTimeout` by
-default, and the tests pass `packages/mcp/src/test-utils/build-stub-after.ts` (`buildStubAfter`),
-which fires only when the test says so.
-
-In the MCP tests, an exec through impd's real app reaches the guest through
-`test-utils/start-stub-exec-agent.ts` (`startStubExecAgent`) on the imp's vsock path, which runs
-each command on `buildStubExecGuest`; the agent keeps its socket through a sleep or stop and wake.
-The tool tests drive the real server in process through
-`packages/mcp/src/test-utils/create-mcp-server.ts` (`createMcpServer`), which connects it to an
-in-memory transport and takes one JSON-RPC line at a time. The HTTP tests read a session's SSE
-answers with `read-mcp-answer.ts` (`readMcpAnswer`), and drive the `2026-07-28` protocol with the
-SDK's own client (`@modelcontextprotocol/client`). `exec-tool.test.ts` passes `buildStubRepeat` and
-`buildStubAfter` as its timers, except one timeout test that keeps the default timers and waits its
-one-second deadline. `packages/cli/src/commands/mcp.test.ts` runs `impz mcp` as a subprocess against
-impd's app on a loopback port.
-
-The broker takes `beforeGrantWrite` (through `createImpd`'s `broker` deps), which runs between a
-grant call's access check and its transaction, as `afterRuleRead` runs between a request's rule read
-and its value read; `auth/check-grantable.test.ts` and `build-token-routes.test.ts` act there.
-
-impd's API listens with `buildApiListenOptions(config, idleTimeoutS)` (`api-listen-options.ts`),
-whose idle timeout defaults to Elysia's 30 seconds. `mcp/mcp-endpoint.test.ts` listens with 1
-second, which Bun 1.4.2 enforces about 4 seconds after the last byte. On Bun 1.4.2 the idle timeout
-ends a request without a body, or a streamed answer that falls silent; it never ends a request that
-sent a body and still waits for its answer.
-
-The cli package's tests that talk to impd boot it with `createImpd` in their file's `setupTest()`
-and spawn the real binary (`packages/cli/src/test-utils/start-cli.ts`) against its app on a loopback
-port; the parser, formatter, config and other pure tests boot nothing. `commands/imps.test.ts`,
-which saves several hosts, instead calls `startImpdHost(stack, { env })`
-(`packages/cli/src/test-utils/start-impd-host.ts`) once per host in the test body: one real impd on
-the stub VMM with its own data dir, database, loopback port and generated `rootToken`, booted on the
-`env` impd settings the test passes, whose `ksm.profitMib` sets each awake VM's KSM saving. The
-stand-ins in `packages/cli/src/test-utils/` sit in front of the real app or replace only a
-transport:
-
-- `start-stub-older-impd.ts` (over `build-stub-older-impd-fetch.ts`): an older release. It drops
-  named feature flags or the whole features object from `system.info`, sends a procedure the release
-  lacked to impd's own not-found, drops named events of a stream, and records each procedure it
-  forwards.
-- `start-stub-newer-impd.ts` (over `build-stub-newer-impd-fetch.ts`): a newer release that adds
-  named fields to a procedure's answer.
-- `start-stub-info-fault-impd.ts`: drops the connection of each `system.info` call and forwards the
-  rest.
-- `start-stub-tunnel-fault-proxy.ts`: forwards `/tunnel` sockets and sends one a message the
-  protocol does not know.
-- `start-stub-silent-host.ts`: takes requests and never answers.
-- `start-stub-prefix-proxy.ts`: serves the real app under a path prefix, HTTP and WebSocket.
-- `build-stub-exec-peer.ts`: an in-memory `/exec` socket that sends the literal frames a test
-  scripts, for protocol faults impd never sends; `exec-client.ts` takes it through `io.connect` and
-  `cp/open-tool-exec.ts` through `connect`.
-- `start-warm-move-hosts.ts`: `createMoveHosts(stack, { isShared: true })` with both apps on
-  loopback, because two impds in one process cannot share the data dir a warm move needs.
-- `build-stub-listen-agent.ts`: an imp's agent for `reverse-client.ts`, which answers a listen with
-  a forward id, opens one connection that sends `clientSends`, and can refuse listens; the reverse
-  tests put it on the imp's vsock path with the daemon's `startStubAgent`.
-- `build-stub-timeouts.ts`: the `StartTimer` of `fan-out.ts`, which records each timer's delay and
-  state and fires only when the test calls `firePending()`.
-- `build-stub-terminal.ts` and `build-stub-wait.ts`: the exec client's terminal modes and the
-  reverse forward's retry wait, which ends only when the test releases it or its signal aborts.
-- `build-stub-backoff-clock.ts`: the clock and wait of `impz events`' reconnect backoff. Each wait
-  ends at once and moves the clock on by its delay, and a hook runs during one chosen wait, as an
-  impd that comes back while the client waits.
-
-The cli's services tests put the daemon's `startStubServiceAgent` on the imp's vsock path.
-
-The client package's tests boot impd through `createImpd` in each file's `setupTest()`, with the
-client stub agents on the imp's vsock socket. Image builds and adds run with
-`IMP_BUILD_ISOLATION=host` against `packages/client/src/test-utils/start-stub-docker-engine.ts` (at
-`DOCKER_HOST`) and `create-stub-docker-bin.ts` (first on `PATH` through `updateEnv`), with the real
-`tar` and `mkfs.ext4`; no builder imp runs. That engine models only `POST /build`; any other call
-gets a 500 that names it and lands in `unexpected`, which each test that uses it asserts empty. An
-older or newer impd is a `build-stub-impd-*` stand-in in front of the real app, at
-`http://impd.test/` through MSW. Answers impd never sends (a proxy's 502, a cut stream, bad frames)
-go to the pure cores: `read-build-answer.ts` on literal responses, and `start-stub-impd-socket.ts`
-for `/exec`. Over a socket, Bun's fetch replaces the Content-Length of a Blob's stream with the
-Blob's real size, but keeps the one a caller sets on a `ReadableStream` it made, so
-`build-image.test.ts` sends a declared size with a hand-made stream to impd's real listener. That
-listener takes `main.ts`'s `maxRequestBodySize`, since Bun's own 128 MiB default answers a bare 413
-before the build route can. The keepalive tests there boot impd with a `keepaliveMs` of 500 and run
-the client in a Bun child with `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1`, which Bun's coarse timer turns into
-a deadline of about 8 s (measured 7.99 s from the engine's hold, four runs); the engine holds the
-build silent for 28 keepalives, about 13.5 s. A streamed build outlasts the deadline; through
-`build-stub-impd-before-build-stream.ts` the client gives up at it, and impd then stops the build on
-the engine (the engine's `signals` record it), so no image lands. The stub engine serves with
-`idleTimeout: 0` behind a type assertion, as `docker-proxy/main.ts` does: Bun's types leave the
-option off unix servers, its 10 s default closes a silent build after 10 to 12 s, and
-`server.timeout(request, 0)` does not lift it once the answer has started. The 13.5 s hold fails
-without it. Its image factory is the api's, `packages/api/src/test-utils/build-mock-image.ts`
-(`buildMockImage`).
-
-Host networking runs the real tools: `host/scripts/setup-net.test.ts` runs
-`host/scripts/setup-net.sh` with `iptables`, and the host tests of `egress/egress-ruleset.test.ts`
-apply impd's ruleset with `nft`, each in a fresh network namespace through
-`test-utils/run-in-netns.ts`.
-
-The Pebble suite, `https/acme/acme-issuer.pebble.ts`, starts its own Pebble and challtestsrv for
-each test through `e2e/lib/pebble.ts` (under a second to start, about a second to stop), named
-`imp-acme-it-<pid>-<random>`, with a cert store and Pebble's minica PEM in a temp dir.
-`startPebbleStack(stack, prefix, { minicaDir })` refuses a container or network name that docker
-already shows before it makes anything, defers the removal of each container and the network into
-the caller's stack as soon as it exists, so only what the run made goes, and returns once Pebble's
-directory and challtestsrv's management API both answer. It logs each phase's time to stderr
-(containers started, Pebble ready, challtestsrv ready); the first test also logs its issue time. The
-e2e harness's own stack (`startPebble`, `stopPebble`) is named after the instance, keeps its minica
-PEM under `.cache/e2e`, and takes again a network that a dev instance still holds.
-`bun run test:pebble` first pulls the pinned images (`PEBBLE_IMAGES` in that helper) with
-`scripts/dev/pull-pebble-images.ts`, so no test pays for a pull.
+The three guest memory stand-ins apply an unplug at different times, and each one fits a different
+reader. The fake VMM applies it when the request arrives, the memory controller's stand-in shows it
+on the next read, and the shrink loop's stand-in unplugs one step per read.
 
 ## Booting impd
 
-`packages/daemon/src/create-impd.ts` holds impd's wiring, which `main.ts` and the tests share.
-`createImpd(config, deps)` builds every service and runs the boot steps in `main.ts`'s order:
-storage start, firewall start, VM re-adoption, leftover and drive cleanup, move recovery. It opens
-no port: `main.ts` then listens, starts the tickers and owns the stop. `deps` takes the database,
-the root token, an unstarted storage backend and the system files, and optional stand-ins for each
-boundary (`vms`, `runCommand`, `taps`, `cgroups`, `broker`, `egress`, `imps`, `images`,
-`readDiskSpace`, `readIdentity`, `resolveIpv6`, `readTailscale`, `whois`, `freezer`, `oauthKey`,
-`now`, `log`, `keepaliveMs`, the gap between a streamed image call's progress events, 15 s by
-default, and `keepaliveRepeat`, the timer of those events, `runOnInterval` by default, which
-`create-impd.test.ts` steps with `buildStubRepeat`); `now` reaches leases, the RAM governor and
-memory control, egress, the broker (its CA and leaves, the leaf renewal check, its route caches,
-OAuth refreshes), tokens, OAuth, the audit log, moves and the API. It does not reach
-`buildTailnetNames`' services API, the template service's timings (`performance.now`), the disk
-usage cache, backups or the builders' engine wait, which stay on the wall clock: a known gap. Nor
-does it reach the storage gate: `createStorageGate(clock)` takes `now` and `startTimer` for a GC's
-wait on the operations in flight (the wall clock and `setTimeout` by default), createImpd passes
-none, and `storage/storage-gate.test.ts` passes `buildStubClock`'s. `imps.sleepTiming` (`now` and
-`sleep`, `performance.now` and `Bun.sleep` by default) is the clock of a sleep's `prepareMs` and
-`durationMs` and the pause of its young-guest wait; `events/imp-event-publisher.test.ts` passes
-`buildStubClock`'s. A field left out takes the host's real one. With tailnet names configured,
-`runCommand` also reaches `buildTailnetNames`' `tailscale serve` calls, so `tailnet-names.test.ts`
-boots named impds on `buildStubTailscaleServe`'s `run`. Its parts (`buildImpdStorage`,
-`createImpdBroker`, `buildImpdEgress`, `startGovernedImps`, `loadImpdAccess`, `buildImpdServices`,
-`createImpdMoves`, `buildImpdApp`) are exported for `createImpTest`, which wires them without the
-start steps into a caller's stack; the client smoke's `run-stub-impd.ts` runs it outside a test.
-`buildTestApp` builds impd's app with `buildImpdApp` over the harness's impd or one that
-`restartImpd` started. The app hands each unexpected RPC failure to the harness's `logRpcFailure`,
-as `createImpd` hands its deps' to `buildApp`: the harness keeps the failure in `rpcFailures` and
-writes an `impd: rpc failed:` line to its log, not to stderr. The harness's clock is the wall clock
-plus what `advance` adds; with `frozenClockMs` it starts there and is also `imps.sleepTiming`'s
-clock, and each young-guest pause moves it at once by the pause's length instead of waiting.
-`packages/daemon/src/create-impd.test.ts` boots `createImpd` whole on the stubs. The egress resolver
-binds `IMP_EGRESS_DNS_PORT` on every address, so a test takes a free one from
-`test-utils/find-free-ports.ts`. It picks at random from the 4000 ports below the kernel's ephemeral
-range, skips any port that `/proc/net/{tcp,udp}{,6}` lists, and claims each port it hands out with
-an abstract unix socket, `imp-test-port-<port>`, until the test ends, so two pickers in parallel
-processes never hand out the same port. A process that binds a port without a claim can still take
-one a picker handed out. Egress's `repeat` dep runs its sweep (`startInterval` by default), so a
-test fires a sweep by calling the function it was handed. A `createImpd` test whose storage clones
-with `copyFile` sets `defaultDiskBytes` to 0, or each disk is a 32 GiB sparse file and a
-checkpoint's copy or a fork takes minutes (`networks/network-service.test.ts` forks).
+`createImpd` holds the wiring that production and the tests share. It builds every service and runs
+the boot steps in production's order, but it opens no port, so a test reaches the app through its
+request handler or listens on a loopback port itself. Its deps take a stand-in for each boundary. A
+boundary that a test leaves out gets the host's real implementation, so pass a stand-in for every
+boundary that the test would otherwise touch for real.
 
-`moves/test-moves.ts` (tested in `test-moves.test.ts`) builds two impds on `createImpTest`. Its
-`hook` gets each request the source sends, a `forward(replacement?)` to the target's move routes,
-and the target's `advance` and the source's client; `waitForMove` polls with `waitFor`.
-`createZfsUbuntuImage` puts the `ubuntu` image on a ZFS host. The stub VMM numbers VMs from 1 on
-each host, so boot ids of two hosts collide. Time seams for moves: `createPartPipe(waitMs, timer)`
-takes the clock's `now` and `startTimer`, `createIdleLoop` takes `now`, and
-`createCheckpointService` takes `random` for its ids; each defaults to the wall clock or
-`Math.random`. `runMigrationsTo(db, name, migrations)` takes a test's own migrations, so a test can
-run one that fails; it defaults to impd's. The move sender's `waitForRecovery()` settles once the
-background recovery that `recover` started has run, so a test waits for it before teardown.
+The `now` dep reaches leases, the RAM governor, memory control, egress, the broker, tokens, OAuth,
+the audit log, moves and the API. Some components stay on the wall clock: the tailnet names'
+Services API, the template service's timings, the disk usage cache, backups and the builders' engine
+wait. The storage gate and the sleep timing take clocks of their own, so a test that controls their
+time passes the stub clock to them directly.
+
+Three harnesses sit beside `createImpd`:
+
+- **The governed-imps harness** wires impd's parts without the boot steps into a caller's stack. Use
+  it to restart impd over the same database and VMs, to advance its clock, or to hold a lifecycle
+  step. It keeps each unexpected RPC failure in a list and writes it to its own log, not to stderr.
+- **The move hosts** build two impds on the governed-imps harness, with a hook that sees every
+  request the source sends to the target. The fake VMM numbers VMs from 1 on each host, so boot ids
+  of the two hosts collide.
+- **The CLI's impd host** runs one real impd per saved host, each with its own data dir, database,
+  port and root token, for CLI tests that switch between hosts.
+
+The CLI, client and MCP tests boot impd through `createImpd` and drive it with the real client or
+the real binary over a loopback port. A protocol fault that impd never sends, such as a cut stream
+or a bad frame, goes to a stand-in peer or to the pure function that parses the answer.
+
+## Bun timer and transport facts
+
+These Bun 1.4.2 behaviours decide how a test of a deadline is built:
+
+- An API listener whose idle timeout is set to 1 s ends a request about 4 s after its last byte. It
+  ends a request without a body, or a streamed answer that falls silent, and never one that sent a
+  body and still waits for its answer.
+- A child Bun with `BUN_CONFIG_HTTP_IDLE_TIMEOUT=1` gets a fetch deadline of about 8 s, measured
+  from a silent server's hold. Tests of a client's keepalive run the client in such a child.
+- A Bun server on a unix socket closes a silent connection after its default idle timeout. A
+  stand-in that holds a build silent serves with an idle timeout of 0 behind a type assertion,
+  because Bun's types leave the option off unix servers.
+- Over a socket, Bun's fetch replaces the Content-Length of a Blob's stream with the Blob's real
+  size. A test that sends a declared size uses a stream it builds itself.
 
 ## Connectors
 
-impd's broker resolves each granted host through `broker/test-upstreams.ts`. When
-`IMP_BROKER_TEST_UPSTREAMS` names a file, the broker reads it on each request (cached by mtime), and
-logs each load:
-
-```json
-{ "ca": "-----BEGIN CERTIFICATE-----…", "upstreams": { "github.com": "https://172.17.0.1:9443" } }
-```
-
-Each upstream must be an `https` URL. A listed host goes to that origin, and the forward trusts `ca`
-next to `node:tls` `rootCertificates`, so certificate verification stays on. A missing or invalid
-file leaves every host on its real origin.
-
-- **Daemon tests.** `create-broker-proxy.test.ts` boots impd with `createImpd` and passes the file
-  through `loadConfig({ IMP_BROKER_TEST_UPSTREAMS })`, with `IMP_SUBNET` `127.0.0.0/16` so a
-  loopback address stands for a guest. Each test writes the file with the host it routes, and sets
-  each answer it asserts; a TLS stand-in answers any other path with a 500 that names it. The OAuth
-  token endpoint and a rule's plain-HTTP upstream are MSW handlers, not entries in the file.
-- **End to end.** `scripts/dev/dev.sh` sets
-  `IMP_BROKER_TEST_UPSTREAMS=/data/broker-test-upstreams.json`. The `connectors` suite starts
-  `e2e/lib/start-stub-upstream.ts` (`startStubUpstream`, tested in `start-stub-upstream.test.ts`) on
-  the container's gateway address. The stub serves git smart HTTP behind Basic auth, checks the
-  bearer token, and runs an OAuth token endpoint, over a CA and leaf that `openssl` makes per run.
-  The suite writes `<IMP_DEV_DATA>/broker-test-upstreams.json` with the stub's `caPem` and origin,
-  and removes it at the end; the harness's baseline reset removes it too. The `moves` suite writes
-  the same file into the target host's data dir, and removes it from both hosts.
-- **Guest trust.** The guest trusts the broker's own CA through impd's CA bundle step, as
-  `docs/guides/connectors.md` describes; the test-upstreams `ca` stays on the host side.
+impd's broker sends a granted host to a test upstream when `IMP_BROKER_TEST_UPSTREAMS` holds the
+path of a routing file, and it keeps certificate verification on against the file's CA. A daemon
+test passes the file through the config loader, with a loopback guest subnet so that a loopback
+address stands for a guest. The dev instance and the `connectors` suite use the same file, as the
+[development runbook](../../../../docs/runbooks/development.md#end-to-end-tests) describes.
