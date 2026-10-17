@@ -130,9 +130,9 @@ export interface RamGovernorDeps {
   readonly budgetMib: number;
   readonly listAwake: () => Promise<AwakeImp[]>;
 
-  // impd's reader is async, and reads every awake VM at once
+  // read for every awake VM at once, off the event loop
   // (docs/architecture/lifecycle/ram-governor.md#what-it-measures)
-  readonly readRamMib: (pid: number, apiSocket: string) => number | null | Promise<number | null>;
+  readonly readRamMib: (pid: number, apiSocket: string) => Promise<number | null>;
 
   // RAM to keep free besides the budget's use, given the awake VMs' pids: with
   // IMP_KSM, a share of what KSM saves in them, since writes split merged

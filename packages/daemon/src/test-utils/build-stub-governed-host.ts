@@ -144,8 +144,11 @@ export function buildStubGovernedHost(options: Readonly<StubGovernedHostOptions>
           holdUntil: imp.held ? HELD_FOREVER : null,
         }));
     },
-    readRamMib: (_pid: number, id: string): number | null =>
-      imps.get(id)?.awake === true ? findImp(id).rssMib : null,
+    readRamMib: (_pid: number, id: string): Promise<number | null> => {
+      const ramMib = imps.get(id)?.awake === true ? findImp(id).rssMib : null;
+
+      return Promise.resolve(ramMib);
+    },
     isBusy: (id: string): boolean => findImp(id).busy,
     trySleepImp,
 

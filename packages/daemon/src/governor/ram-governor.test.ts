@@ -517,7 +517,9 @@ test('it measures every awake imp at once, each read started before any ends', a
   });
 
   for (const [id, read] of pending) {
-    read.resolve(host.deps.readRamMib(0, id));
+    const ramMib = await host.deps.readRamMib(0, id);
+
+    read.resolve(ramMib);
   }
 
   const measured = await usage;

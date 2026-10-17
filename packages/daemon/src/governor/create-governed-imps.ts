@@ -116,7 +116,10 @@ export function createGovernedImps(deps: GovernedDeps): {
           : [],
       );
     },
-    readRamMib: deps.readRamMib ?? readOwnedRamMibAsync,
+    readRamMib:
+      deps.readRamMib === undefined
+        ? readOwnedRamMibAsync
+        : (pid, apiSocket) => Promise.resolve(readRamMib(pid, apiSocket)),
     readHeadroomMib,
 
     isBusy,
