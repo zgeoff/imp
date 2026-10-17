@@ -13,7 +13,7 @@
     "@impz/client": "workspace:*",
     "@impz/local-tar": "workspace:*",
     "@impz/mcp": "workspace:*",
-    "@logtape/logtape": "2.4.0",
+    "@logtape/logtape": "catalog:",
     "@opentelemetry/api": "catalog:",
     "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
     "@opentelemetry/exporter-trace-otlp-proto": "catalog:",
@@ -26,7 +26,7 @@
     "dns-packet": "catalog:",
     "elysia": "catalog:",
     "kysely": "catalog:",
-    "lru-cache": "11.5.3",
+    "lru-cache": "catalog:",
     "reflect-metadata": "catalog:",
     "ssh2": "catalog:",
     "zod": "catalog:"
@@ -34,7 +34,7 @@
   "devDependencies": {
     "@faker-js/faker": "catalog:",
     "@impz/test-utils": "workspace:*",
-    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/client": "catalog:",
     "@msw/data": "catalog:",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",

@@ -54,6 +54,8 @@ docs/
 
 ## Packages
 
+- Every external version lives once, in the root `workspaces.catalog`. A package writes `"catalog:"`
+  for an external dependency and `"workspace:*"` for an internal one.
 - Pin exact versions, with no `^` or `~` ranges. `bun add` saves exact versions through the `exact`
   setting in [`bunfig.toml`](bunfig.toml), so the rule covers hand-written edits.
 - The `no-restricted-imports` blocks in [`.oxlintrc.json`](.oxlintrc.json) hold the package

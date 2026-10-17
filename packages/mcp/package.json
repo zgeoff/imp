@@ -11,13 +11,13 @@
     "@impz/api": "workspace:*",
     "@impz/client": "workspace:*",
     "@impz/shared": "workspace:*",
-    "@modelcontextprotocol/server": "2.3.1",
+    "@modelcontextprotocol/server": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@faker-js/faker": "catalog:",
     "@impz/daemon": "workspace:*",
     "@impz/test-utils": "workspace:*",
-    "@modelcontextprotocol/client": "2.3.1"
+    "@modelcontextprotocol/client": "catalog:"
   }
 }
