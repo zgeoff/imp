@@ -272,9 +272,10 @@ impd checks every minute and once at start. A secret is refreshed when:
   240-hour token is refreshed with 24 hours left, so an impd stopped for an upgrade does not hand
   out an expired token.
 
-impd never refreshes because a guest got a 401. `impz secret refresh <name>` (`secrets.refresh`)
-forces one now, waits for it and prints the result; a refresh already running is the one it waits
-for. A refresh and a replace or a delete of the same secret never run together.
+A granted host's 401 also triggers a refresh ([refresh after a 401](#refresh-after-a-401)).
+`impz secret refresh <name>` (`secrets.refresh`) forces one now, waits for it and prints the result;
+a refresh already running is the one it waits for. A refresh and a replace or a delete of the same
+secret never run together.
 
 | State         | Meaning                                                                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -301,6 +302,23 @@ These are identifiers such as an email or an account id, not credentials, but an
 list secrets (even a read token) sees them. No token value is ever in the API, the CLI output, the
 database or the logs; a log line says only whether the refresh token rotated and when the access
 token expires.
+
+### Refresh after a 401
+
+A service can revoke an access token before its expiry: ChatGPT has answered 401 `token_expired` to
+a Codex token days before the expiry it was issued with. The guest's own client cannot refresh,
+because it holds only the placeholder, so impd refreshes for it.
+
+When a granted host answers 401 to an oauth secret's access token, the broker asks impd to refresh
+the secret. impd refreshes only a `ready` secret whose current access token is the one the host
+refused, that is at least 5 minutes old, and that no transient error holds back. The age floor keeps
+a guest from driving refreshes: a secret gets at most one such refresh every 5 minutes, whatever the
+guest sends.
+
+When a request without a body got the 401 and a new token is in place, the broker sends the request
+again once, with the new token, and the guest sees only that answer. The broker streamed the body of
+any other request upstream and cannot send it again, so the guest gets the 401, and its next request
+carries the new token. `impz audit` lists each send as its own row.
 
 ## How it works
 

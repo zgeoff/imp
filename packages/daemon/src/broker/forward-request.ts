@@ -15,6 +15,10 @@ export interface Credential {
 
   // the grant's method and path filter, or null for the whole host
   readonly filter: GrantFilter | null;
+
+  // for an oauth secret, when the refresh that gave this access token ran
+  // (ms, null before the first); null for every other kind
+  readonly oauth: { readonly refreshedAt: number | null } | null;
 }
 
 // where requests for a host go: the rule's upstream, else a test upstream
@@ -46,6 +50,14 @@ export interface ForwardDeps {
   readonly resolveUpstream: (host: string) => Upstream;
   readonly recordAudit: (entry: NewAuditEntry) => void;
   readonly fetch?: UpstreamFetch;
+
+  // After the host answered 401 to an oauth access token: true once a newer
+  // token is in place. The service can revoke a token before its expiry
+  // (docs/guides/connectors.md#refresh-after-a-401). Never rejects.
+  readonly refreshAfterRejection?: (
+    secretName: string,
+    refreshedAt: number | null,
+  ) => Promise<boolean>;
 }
 
 // Per RFC 9110 these describe one connection, not the message; the proxy
@@ -133,88 +145,136 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
       );
     }
 
-    const counts = { requestBytes: 0, responseBytes: 0 };
+    // one send upstream with one credential, with its own audit row
+    const sendWith = async (sent: Readonly<Credential>): Promise<Response> => {
+      const counts = { requestBytes: 0, responseBytes: 0 };
 
-    const sendAudit = (status: number): void => {
-      deps.recordAudit({
-        impId: deps.impId,
-        secretName: credential.secretName,
-        at: new Date(),
-        method: request.method,
-        host: deps.host,
-        path: url.pathname.slice(0, MAX_AUDIT_PATH),
-        status,
-        requestBytes: counts.requestBytes,
-        responseBytes: counts.responseBytes,
-        durationMs: Math.round(performance.now() - started),
-        reason: null,
+      const sendAudit = (status: number): void => {
+        deps.recordAudit({
+          impId: deps.impId,
+          secretName: sent.secretName,
+          at: new Date(),
+          method: request.method,
+          host: deps.host,
+          path: url.pathname.slice(0, MAX_AUDIT_PATH),
+          status,
+          requestBytes: counts.requestBytes,
+          responseBytes: counts.responseBytes,
+          durationMs: Math.round(performance.now() - started),
+          reason: null,
+        });
+      };
+
+      // The rule's upstream wins, and it came with the credential, so a rebind
+      // or a revoke applies to the next request. It is verified against the
+      // system roots when https, and sent with no TLS when http.
+      const upstream: Upstream =
+        sent.upstream === null
+          ? deps.resolveUpstream(deps.host)
+          : { origin: sent.upstream, ca: null };
+
+      const headers = buildEndToEndHeaders(request.headers);
+
+      headers.delete('host');
+
+      if (sent.filter !== null) {
+        for (const name of METHOD_OVERRIDE_HEADERS) {
+          headers.delete(name);
+        }
+      }
+
+      headers.set(sent.header, sent.value);
+
+      const body =
+        request.body === null
+          ? null
+          : countBytes(request.body, (bytes) => {
+              counts.requestBytes = bytes;
+            });
+
+      let response: Response;
+
+      try {
+        response = await fetchUpstream(`${upstream.origin}${url.pathname}${url.search}`, {
+          method: request.method,
+          headers,
+          body,
+          redirect: 'manual',
+
+          // the guest asked for the encoding; it gets the bytes as sent
+          decompress: false,
+          ...(upstream.ca !== null && { tls: { ca: upstream.ca } }),
+        });
+      } catch {
+        sendAudit(502);
+
+        return new Response(`could not reach ${deps.host}\n`, { status: 502 });
+      }
+
+      const responseBody =
+        response.body === null
+          ? null
+          : countBytes(response.body, (bytes) => {
+              counts.responseBytes = bytes;
+
+              sendAudit(response.status);
+            });
+
+      if (responseBody === null) {
+        sendAudit(response.status);
+      }
+
+      return new Response(responseBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: buildEndToEndHeaders(response.headers),
       });
     };
 
-    // The rule's upstream wins, and it came with the credential, so a rebind
-    // or a revoke applies to the next request. It is verified against the
-    // system roots when https, and sent with no TLS when http.
-    const upstream: Upstream =
-      credential.upstream === null
-        ? deps.resolveUpstream(deps.host)
-        : { origin: credential.upstream, ca: null };
+    const response = await sendWith(credential);
 
-    const headers = buildEndToEndHeaders(request.headers);
-
-    headers.delete('host');
-
-    if (credential.filter !== null) {
-      for (const name of METHOD_OVERRIDE_HEADERS) {
-        headers.delete(name);
-      }
+    if (
+      response.status !== 401 ||
+      credential.oauth === null ||
+      deps.refreshAfterRejection === undefined
+    ) {
+      return response;
     }
 
-    headers.set(credential.header, credential.value);
+    const refreshing = deps.refreshAfterRejection(
+      credential.secretName,
+      credential.oauth.refreshedAt,
+    );
 
-    const body =
-      request.body === null
-        ? null
-        : countBytes(request.body, (bytes) => {
-            counts.requestBytes = bytes;
-          });
+    // A body was streamed upstream and is gone, so only a request without
+    // one is sent again; the guest's next request gets the new token.
+    if (request.body !== null) {
+      return response;
+    }
 
-    let response: Response;
+    if (!(await refreshing)) {
+      return response;
+    }
 
+    // read again, so the retry follows a revoke, a rebind or a new filter
+    const renewed = await deps.findCredential(deps.impId, deps.host);
+
+    if (
+      renewed === null ||
+      renewed.oauth === null ||
+      renewed.oauth.refreshedAt === credential.oauth.refreshedAt ||
+      (renewed.filter !== null && !isRequestInFilter(renewed.filter, request.method, url.pathname))
+    ) {
+      return response;
+    }
+
+    // an upstream that hung up mid-body fails the cancel; the 401 is
+    // discarded either way, and the retry goes on
     try {
-      response = await fetchUpstream(`${upstream.origin}${url.pathname}${url.search}`, {
-        method: request.method,
-        headers,
-        body,
-        redirect: 'manual',
+      await response.body?.cancel();
+    } catch {}
 
-        // the guest asked for the encoding; it gets the bytes as sent
-        decompress: false,
-        ...(upstream.ca !== null && { tls: { ca: upstream.ca } }),
-      });
-    } catch {
-      sendAudit(502);
-
-      return new Response(`could not reach ${deps.host}\n`, { status: 502 });
-    }
-
-    const responseBody =
-      response.body === null
-        ? null
-        : countBytes(response.body, (bytes) => {
-            counts.responseBytes = bytes;
-
-            sendAudit(response.status);
-          });
-
-    if (responseBody === null) {
-      sendAudit(response.status);
-    }
-
-    return new Response(responseBody, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: buildEndToEndHeaders(response.headers),
-    });
+    return sendWith(renewed);
   };
 }
 

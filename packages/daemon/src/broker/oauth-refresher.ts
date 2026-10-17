@@ -35,13 +35,23 @@ type RefreshOutcome =
   // replaced or deleted during the call; the result was dropped
   | { readonly kind: 'dropped' }
   | { readonly kind: 'gone' }
-  | { readonly kind: 'unreadable' };
+  | { readonly kind: 'unreadable' }
+
+  // a refresh after a 401 that sent nothing: the token was refreshed since,
+  // or the checks turned it down
+  | { readonly kind: 'superseded' }
+  | { readonly kind: 'skipped' };
 
 export interface OAuthRefresher {
   // Refreshes now and answers after it ends. A refresh already running for
   // the secret is the one answered; there is never a second request.
   // `force` skips the backoff and the needs_login stop.
   readonly refresh: (name: string, force: boolean) => Promise<RefreshOutcome>;
+
+  // after a granted host refused the token of the refresh at `refreshedAt`:
+  // true once a newer token is in place; never rejects
+  // (docs/guides/connectors.md#refresh-after-a-401)
+  readonly refreshAfterRejection: (name: string, refreshedAt: number | null) => Promise<boolean>;
 
   // runs `work` after every earlier lock holder of the secret has ended
   readonly withLock: <T>(name: string, work: () => Promise<T>) => Promise<T>;
@@ -73,6 +83,10 @@ const MAX_LEAD_MS = 24 * HOUR_MS;
 const MIN_LEAD_MS = 3 * 60_000;
 const BACKOFF_BASE_MS = 60_000;
 const BACKOFF_CAP_MS = 30 * 60_000;
+
+// the youngest token a 401 refreshes: at most one such refresh per secret
+// in this time, whatever a guest sends
+const REJECTION_FLOOR_MS = 5 * 60_000;
 
 // error codes that mean the refresh token is dead
 const PERMANENT_CODES = new Set([
@@ -358,12 +372,84 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     return { kind: 'needs-login', error: failure.error };
   };
 
-  const startRefresh = (name: string, force: boolean): Promise<RefreshOutcome> => {
+  const startRefresh = async (name: string, force: boolean): Promise<RefreshOutcome> => {
     if (lifecycle.stopping) {
-      return Promise.resolve({ kind: 'transient', error: 'impd is stopping' });
+      return { kind: 'transient', error: 'impd is stopping' };
     }
 
-    return inflight.run(name, () => withLock(name, () => runRefresh(name, force)));
+    const run = (): Promise<RefreshOutcome> =>
+      inflight.run(name, () => withLock(name, () => runRefresh(name, force)));
+
+    const outcome = await run();
+
+    // A joined refresh after a 401 that sent nothing answers no caller that
+    // wanted a refresh of its own: a due one, or a forced one.
+    if (outcome.kind === 'skipped' || (force && outcome.kind === 'superseded')) {
+      return run();
+    }
+
+    return outcome;
+  };
+
+  // under the lock, so it sees the result of any refresh before it
+  const runRejectedRefresh = async (
+    name: string,
+    refreshedAt: number | null,
+  ): Promise<RefreshOutcome> => {
+    const secret = await findSecret(deps.db, name);
+
+    if (secret?.kind !== 'oauth' || secret.oauth === null) {
+      return { kind: 'gone' };
+    }
+
+    const state = loadState(name, secret);
+
+    if (state === null) {
+      return { kind: 'unreadable' };
+    }
+
+    // a refresh since the rejected token was sent already replaced it
+    if (state.refreshedAt !== refreshedAt) {
+      return state.status === 'ready' ? { kind: 'superseded' } : { kind: 'skipped' };
+    }
+
+    const at = now();
+    const wait = backoff.get(name);
+
+    if (
+      state.status !== 'ready' ||
+      (wait !== undefined && wait.nextAt > at) ||
+      (state.refreshedAt !== null && at - state.refreshedAt < REJECTION_FLOOR_MS)
+    ) {
+      return { kind: 'skipped' };
+    }
+
+    log(`impd: broker: oauth secret ${name}: a granted host refused its access token; refreshing`);
+
+    return runRefresh(name, false);
+  };
+
+  // on the same single flight as every other refresh, so a 401 joins a
+  // refresh under way and a tick or a forced refresh joins this one
+  const refreshAfterRejection = async (
+    name: string,
+    refreshedAt: number | null,
+  ): Promise<boolean> => {
+    if (lifecycle.stopping) {
+      return false;
+    }
+
+    try {
+      const outcome = await inflight.run(name, () =>
+        withLock(name, () => runRejectedRefresh(name, refreshedAt)),
+      );
+
+      return outcome.kind === 'refreshed' || outcome.kind === 'superseded';
+    } catch (error) {
+      log(`impd: broker: oauth secret ${name}: ${readErrorMessage(error)}`);
+
+      return false;
+    }
   };
 
   // Writes a result an earlier write failed on. The secret's row is read
@@ -457,6 +543,7 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
 
   return {
     refresh: startRefresh,
+    refreshAfterRejection,
     withLock,
     tick: runDueRefreshes,
     start: () => {

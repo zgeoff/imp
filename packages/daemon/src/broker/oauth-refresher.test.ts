@@ -2318,3 +2318,457 @@ test('it reports a secret of another kind as gone', async () => {
 
   expect(outcome).toStrictEqual({ kind: 'gone' });
 });
+
+test('it refreshes a rejected token older than five minutes and answers that a new one is in place', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-2', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        accessToken: 'fake-access-1',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 24 * 3_600_000,
+  });
+
+  const renewed = await refresher.refreshAfterRejection('codex', startedAt);
+
+  expect(renewed).toBeTrue();
+  expect(parseOAuthState(ctx.files.read(valueFile) ?? '')?.accessToken).toBe('fake-access-2');
+});
+
+test('it logs a refresh after a rejection without the token', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const lines: string[] = [];
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-2',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 3600,
+  });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        accessToken: 'fake-access-1',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: (line) => {
+      lines.push(line);
+    },
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 24 * 3_600_000,
+  });
+
+  await refresher.refreshAfterRejection('codex', startedAt);
+
+  expect(lines).toStrictEqual([
+    'impd: broker: oauth secret codex: a granted host refused its access token; refreshing',
+    'impd: broker: oauth secret codex refreshed; refresh token rotated: yes; expires 2030-01-02T01:00:00.000Z',
+  ]);
+});
+
+test('it sends nothing for a rejected token younger than five minutes', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-2', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 299_000,
+  });
+
+  const renewed = await refresher.refreshAfterRejection('codex', startedAt);
+
+  expect(renewed).toBeFalse();
+  expect(endpoint.requests).toBeEmpty();
+});
+
+test('it answers that a new token is in place without a call when a refresh already replaced the rejected one', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshedAt: startedAt + 3_600_000,
+        expiresAt: startedAt + 241 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 2 * 3_600_000,
+  });
+
+  const renewed = await refresher.refreshAfterRejection('codex', startedAt);
+
+  expect(renewed).toBeTrue();
+  expect(endpoint.requests).toBeEmpty();
+});
+
+test('it sends nothing after a rejection for a secret that needs a new sign-in', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+        status: 'needs_login',
+        error: 'invalid_grant',
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 24 * 3_600_000,
+  });
+
+  const renewed = await refresher.refreshAfterRejection('codex', startedAt);
+
+  expect(renewed).toBeFalse();
+  expect(endpoint.requests).toBeEmpty();
+});
+
+test('it sends nothing after a rejection while a transient error holds the secret back', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const requests: string[] = [];
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', (info) => {
+      requests.push(info.request.url);
+
+      return HttpResponse.json({ error: 'server_error' }, { status: 503 });
+    }),
+  );
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({ refreshedAt: startedAt, expiresAt: startedAt + 240 * 3_600_000 }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 230 * 3_600_000,
+  });
+
+  await refresher.tick();
+
+  const renewed = await refresher.refreshAfterRejection('codex', startedAt);
+
+  expect(renewed).toBeFalse();
+  expect(requests).toHaveLength(1);
+});
+
+test('it sends one request for rejections of one token at once', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-2', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 24 * 3_600_000,
+  });
+
+  const answers = await Promise.all([
+    refresher.refreshAfterRejection('codex', startedAt),
+    refresher.refreshAfterRejection('codex', startedAt),
+    refresher.refreshAfterRejection('codex', startedAt),
+  ]);
+
+  expect(answers).toStrictEqual([true, true, true]);
+  expect(endpoint.requests).toHaveLength(1);
+});
+
+test('it answers a forced refresh during a refresh after a rejection with that one, sending one request', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+  const reached = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+
+  server.use(endpoint.handler);
+
+  server.use(
+    http.post('https://auth.example.com/oauth/token', async () => {
+      reached.resolve();
+
+      await gate.promise;
+    }),
+  );
+
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-2', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 24 * 3_600_000,
+  });
+
+  const rejected = refresher.refreshAfterRejection('codex', startedAt);
+
+  await reached.promise;
+
+  const forced = refresher.refresh('codex', true);
+
+  gate.resolve();
+
+  const renewed = await rejected;
+  const outcome = await forced;
+
+  expect(renewed).toBeTrue();
+  expect(outcome).toStrictEqual({ kind: 'refreshed', rotated: false });
+  expect(endpoint.requests).toHaveLength(1);
+});
+
+test('it sends its own request for a forced refresh that joined a rejection the age floor turned down', async () => {
+  const ctx = await setupTest();
+
+  const startedAt = Date.parse('2030-01-01T00:00:00Z');
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+  endpoint.issue('fake-refresh-0', { access_token: 'fake-access-2', expires_in: 3600 });
+
+  const valueFile = buildValueFile('codex');
+
+  ctx.files.write(
+    valueFile,
+    formatOAuthState(
+      buildMockOAuthStateFile({
+        refreshToken: 'fake-refresh-0',
+        refreshedAt: startedAt,
+        expiresAt: startedAt + 240 * 3_600_000,
+      }),
+    ),
+  );
+
+  await createSecret(ctx.db, {
+    name: 'codex',
+    kind: 'oauth',
+    rules: [buildMockBrokerRule()],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+    valueFile,
+  });
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    now: () => startedAt + 60_000,
+  });
+
+  const rejected = refresher.refreshAfterRejection('codex', startedAt);
+  const forced = refresher.refresh('codex', true);
+
+  const renewed = await rejected;
+  const outcome = await forced;
+
+  expect(renewed).toBeFalse();
+  expect(outcome).toStrictEqual({ kind: 'refreshed', rotated: false });
+  expect(endpoint.requests).toHaveLength(1);
+});
+
+test('it answers a rejection for a secret that does not exist as no new token', async () => {
+  const ctx = await setupTest();
+
+  const refresher = createOAuthRefresher({
+    db: ctx.db,
+    files: ctx.files,
+    log: () => {},
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+  });
+
+  const renewed = await refresher.refreshAfterRejection('nothing', null);
+
+  expect(renewed).toBeFalse();
+});
