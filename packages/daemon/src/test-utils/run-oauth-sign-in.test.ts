@@ -84,5 +84,5 @@ test('it throws, naming Continue, when nothing approves the sign-in', async () =
       },
       () => {},
     ),
-  ).rejects.toThrowWithMessage(Error, /^Continue answered 200/);
+  ).rejects.toThrowWithMessage(Error, /^Continue answered 200/u);
 });

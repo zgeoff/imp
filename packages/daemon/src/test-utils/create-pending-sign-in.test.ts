@@ -66,5 +66,5 @@ test('it throws, naming authorize, for a client the route does not know', async 
       redirectURI: 'https://client.example/callback',
       scope: 'read',
     }),
-  ).rejects.toThrowWithMessage(Error, /^authorize answered/);
+  ).rejects.toThrowWithMessage(Error, /^authorize answered/u);
 });
