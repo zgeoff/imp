@@ -1,3 +1,4 @@
+import { watchEvents } from '@impz/client';
 import type { Imp } from '@impz/client';
 import { formatBytes } from '@impz/shared';
 import { defineCommand } from '../define-command';
@@ -154,19 +155,21 @@ export const topCommand = defineCommand({
 
       process.stdout.write(HIDE_CURSOR);
 
-      void (async () => {
+      const watchRefreshes = async (): Promise<void> => {
         try {
-          const events = await client.events.stream();
-
-          for await (const event of events) {
-            if (event.ev !== 'ImpAdded' || event.reason !== 'snapshot') {
-              refresh.wake();
-            }
-          }
+          await watchEvents(client, {
+            onEvent: (event) => {
+              if (event.ev !== 'ImpAdded' || event.reason !== 'snapshot') {
+                refresh.wake();
+              }
+            },
+          });
         } catch {
           // the clock still refreshes
         }
-      })();
+      };
+
+      void watchRefreshes();
 
       for (let listed = imps; ; listed = await client.imps.list()) {
         process.stdout.write(`\u001B[H\u001B[2J${formatTop(listed)}\n`);

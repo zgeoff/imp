@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { ImageRefPrefixSchema, ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@impz/api';
 import type { Scope } from '@impz/api';
+import { requireFeatures } from '@impz/client';
 import { defineCommand } from '../define-command';
 import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
-import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
@@ -163,27 +163,22 @@ const newCommand = defineCommand({
       const prefixArg = context.args['image-ref-prefix'];
       const imageRefPrefix = prefixArg === undefined ? undefined : parseImageRefPrefix(prefixArg);
 
-      if (imageRefPrefix !== undefined) {
-        if (scope !== 'manage' || imps === undefined) {
-          throw new UsageError('--image-ref-prefix needs --scope manage and --imps');
-        }
-
-        await requireFeature(
-          client,
-          'tokenImageAdd',
-          'drop --image-ref-prefix and make a token that adds no image',
-        );
+      if (imageRefPrefix !== undefined && (scope !== 'manage' || imps === undefined)) {
+        throw new UsageError('--image-ref-prefix needs --scope manage and --imps');
       }
 
       if (grantable !== undefined) {
         requireGrantScope(scope, imps);
-
-        await requireFeature(
-          client,
-          'grantableTokens',
-          'drop --grantable and make the token without that limit',
-        );
       }
+
+      await requireFeatures(client, {
+        ...(imageRefPrefix !== undefined && {
+          tokenImageAdd: 'drop --image-ref-prefix and make a token that adds no image',
+        }),
+        ...(grantable !== undefined && {
+          grantableTokens: 'drop --grantable and make the token without that limit',
+        }),
+      });
 
       const keyFile = context.args['ssh-key'];
       const sshKeys = keyFile === undefined ? undefined : readKeyFile(keyFile);
@@ -245,8 +240,8 @@ const setCommand = defineCommand({
       // an older impd needs `grantable` on every update, and would drop the
       // prefix unread
       await (imageRefPrefix === undefined
-        ? requireFeature(client, 'tokenUpdate', 'not know tokens.update')
-        : requireFeature(client, 'tokenImageAdd', 'not change the image ref prefix'));
+        ? requireFeatures(client, { tokenUpdate: 'not know tokens.update' })
+        : requireFeatures(client, { tokenImageAdd: 'not change the image ref prefix' }));
 
       const token = await client.tokens.update({
         name: context.args.name,

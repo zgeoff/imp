@@ -12,7 +12,8 @@ import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { server } from '@impz/test-utils/mock-server';
-import { http } from 'msw';
+import { HttpResponse, http } from 'msw';
+import { createRpcClient } from '../create-rpc-client';
 import { checkImpdAccess } from './check-impd-access';
 
 // impd booted in process on stub VMs, served at http://impd.test/ through
@@ -126,23 +127,42 @@ async function setupTest() {
 
 test('it reports an impd that takes the token as reachable', async () => {
   const ctx = await setupTest();
-  const access = await checkImpdAccess(ctx.url, ctx.rootToken);
+  const access = await checkImpdAccess(createRpcClient({ url: ctx.url, token: ctx.rootToken }));
 
   expect(access).toBe('reachable');
 });
 
 test('it reports an impd that rejects the token as unauthorized', async () => {
   const ctx = await setupTest();
-  const access = await checkImpdAccess(ctx.url, 'wrong');
+  const access = await checkImpdAccess(createRpcClient({ url: ctx.url, token: 'wrong' }));
 
   expect(access).toBe('unauthorized');
 });
 
+test('it reports an older impd that has no system.features as reachable', async () => {
+  // oRPC's router answers a procedure it does not know with NOT_FOUND
+  server.use(
+    http.post('http://impd.test/rpc/system/features', () =>
+      HttpResponse.json(
+        { json: { defined: false, code: 'NOT_FOUND', status: 404, message: 'Not found' } },
+        { status: 404 },
+      ),
+    ),
+  );
+
+  const access = await checkImpdAccess(
+    createRpcClient({ url: 'http://impd.test', token: 'root-token' }),
+  );
+
+  expect(access).toBe('reachable');
+});
+
 test('it reports an impd it cannot reach as unreachable', async () => {
   // nothing listens on a free port
+  const port = findFreePorts(1).take();
+
   const access = await checkImpdAccess(
-    `http://127.0.0.1:${String(findFreePorts(1).take())}`,
-    'root-token',
+    createRpcClient({ url: `http://127.0.0.1:${String(port)}`, token: 'root-token' }),
   );
 
   expect(access).toBe('unreachable');

@@ -31,8 +31,7 @@ import {
   STUB_GENERATION,
   buildStubExecAgent,
 } from '../test-utils/build-stub-exec-agent';
-import { buildStubImpdBeforeExecDropSysAdmin } from '../test-utils/build-stub-impd-before-exec-drop-sys-admin';
-import { buildStubImpdBeforeExecRequire } from '../test-utils/build-stub-impd-before-exec-require';
+import { buildStubImpdWithoutFeature } from '../test-utils/build-stub-impd-without-feature';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
 import { InvalidStateError } from './invalid-state-error';
@@ -502,7 +501,10 @@ test("#openExec starts a command that requires the broker with the broker's vari
 test('#openExec starts nothing that requires anything on an impd without execRequire', async () => {
   const ctx = await setupTest();
 
-  const older = buildStubImpdBeforeExecRequire((request) => ctx.impd.api.app.handle(request));
+  const older = buildStubImpdWithoutFeature(
+    (request) => ctx.impd.api.app.handle(request),
+    'execRequire',
+  );
 
   server.use(http.all('http://impd.test/*', (info) => older(info.request)));
 
@@ -527,7 +529,10 @@ test('#openExec starts nothing that requires anything on an impd without execReq
 test('#openExec starts nothing that drops CAP_SYS_ADMIN on an impd without execDropSysAdmin', async () => {
   const ctx = await setupTest();
 
-  const older = buildStubImpdBeforeExecDropSysAdmin((request) => ctx.impd.api.app.handle(request));
+  const older = buildStubImpdWithoutFeature(
+    (request) => ctx.impd.api.app.handle(request),
+    'execDropSysAdmin',
+  );
 
   server.use(http.all('http://impd.test/*', (info) => older(info.request)));
 

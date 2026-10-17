@@ -39,7 +39,7 @@ import { startStubDialAgent } from '@impz/daemon/src/test-utils/start-stub-dial-
 import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
 import { createImpClient } from './create-imp-client';
-import { formatTunnelClose, readTunnelServerMessage, startProxy } from './proxy-client';
+import { formatTunnelClose, startProxy } from './proxy-client';
 import { sendLocalRequest } from './test-utils/send-local-request';
 import { runCli } from './test-utils/start-cli';
 import { startStubTunnelFaultProxy } from './test-utils/start-stub-tunnel-fault-proxy';
@@ -745,21 +745,6 @@ test('#runProxy prints the usage error for a proxy with no port and no reverse f
     stderr: 'impz: name a port to forward, or a --reverse forward\n',
     code: 2,
   });
-});
-
-test('#readTunnelServerMessage reads a control message impd sends', () => {
-  expect(readTunnelServerMessage('{"type":"ack","bytes":4096}')).toStrictEqual({
-    type: 'ack',
-    bytes: 4096,
-  });
-});
-
-test('#readTunnelServerMessage refuses text that is not JSON as a broken protocol', () => {
-  expect(readTunnelServerMessage('not json')).toBeNull();
-});
-
-test('#readTunnelServerMessage refuses JSON that is no message of the protocol', () => {
-  expect(readTunnelServerMessage('{"type":"hello"}')).toBeNull();
 });
 
 test.each([

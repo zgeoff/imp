@@ -1,4 +1,5 @@
 import type { Image, ImageOpEvent } from '@impz/api';
+import { readFeatures } from '@impz/client';
 import type { ImpClient } from '../create-imp-client';
 import { createBuildStatus } from './build-status';
 
@@ -41,9 +42,9 @@ export async function runOnHostBuild(
 // An impd from before the streams answers only when the work ends, so a
 // pull or a build longer than the client's fetch waits fails there
 async function hasImageOpStream(client: Pick<ImpClient, 'system'>): Promise<boolean> {
-  const info = await client.system.info();
+  const features = await readFeatures(client);
 
-  return info.features?.imageOpStream === true;
+  return features.imageOpStream === true;
 }
 
 async function readImageOp(

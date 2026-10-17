@@ -1,11 +1,11 @@
 import { isAbsolute } from 'node:path';
 import type { Image } from '@impz/api';
+import { requireFeatures } from '@impz/client';
 import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
 import { formatImageBuilds, formatImages, formatOutput } from '../format-output';
 import { runImageBuild } from '../image/run-image-build';
 import { runImageAdd, runOnHostBuild } from '../image/run-image-op';
-import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
@@ -101,7 +101,7 @@ const buildsCommand = defineCommand({
   args: { json: jsonArg },
   run: (context) =>
     runAction(context.host, async (client) => {
-      await requireFeature(client, 'imageBuilds', 'answer images.builds with not found');
+      await requireFeatures(client, { imageBuilds: 'answer images.builds with not found' });
 
       const builds = await client.images.builds();
 

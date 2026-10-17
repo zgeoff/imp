@@ -523,5 +523,5 @@ test('it refuses to read a log from an impd from before sessionLog, before any r
     code: 1,
   });
 
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });

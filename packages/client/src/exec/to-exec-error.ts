@@ -4,6 +4,7 @@ import {
   InvalidResumeDataSchema,
   NoSessionDataSchema,
 } from '@impz/api';
+import { match } from 'ts-pattern';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
 import { InvalidStateError } from './invalid-state-error';
@@ -11,45 +12,49 @@ import { NoSessionError } from './no-session-error';
 import type { ExecOutcome } from './open-exec-session';
 
 export function toExecError(outcome: Exclude<ExecOutcome, { kind: 'exit' }>): ExecError {
-  if (outcome.kind === 'failed') {
-    return toFailedError(outcome.code, outcome.message, outcome.data);
-  }
+  return (
+    match(outcome)
+      .with({ kind: 'failed' }, (failed) => toFailedError(failed.code, failed.message, failed.data))
+      .with({ kind: 'unauthorized' }, (refused) => {
+        const message =
+          refused.ticketRefused === true
+            ? 'impd refused the exec ticket: it expired (30 s) or was used already'
+            : 'impd rejected the token';
 
-  if (outcome.kind === 'unauthorized') {
-    const message =
-      outcome.ticketRefused === true
-        ? 'impd refused the exec ticket: it expired (30 s) or was used already'
-        : 'impd rejected the token';
+        return new ExecError('UNAUTHORIZED', message);
+      })
+      .with(
+        { kind: 'unreachable' },
+        (unreachable) => new ExecError('UNREACHABLE', `cannot reach impd (${unreachable.detail})`),
+      )
 
-    return new ExecError('UNAUTHORIZED', message);
-  }
-
-  if (outcome.kind === 'unreachable') {
-    return new ExecError('UNREACHABLE', `cannot reach impd (${outcome.detail})`);
-  }
-
-  // data.reason: `taken_over`, `slow` or `lost`; the session runs on. With
-  // offsets, data.offset is where to resume.
-  if (outcome.kind === 'detached') {
-    return new ExecError('DETACHED', `detached from the session (${outcome.reason})`, {
-      data: {
-        reason: outcome.reason,
-        ...(outcome.offset !== undefined && { offset: outcome.offset }),
-      },
-    });
-  }
-
-  if (outcome.kind === 'closed') {
-    return outcome.closeCode === EXEC_CLOSE_RESTARTING
-      ? new ExecError('RESTARTING', 'impd is restarting')
-      : new ExecError('CONNECTION_CLOSED', `exec connection closed (${outcome.reason})`);
-  }
-
-  if (outcome.kind === 'bad_message') {
-    return new ExecError('BAD_MESSAGE', `bad message from impd: ${outcome.detail}`);
-  }
-
-  return new ExecError('LOCAL_ERROR', 'an output handler threw', { cause: outcome.error });
+      // data.reason: `taken_over`, `slow` or `lost`; the session runs on.
+      // With offsets, data.offset is where to resume.
+      .with(
+        { kind: 'detached' },
+        (detached) =>
+          new ExecError('DETACHED', `detached from the session (${detached.reason})`, {
+            data: {
+              reason: detached.reason,
+              ...(detached.offset !== undefined && { offset: detached.offset }),
+            },
+          }),
+      )
+      .with({ kind: 'closed' }, (closed) =>
+        closed.closeCode === EXEC_CLOSE_RESTARTING
+          ? new ExecError('RESTARTING', 'impd is restarting')
+          : new ExecError('CONNECTION_CLOSED', `exec connection closed (${closed.reason})`),
+      )
+      .with(
+        { kind: 'bad_message' },
+        (bad) => new ExecError('BAD_MESSAGE', `bad message from impd: ${bad.detail}`),
+      )
+      .with(
+        { kind: 'local_error' },
+        (local) => new ExecError('LOCAL_ERROR', 'an output handler threw', { cause: local.error }),
+      )
+      .exhaustive()
+  );
 }
 
 // the three codes a session client acts on become their own classes; data

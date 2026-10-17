@@ -51,6 +51,16 @@ stops, calls fail with `SERVICE_UNAVAILABLE`, and while it restarts, `fetch` can
 `{ retryUnavailable: { attempts, delayMs } }` to wait for it to come back. `RAM_BUDGET_EXCEEDED` is
 never retried.
 
+`watchEvents(imp, { onEvent })` follows `events.stream`: every imp first, then each change. `name`
+keeps one imp's events, and `reconnect: { delayMs }` opens a fresh stream whenever one ends, until
+impd refuses the call or `signal` aborts. `onOpen` runs as each stream opens, so a caller can catch
+up on what changed while it was away.
+
+`openForwardTunnel` relays one connection to a port in the imp over `/tunnel`, and
+`openReverseForward` listens in the imp and relays each client back. `openToolExec` runs an agent
+tool such as `tar` over `/exec` with acked stdin and stdout. Each takes a `connect` that opens the
+WebSocket, and `resolveImpdWebSocketUrl` gives the URL for an impd endpoint.
+
 ## Run commands
 
 `imp.run` runs a command to its exit and collects its output. Without `stdin`, stdin closes at once.
@@ -193,8 +203,8 @@ A 401 means the token is wrong.
 
 ## Features
 
-An older impd drops an input field it does not know, and the call succeeds without it. Check
-`system.info().features` before you send a field that a later impd added:
+An older impd drops an input field it does not know, and the call succeeds without it. Check its
+features before you send a field that a later impd added:
 
 | Field                                             | Feature           | Since  |
 | ------------------------------------------------- | ----------------- | ------ |
@@ -203,12 +213,14 @@ An older impd drops an input field it does not know, and the call succeeds witho
 | `require` on `openExec`                           | `execRequire`     | 0.30.0 |
 | `secretFiles`, `removeSecretFiles` on `system.gc` | `secretFilesGc`   | 0.31.0 |
 
-```ts
-const info = await imp.system.info();
+`requireFeatures` reads the flags once, from `system.features`, or from `system.info` on an impd
+older than it. It throws a `MissingFeatureError` for the first feature missing, with what that impd
+would do instead:
 
-if (info.features?.grantableTokens !== true) {
-  throw new Error('this impd makes tokens without a grantable list');
-}
+```ts
+import { requireFeatures } from '@impz/client';
+
+await requireFeatures(imp, { grantableTokens: 'make the token without a grantable list' });
 ```
 
 Without the `secretRebind` feature, a `replace` that changes the hosts keeps every grant. With it,

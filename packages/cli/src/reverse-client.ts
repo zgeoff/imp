@@ -1,7 +1,7 @@
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
 import type { ImpState } from '@impz/api';
-import { ORPCError, openReverseForward } from '@impz/client';
+import { ORPCError, openReverseForward, watchEvents } from '@impz/client';
 import type {
   ReverseForward,
   ReverseForwardEnd,
@@ -9,8 +9,10 @@ import type {
   ReverseRelay,
   ReverseRelayHandlers,
 } from '@impz/client';
+import { P, match } from 'ts-pattern';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
+import { openBunWebSocket } from './open-bun-web-socket';
 import type { ReverseLocal, ReverseSpec } from './parse-reverse';
 import { waitOrAbort } from './wait-or-abort';
 
@@ -19,13 +21,14 @@ export interface ReverseIo {
   // a line for the user on stderr, after `impz: `
   readonly writeNotice: (text: string) => void;
 
-  // the imp's state now, then each change; throws once the imp is gone.
-  // Reading it never wakes the imp. impd's event stream by default.
+  // tells onState the imp's state now, then each change, without waking
+  // it; rejects once the imp is gone. impd's event stream by default.
   readonly watchImp?: (
     config: CliConfig,
     name: string,
     signal: AbortSignal,
-  ) => AsyncIterable<ImpState>;
+    onState: (state: ImpState) => void,
+  ) => Promise<void>;
 
   // resolves after `ms`, or at once when the signal aborts; a timer by
   // default
@@ -62,48 +65,40 @@ const PROCESS_IO: ReverseIo = {
 
 // The imp's state from the event stream, which opens with every imp. The
 // stream ends when impd restarts; it opens again after RETRY_MS.
-async function* readImpStates(
+function watchImpStates(
   config: CliConfig,
   name: string,
   signal: AbortSignal,
-  wait: (ms: number, signal: AbortSignal) => Promise<void>,
-): AsyncGenerator<ImpState> {
+  onState: (state: ImpState) => void,
+): Promise<void> {
   const client = createImpClient(config);
-  const state = { removed: false };
 
-  while (!signal.aborted) {
-    try {
-      // NOT_FOUND for an imp destroyed before the stream opened
-      await client.imps.get({ name }, { signal });
+  return watchEvents(client, {
+    name,
+    signal,
+    reconnect: { delayMs: RETRY_MS },
 
-      const stream = await client.events.stream(undefined, { signal });
-
-      for await (const event of stream) {
-        if (event.ev === 'ImpRemoved' && event.imp.name === name) {
-          state.removed = true;
-          break;
-        }
-
-        if ((event.ev === 'ImpAdded' || event.ev === 'ImpChanged') && event.imp.name === name) {
-          yield event.imp.state;
+    // NOT_FOUND for an imp destroyed before the stream opened; an impd that
+    // is down fails the stream too, which opens again
+    onOpen: async () => {
+      try {
+        await client.imps.get({ name }, { signal });
+      } catch (error) {
+        if (error instanceof ORPCError && error.status >= 400 && error.status < 500) {
+          throw error;
         }
       }
-    } catch (error) {
-      // an impd that refuses the stream refuses it again; one that is down
-      // or restarting answers later
-      const refused = error instanceof ORPCError && error.status >= 400 && error.status < 500;
-
-      if (signal.aborted || refused) {
-        throw error;
+    },
+    onEvent: (event) => {
+      if (event.ev === 'ImpRemoved') {
+        throw new Error(`${name} was destroyed`);
       }
-    }
 
-    if (state.removed) {
-      throw new Error(`${name} was destroyed`);
-    }
-
-    await wait(RETRY_MS, signal);
-  }
+      if (event.ev === 'ImpAdded' || event.ev === 'ImpChanged') {
+        onState(event.imp.state);
+      }
+    },
+  });
 }
 
 export function formatLocal(local: ReverseLocal): string {
@@ -173,101 +168,60 @@ function openLocalRelay(
 }
 
 function formatEnd(end: ReverseForwardEnd): string {
-  if (end.kind === 'failed') {
-    return `${end.code ?? 'error'}: ${end.message}`;
-  }
-
-  if (end.kind === 'closed' && end.code === CLOSE_ABNORMAL) {
-    return 'could not reach impd';
-  }
-
-  if (end.kind === 'closed') {
-    return `impd closed it (code ${String(end.code)})`;
-  }
-
-  return `its listener in the imp ended`;
-}
-
-// the next value, or null once `timeout` settled first; a read the timeout
-// left open waits for the next call, and its failure waits with it
-interface StateReader {
-  readonly read: (timeout: Promise<void> | null) => Promise<IteratorResult<ImpState> | null>;
-}
-
-type StateRead = IteratorResult<ImpState> | { readonly failure: unknown };
-
-function createStateReader(next: () => Promise<IteratorResult<ImpState>>): StateReader {
-  let pending: Promise<StateRead> | null = null;
-
-  const readNext = async (): Promise<StateRead> => {
-    try {
-      return await next();
-    } catch (error) {
-      return { failure: error };
-    }
-  };
-
-  const readResult = (result: Readonly<StateRead>): IteratorResult<ImpState> => {
-    pending = null;
-
-    if ('failure' in result) {
-      throw result.failure;
-    }
-
-    return result;
-  };
-
-  return {
-    read: async (timeout) => {
-      pending ??= readNext();
-
-      const reading = pending;
-
-      if (timeout === null) {
-        const result = await reading;
-
-        return readResult(result);
-      }
-
-      const result = await Promise.race([reading, timeout.then(() => null)]);
-
-      return result === null ? null : readResult(result);
-    },
-  };
+  return match(end)
+    .with({ kind: 'failed' }, (failed) => `${failed.code ?? 'error'}: ${failed.message}`)
+    .with({ kind: 'closed', code: CLOSE_ABNORMAL }, () => 'could not reach impd')
+    .with({ kind: 'closed' }, (closed) => `impd closed it (code ${String(closed.code)})`)
+    .with({ kind: P.union('lost', 'stopped') }, () => 'its listener in the imp ended')
+    .exhaustive();
 }
 
 // Resolves once the imp runs again. After a lost listener it first waits for
 // the imp to leave `running`, so a forward never wakes the imp it slept: an
 // imp still running once `grace` settles lost only its listener.
 async function waitForWake(
-  next: () => Promise<IteratorResult<ImpState>>,
+  watch: (onState: (state: ImpState) => void) => Promise<void>,
   grace: Promise<void> | null,
   onState: (state: ImpState) => void,
 ): Promise<void> {
-  const reader = createStateReader(next);
-  let left = grace === null;
+  const woke = Promise.withResolvers<void>();
+  const progress = { left: grace === null };
 
-  for (;;) {
-    const timeout = left ? null : grace;
+  const waitForGrace = async (graceEnd: Promise<void>): Promise<void> => {
+    await graceEnd;
 
-    const result = await reader.read(timeout);
-
-    if (result === null) {
-      return;
+    if (!progress.left) {
+      woke.resolve();
     }
+  };
 
-    if (result.done === true) {
-      throw new Error('the event stream ended');
+  const readState = (state: ImpState): void => {
+    onState(state);
+
+    if (state !== 'running') {
+      progress.left = true;
+    } else if (progress.left) {
+      woke.resolve();
     }
+  };
 
-    onState(result.value);
+  const runWatch = async (): Promise<void> => {
+    try {
+      await watch(readState);
 
-    if (result.value !== 'running') {
-      left = true;
-    } else if (left) {
-      return;
+      woke.reject(new Error('the event stream ended'));
+    } catch (error) {
+      woke.reject(error);
     }
+  };
+
+  if (grace !== null) {
+    void waitForGrace(grace);
   }
+
+  void runWatch();
+
+  await woke.promise;
 }
 
 // A reverse forward that outlives sleeps: when its listener in the imp ends,
@@ -282,12 +236,7 @@ export async function startReverseForward(
   const watching = new AbortController();
 
   const wait = io.wait ?? waitOrAbort;
-
-  const watchImp =
-    io.watchImp ??
-    ((watched: CliConfig, impName: string, signal: AbortSignal) =>
-      readImpStates(watched, impName, signal, wait));
-
+  const watchImp = io.watchImp ?? watchImpStates;
   const failed = Promise.withResolvers<Error>();
   const state: { forward: ReverseForward | null } = { forward: null };
   const local = formatLocal(spec.local);
@@ -298,7 +247,7 @@ export async function startReverseForward(
       token: config.token,
       name,
       guest: spec.guest,
-      connect: (url, headers) => new WebSocket(url, { headers: { ...headers } }),
+      connect: openBunWebSocket,
       onConnection: (accept) => {
         openLocalRelay(accept, spec.local, io.writeNotice);
       },
@@ -319,13 +268,15 @@ export async function startReverseForward(
 
     const signal = AbortSignal.any([watching.signal, waiting.signal]);
     const grace = end.kind === 'lost' ? wait(LOST_GRACE_MS, signal) : null;
-    const states = watchImp(config, name, signal)[Symbol.asyncIterator]();
 
     try {
-      await waitForWake(() => states.next(), grace, io.onWatchedState ?? (() => {}));
+      await waitForWake(
+        (onState) => watchImp(config, name, signal, onState),
+        grace,
+        io.onWatchedState ?? (() => {}),
+      );
     } finally {
       waiting.abort();
-      void states.return?.();
     }
 
     if (watching.signal.aborted) {

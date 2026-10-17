@@ -1,4 +1,4 @@
-import { ORPCError } from '@impz/client';
+import { MissingFeatureError, ORPCError } from '@impz/client';
 import * as z from 'zod';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
@@ -50,6 +50,12 @@ export function formatError(error: unknown, config: CliConfig | null = null): st
     const data: unknown = error.data;
 
     return `${code}: ${error.message}${formatIssues(code, data)}`;
+  }
+
+  // the client's refusal names what an older impd would do; the CLI says
+  // how to get past it
+  if (error instanceof MissingFeatureError) {
+    return `${error.message}. Upgrade impd, or use an older imp CLI`;
   }
 
   if (error instanceof Error) {

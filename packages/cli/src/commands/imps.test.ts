@@ -257,7 +257,7 @@ test('#exec runs nothing for --require on an impd older than 0.30.0, without exe
     code: 1,
   });
 
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });
 
 test('#console refuses --log without a session before any call to impd', async () => {
@@ -290,7 +290,7 @@ test('#console makes no call past the feature check for --log on an impd from be
     code: 1,
   });
 
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });
 
 test('#ls lists every saved host and exits 3 when one of them fails', async () => {

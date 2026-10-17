@@ -165,7 +165,7 @@ test('it makes no database copy on an impd from before databaseCopy (0.30.0)', a
     code: 1,
   });
 
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });
 
 test('it prints the database copy’s fields in the order a restore script reads them', async () => {

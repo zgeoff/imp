@@ -5,10 +5,11 @@ import {
   TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_PATH,
   TUNNEL_WINDOW_BYTES,
-  TunnelServerMessageSchema,
 } from '@impz/api';
 import type { TunnelClientMessage, TunnelListen, TunnelServerMessage } from '@impz/api';
-import { resolveImpdUrl } from '../resolve-impd-url';
+import { P, match } from 'ts-pattern';
+import { resolveImpdWebSocketUrl } from '../resolve-impd-web-socket-url';
+import { parseTunnelServerMessage } from './parse-tunnel-server-message';
 
 // Where a reverse forward listens in the imp: a unix socket at a path (null
 // for one the agent makes under /run/imp/forward), or a port on the imp's
@@ -77,17 +78,6 @@ export interface ReverseForward {
   readonly stop: () => void;
 }
 
-// null for text that is not a server message
-function parseMessage(text: string): TunnelServerMessage | null {
-  try {
-    const parsed = TunnelServerMessageSchema.safeParse(JSON.parse(text));
-
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
 function buildListenMessage(name: string, guest: ReverseGuest): TunnelClientMessage {
   return guest.network === 'tcp'
     ? { type: 'listen', name, network: 'tcp', port: guest.port }
@@ -151,31 +141,38 @@ function openRelay(
   };
 
   const handleControl = (message: TunnelServerMessage): void => {
-    if (message.type === 'opened') {
-      state.opened = true;
+    match(message)
+      .with({ type: 'opened' }, () => {
+        state.opened = true;
 
-      for (const data of pending.splice(0)) {
-        sendFrames(data);
-      }
+        for (const data of pending.splice(0)) {
+          sendFrames(data);
+        }
 
-      if (state.peerEof) {
-        sendText({ type: 'eof' });
-      }
-    } else if (message.type === 'eof') {
-      state.guestEof = true;
+        if (state.peerEof) {
+          sendText({ type: 'eof' });
+        }
+      })
+      .with({ type: 'eof' }, () => {
+        state.guestEof = true;
 
-      handlers.onEof();
-    } else if (message.type === 'ack') {
-      state.unacked -= message.bytes;
+        handlers.onEof();
+      })
+      .with({ type: 'ack' }, (ack) => {
+        state.unacked -= ack.bytes;
 
-      if (state.unacked <= TUNNEL_WINDOW_BYTES) {
-        wakeWaiters();
-      }
-    } else {
-      ws.close(TUNNEL_CLOSE_NORMAL, 'relay failed');
+        if (state.unacked <= TUNNEL_WINDOW_BYTES) {
+          wakeWaiters();
+        }
+      })
 
-      stopRelay(true);
-    }
+      // an error, or a message only the listening socket gets
+      .with({ type: P.union('error', 'listening', 'connection') }, () => {
+        ws.close(TUNNEL_CLOSE_NORMAL, 'relay failed');
+
+        stopRelay(true);
+      })
+      .exhaustive();
   };
 
   ws.addEventListener('open', () => {
@@ -189,7 +186,7 @@ function openRelay(
       return;
     }
 
-    const message = parseMessage(String(event.data));
+    const message = parseTunnelServerMessage(String(event.data));
 
     if (message === null) {
       ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
@@ -251,9 +248,7 @@ function openRelay(
 // `exec` on the imp. Alone it keeps the imp awake no more than open relays
 // do, and a sleep ends it as `lost` (docs/guides/reverse-forwards.md).
 export function openReverseForward(options: Readonly<ReverseForwardOptions>): ReverseForward {
-  const url = resolveImpdUrl(options.baseUrl, TUNNEL_PATH);
-
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = resolveImpdWebSocketUrl(options.baseUrl, TUNNEL_PATH);
 
   const headers: Record<string, string> =
     options.token === null ? {} : { authorization: `Bearer ${options.token}` };
@@ -320,17 +315,24 @@ export function openReverseForward(options: Readonly<ReverseForwardOptions>): Re
   };
 
   const handleControl = (message: TunnelServerMessage): void => {
-    if (message.type === 'listening') {
-      state.listener = message.listener;
+    match(message)
+      .with({ type: 'listening' }, (listen) => {
+        state.listener = listen.listener;
 
-      listening.resolve({ path: message.path, port: message.port });
-    } else if (message.type === 'connection') {
-      openClientRelay(message.id);
-    } else if (message.type === 'error') {
-      stopForward({ kind: 'failed', code: message.code ?? null, message: message.message });
-    } else {
-      ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
-    }
+        listening.resolve({ path: listen.path, port: listen.port });
+      })
+      .with({ type: 'connection' }, (connection) => {
+        openClientRelay(connection.id);
+      })
+      .with({ type: 'error' }, (failure) => {
+        stopForward({ kind: 'failed', code: failure.code ?? null, message: failure.message });
+      })
+
+      // messages only a relay socket gets
+      .with({ type: P.union('opened', 'eof', 'ack') }, () => {
+        ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
+      })
+      .exhaustive();
   };
 
   ws.binaryType = 'arraybuffer';
@@ -340,7 +342,8 @@ export function openReverseForward(options: Readonly<ReverseForwardOptions>): Re
   });
 
   ws.addEventListener('message', (event) => {
-    const message = event.data instanceof ArrayBuffer ? null : parseMessage(String(event.data));
+    const message =
+      event.data instanceof ArrayBuffer ? null : parseTunnelServerMessage(String(event.data));
 
     if (message === null) {
       ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');

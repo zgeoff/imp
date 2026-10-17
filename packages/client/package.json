@@ -10,7 +10,8 @@
   },
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./test-utils/*": "./src/test-utils/*.ts"
   },
   "scripts": {
     "build": "tsdown"
@@ -18,14 +19,18 @@
   "dependencies": {
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
+    "p-retry": "catalog:",
+    "ts-pattern": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@impz/api": "workspace:*",
     "@impz/daemon": "workspace:*",
+    "@impz/local-tar": "workspace:*",
     "@impz/shared": "workspace:*",
     "@impz/test-utils": "workspace:*",
     "msw": "catalog:",
+    "tar-stream": "catalog:",
     "tiny-invariant": "catalog:",
     "tsdown": "catalog:"
   },

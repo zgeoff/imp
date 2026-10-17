@@ -8,13 +8,13 @@ import {
   encodeExecFrame,
 } from '@impz/api';
 import type { ExecClientMessage, ExecServerMessage, ExecTool } from '@impz/api';
-import type { ExecSocket } from '@impz/client';
-import { buildWebSocketUrl } from '../build-websocket-url';
-import type { CliConfig } from '../cli-config';
+import { match } from 'ts-pattern';
+import { resolveImpdWebSocketUrl } from '../resolve-impd-web-socket-url';
+import type { ExecSocket } from './open-exec-session';
 
-// One tool exec over `/exec` (packages/api exec-protocol): stdin within the
-// ack window, stdout to the caller and acked once the caller took it, stderr
-// straight through.
+// One tool exec over `/exec` (packages/api exec-protocol), such as the tar
+// that `impz cp` runs in the agent: stdin within the ack window, stdout to
+// the caller and acked once the caller took it, stderr straight through.
 export interface ToolExec {
   // resolves once the chunk is sent and the window has room again
   readonly writeStdin: (data: Uint8Array) => Promise<void>;
@@ -27,7 +27,8 @@ export interface ToolExec {
 }
 
 export interface ToolExecOptions {
-  readonly config: CliConfig;
+  readonly baseUrl: string;
+  readonly token: string | null;
   readonly name: string;
   readonly tool: ExecTool;
   readonly args: readonly string[];
@@ -37,9 +38,9 @@ export interface ToolExecOptions {
   readonly onStdout: (data: Uint8Array) => Promise<void>;
   readonly onStderr: (data: Uint8Array) => void;
 
-  // opens the socket to impd; Bun's WebSocket, which takes the bearer header,
-  // by default
-  readonly connect?: (url: string, headers: Readonly<Record<string, string>>) => ExecSocket;
+  // a tool exec needs the bearer header, so the runtime that opens the
+  // socket, such as Bun's WebSocket, is the caller's choice
+  readonly connect: (url: string, headers: Readonly<Record<string, string>>) => ExecSocket;
 }
 
 // an error from impd, as `CODE: message`
@@ -65,17 +66,12 @@ function parseServerMessage(text: string): ExecServerMessage | null {
   }
 }
 
-function openWebSocket(url: string, headers: Readonly<Record<string, string>>): WebSocket {
-  return new WebSocket(url, { headers: { ...headers } });
-}
-
 // Opens the exec and resolves once the tool started.
 export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> {
-  const headers =
-    options.config.token === null ? {} : { authorization: `Bearer ${options.config.token}` };
+  const headers: Record<string, string> =
+    options.token === null ? {} : { authorization: `Bearer ${options.token}` };
 
-  const connect = options.connect ?? openWebSocket;
-  const ws = connect(buildWebSocketUrl(options.config.url, EXEC_PATH), headers);
+  const ws = options.connect(resolveImpdWebSocketUrl(options.baseUrl, EXEC_PATH).href, headers);
   const started = Promise.withResolvers<void>();
   const exited = Promise.withResolvers<ExecOutcome>();
   const waiter: AckWaiter = { wake: null };
@@ -102,19 +98,29 @@ export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> 
   };
 
   const handleControl = (message: ExecServerMessage): void => {
-    if (message.type === 'started') {
-      started.resolve();
-    } else if (message.type === 'stdin_ack') {
-      state.unacked -= message.bytes;
-      waiter.wake?.();
-    } else if (message.type === 'exit') {
-      state.done = true;
+    match(message)
+      .with({ type: 'started' }, () => {
+        started.resolve();
+      })
+      .with({ type: 'stdin_ack' }, (ack) => {
+        state.unacked -= ack.bytes;
+        waiter.wake?.();
+      })
+      .with({ type: 'exit' }, (exit) => {
+        state.done = true;
 
-      exited.resolve({ code: message.code ?? 1 });
-      waiter.wake?.();
-    } else if (message.type === 'error') {
-      stopWithError(new ToolExecError(`${message.code ?? 'error'}: ${message.message}`));
-    }
+        exited.resolve({ code: exit.code ?? 1 });
+        waiter.wake?.();
+      })
+      .with({ type: 'error' }, (failure) => {
+        stopWithError(new ToolExecError(`${failure.code ?? 'error'}: ${failure.message}`));
+      })
+
+      // only a session detaches, and a tool exec is none
+      .with({ type: 'detached' }, () => {
+        stopWithError(new ToolExecError('impd detached a tool exec'));
+      })
+      .exhaustive();
   };
 
   ws.addEventListener('open', () => {
@@ -145,7 +151,7 @@ export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> 
     const message = parseServerMessage(String(event.data));
 
     if (message === null) {
-      stopWithError(new ToolExecError('impd sent a message the CLI does not know'));
+      stopWithError(new ToolExecError('impd sent a message the client does not know'));
 
       ws.close();
     } else {
@@ -155,7 +161,7 @@ export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> 
 
   ws.addEventListener('close', () => {
     if (!state.done) {
-      stopWithError(new ToolExecError(`the connection to impd at ${options.config.url} closed`));
+      stopWithError(new ToolExecError(`the connection to impd at ${options.baseUrl} closed`));
     }
   });
 

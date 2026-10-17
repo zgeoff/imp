@@ -1,6 +1,6 @@
 import { EGRESS_MODE_TRAITS, isImpAllowed } from '@impz/api';
 import type { EgressMode, Identity, SystemInfo } from '@impz/api';
-import { ORPCError } from '@impz/client';
+import { ORPCError, findMissingFeatures } from '@impz/client';
 import type { ImpClient } from './create-imp-client';
 import type { HostAnswer } from './fan-out';
 
@@ -196,7 +196,11 @@ function findImageRefusal(images: readonly string[], image: string | null): stri
 }
 
 function findPolicyRefusal(info: SystemInfo, mode: EgressMode | null): string | null {
-  if (mode !== null && EGRESS_MODE_TRAITS[mode].isPublic && info.features?.publicEgress !== true) {
+  if (
+    mode !== null &&
+    EGRESS_MODE_TRAITS[mode].isPublic &&
+    findMissingFeatures(info, ['publicEgress']).length > 0
+  ) {
     return `impd ${info.version} predates the public egress policy`;
   }
 

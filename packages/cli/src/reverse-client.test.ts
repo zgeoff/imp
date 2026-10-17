@@ -27,7 +27,6 @@ import invariant from 'tiny-invariant';
 import { createImpClient } from './create-imp-client';
 import { parseReverse } from './parse-reverse';
 import { startReverseForward } from './reverse-client';
-import { buildStubImpStates } from './test-utils/build-stub-imp-states';
 import { buildStubListenAgent } from './test-utils/build-stub-listen-agent';
 import { buildStubWait } from './test-utils/build-stub-wait';
 
@@ -627,15 +626,18 @@ test('it fails the forward when the imp’s state watch ends while it waits', as
     stack: ctx.stack,
   });
 
-  // a watch that ends: impd's own stream opens again instead, so only an
-  // injected one reaches this
-  const states = buildStubImpStates();
-
   const forwarding = await startReverseForward(
     { url: ctx.url, token: ctx.rootToken, host: null },
     'box',
     parseReverse('9000'),
-    { writeNotice: () => {}, watchImp: states.watchImp, wait: buildStubWait().wait },
+    {
+      writeNotice: () => {},
+
+      // a watch that ends: impd's own stream opens again instead, so only an
+      // injected one reaches this
+      watchImp: () => Promise.resolve(),
+      wait: buildStubWait().wait,
+    },
   );
 
   ctx.stack.defer(() => {
@@ -646,7 +648,6 @@ test('it fails the forward when the imp’s state watch ends while it waits', as
 
   invariant(listen);
 
-  states.end();
   listen.end();
 
   const failure = await forwarding.failed;

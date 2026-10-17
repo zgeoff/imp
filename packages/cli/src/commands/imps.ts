@@ -1,7 +1,7 @@
 import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { ExposeResult, ForkResult, Imp } from '@impz/api';
-import { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@impz/client';
-import type { ExecRequirement } from '@impz/client';
+import { CONSOLE_SHELL, EXEC_REQUIREMENTS, requireFeatures } from '@impz/client';
+import type { ExecRequirement, FeatureNeeds } from '@impz/client';
 import type { CliConfig } from '../cli-config';
 import { createImpClient } from '../create-imp-client';
 import type { ImpClient } from '../create-imp-client';
@@ -25,7 +25,6 @@ import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
 import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
 import type { PlaceRequest } from '../place-imp';
-import { requireFeature } from '../require-feature';
 import { formatError, printError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
@@ -244,13 +243,13 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
     }
   }
 
-  if (input.policy !== undefined && EGRESS_MODE_TRAITS[input.policy.mode].isPublic) {
-    await requireFeature(client, 'publicEgress', 'refuse the public egress policy');
-  }
-
-  if (input.backup === false) {
-    await requireFeature(client, 'backupOptOut', 'back the imp up anyway');
-  }
+  await requireFeatures(client, {
+    ...(input.policy !== undefined &&
+      EGRESS_MODE_TRAITS[input.policy.mode].isPublic && {
+        publicEgress: 'refuse the public egress policy',
+      }),
+    ...(input.backup === false && { backupOptOut: 'back the imp up anyway' }),
+  });
 
   const { networks, ...fields } = input;
 
@@ -532,7 +531,7 @@ export const policyCommand = defineCommand({
       const policy = parsePolicy(context.args.mode, context.args.allow);
 
       if (policy !== undefined && EGRESS_MODE_TRAITS[policy.mode].isPublic) {
-        await requireFeature(client, 'publicEgress', 'refuse the public egress policy');
+        await requireFeatures(client, { publicEgress: 'refuse the public egress policy' });
       }
 
       const current =
@@ -622,7 +621,12 @@ export const execCommand = defineCommand({
     }
 
     // an older impd would drop the list and run the command anyway
-    if (requirements !== undefined && !(await checkExecRequire(context.host))) {
+    if (
+      requirements !== undefined &&
+      !(await checkFeatures(context.host, {
+        execRequire: 'run the command without checking --require',
+      }))
+    ) {
       process.exit(1);
     }
 
@@ -675,11 +679,11 @@ function parseRequire(
 }
 
 // false once the failed check is reported
-async function checkExecRequire(host: string | null): Promise<boolean> {
+async function checkFeatures(host: string | null, needs: FeatureNeeds): Promise<boolean> {
   const checked = { ok: false };
 
   await runAction(host, async (client) => {
-    await requireFeature(client, 'execRequire', 'run the command without checking --require');
+    await requireFeatures(client, needs);
 
     checked.ok = true;
   });
@@ -724,7 +728,10 @@ export const consoleCommand = defineCommand({
     }
 
     // an older impd would start the session and keep nothing
-    if (log && !(await checkSessionLogs(context.host))) {
+    if (
+      log &&
+      !(await checkFeatures(context.host, { sessionLog: 'start the session without a log' }))
+    ) {
       return;
     }
 
@@ -742,19 +749,6 @@ export const consoleCommand = defineCommand({
     process.exit(code);
   },
 });
-
-// false once a failure is reported
-async function checkSessionLogs(host: string | null): Promise<boolean> {
-  const checked = { ok: false };
-
-  await runAction(host, async (client) => {
-    await requireFeature(client, 'sessionLog', 'start the session without a log');
-
-    checked.ok = true;
-  });
-
-  return checked.ok;
-}
 
 // the named session, the default on a terminal, or null for none;
 // undefined once a bad name is reported

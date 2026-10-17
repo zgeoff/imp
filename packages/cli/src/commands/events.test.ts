@@ -195,7 +195,7 @@ test('it prints only the named imp’s events, and reconnects after impd’s con
 
   const printing = printEvents(
     {
-      openStream: () => live.events.stream(),
+      events: live.events,
       checkServer: () => live.checkServer(),
       now: Date.now,
       wait: backoff.wait,
@@ -258,7 +258,7 @@ test('it prints every imp’s events when no imp is named', async () => {
 
   const printing = printEvents(
     {
-      openStream: () => live.events.stream(),
+      events: live.events,
       checkServer: () => live.checkServer(),
       now: Date.now,
       wait: () => Promise.resolve(),
@@ -306,14 +306,16 @@ test('it starts the count and the backoff again after a stream that lasted', asy
 
   const printing = printEvents(
     {
-      openStream: async () => {
-        const stream = await live.events.stream();
+      events: {
+        stream: async () => {
+          const stream = await live.events.stream();
 
-        // the stream that opens lasts 20 s, then impd's connection drops
-        backoff.advance(20_000);
-        void ctx.stopListener();
+          // the stream that opens lasts 20 s, then impd's connection drops
+          backoff.advance(20_000);
+          void ctx.stopListener();
 
-        return stream;
+          return stream;
+        },
       },
       checkServer: () => live.checkServer(),
       now: backoff.now,
@@ -342,7 +344,7 @@ test('it reconnects after impd fails the stream with a server error', async () =
 
   const printing = printEvents(
     {
-      openStream: () => ctx.client.events.stream(),
+      events: ctx.client.events,
       checkServer: () => ctx.client.checkServer(),
       now: Date.now,
       wait: () => Promise.resolve(),
@@ -375,7 +377,7 @@ test('it rethrows impd’s refusal of a token it does not know, without retrying
 
   const printing = printEvents(
     {
-      openStream: () => stranger.events.stream(),
+      events: stranger.events,
       checkServer: () => stranger.checkServer(),
       now: Date.now,
       wait,
@@ -407,7 +409,7 @@ test('it says to upgrade an impd that has no stream procedure, without retrying'
 
   const printing = printEvents(
     {
-      openStream: () => older.events.stream(),
+      events: older.events,
       checkServer: () => older.checkServer(),
       now: Date.now,
       wait,
@@ -431,7 +433,7 @@ test('it says to upgrade an impd that has no stream procedure, without retrying'
 test('it says to upgrade an impd that answers NOT_FOUND for the stream', () => {
   const printing = printEvents(
     {
-      openStream: () => Promise.reject(new ORPCError('NOT_FOUND', { status: 404 })),
+      events: { stream: () => Promise.reject(new ORPCError('NOT_FOUND', { status: 404 })) },
       checkServer: () =>
         Promise.resolve({ clientVersion: '0.3.0', serverVersion: '0.2.2', compatible: false }),
       now: Date.now,

@@ -21,7 +21,8 @@
     "@xterm/addon-fit": "catalog:",
     "@xterm/xterm": "catalog:",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "ts-pattern": "catalog:"
   },
   "devDependencies": {
     "@faker-js/faker": "catalog:",

@@ -7,6 +7,7 @@ import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
 import { findDetachKey } from './detach-key';
+import { openBunWebSocket } from './open-bun-web-socket';
 import { formatUnauthorized } from './run-action';
 import { createModeWatcher } from './terminal-modes';
 
@@ -112,11 +113,6 @@ const PROCESS_IO: ExecIo = {
   },
 };
 
-// Bun's WebSocket takes headers, so the token stays out of the URL
-function openWebSocket(url: string, headers: Readonly<Record<string, string>>): WebSocket {
-  return new WebSocket(url, { headers: { ...headers } });
-}
-
 // Runs one command in an imp, wired to this process's stdio and signals,
 // and resolves with the exit code for this process. A session attaches
 // again by itself when impd restarts or the imp sleeps under it.
@@ -214,7 +210,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
         io.writeOutput(fd, data);
       },
-      connect: io.connect ?? openWebSocket,
+      connect: io.connect ?? openBunWebSocket,
     });
   };
 

@@ -1,7 +1,7 @@
 import type { SessionLog } from '@impz/api';
+import { requireFeatures } from '@impz/client';
 import type { ImpClient } from '../create-imp-client';
 import { formatOutput, formatSessionLogs } from '../format-output';
-import { requireFeature } from '../require-feature';
 import { UsageError } from '../usage-error';
 
 // `impz sessions logs|log|log-rm`: the session logs impd keeps on the host
@@ -25,7 +25,7 @@ export async function listSessionLogs(
     throw new UsageError(LOGS_USAGE);
   }
 
-  await requireFeature(client, 'sessionLog', 'list no logs');
+  await requireFeatures(client, { sessionLog: 'list no logs' });
 
   const logs = await client.sessions.logs({ name, ...(session !== undefined && { session }) });
 
@@ -87,7 +87,7 @@ export async function writeSessionLog(
 
   let offset = parseOffset(from);
 
-  await requireFeature(client, 'sessionLog', 'read no log');
+  await requireFeatures(client, { sessionLog: 'read no log' });
 
   const executionGeneration = await findGeneration(client, name, session, named);
 
@@ -134,7 +134,7 @@ export async function removeSessionLogs(
     throw new UsageError(LOG_RM_USAGE);
   }
 
-  await requireFeature(client, 'sessionLog', 'delete no log');
+  await requireFeatures(client, { sessionLog: 'delete no log' });
 
   const result = await client.sessions.deleteLog({
     name,
