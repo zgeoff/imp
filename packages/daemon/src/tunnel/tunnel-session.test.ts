@@ -690,9 +690,8 @@ test('it refuses the 257th tunnel to an imp under the default limit', async () =
   }
 
   await waitFor(() => {
-    // false stands for not yet, as invariant throws on undefined
     invariant(
-      open.every((tunnel) => tunnel.sent.length === 1) || undefined,
+      open.every((tunnel) => tunnel.sent.length === 1),
       'the 256 tunnels have not all opened',
     );
   });
