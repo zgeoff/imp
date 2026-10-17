@@ -1,16 +1,44 @@
 ---
 name: code-style
 description:
-  Load before writing, reviewing, or renaming any TypeScript in this repo — every function name must
-  start with a verb from the taxonomy here, and the lint rule enforcing it reads the same list.
-  Covers module layout and file naming, the function-verb taxonomy with imp's own verbs, and the
-  exempt names.
+  Code style for zgeoff TypeScript repos — module layout and file naming, acronyms, state
+  lifecycles, and the closed function-verb taxonomy that the function-verb lint rule enforces. Load
+  before writing, reviewing, or renaming any TypeScript, with the repo's project-code-style skill
+  beside it.
 ---
 
 # Code style
 
 Mechanically enforced rules (oxfmt, oxlint, format-codemod) aren't repeated here — this skill covers
 what tooling can't check.
+
+## Key rules
+
+Each line links the section that explains it.
+
+- [Files and modules](#files-and-modules): one primary export per file, named for it, with private
+  helpers after it.
+- [Acronyms](#acronyms): acronyms stay uppercase in identifiers, `ID` included, unless one starts a
+  name.
+- [State lifecycles](#state-lifecycles): persisted state moves through one declared transition
+  table, and an in-process actor is an xstate machine.
+- [Function naming](#function-naming): every function name starts with a verb from the closed list,
+  and the banned verbs never appear.
+
+## Loading the skill
+
+This skill is the shared base that repo-sync delivers from zgeoff/tools; edit it there, never in a
+downstream repo. When the repo has a `project-code-style` skill, load it too. It holds the repo's
+own verbs, exempt names, and rules, and it never relaxes a rule here.
+
+A `project-code-style` skill lists each of the repo's verbs as a bullet or a table row that starts
+with the backticked verb under `## Project verbs`, and each exempt name the same way under
+`## Exempt names`, so an agent sees every verb it may use when the skill loads.
+`check-project-verbs.sh`, beside this skill, fails when those lists differ from the `verbs` and
+`exemptNames` options of `zgeoff/function-verb` in [`.oxlintrc.json`](../../../.oxlintrc.json), and
+docs-writing's `check-length.sh` runs it.
+
+## Files and modules
 
 - One primary export per file, and the file name kebab-cases that export (`with-jest-context.ts`
   exports `withJestContext`). Exceptions: `index.ts` entrypoints, `types.ts` for a package's shared
@@ -19,11 +47,14 @@ what tooling can't check.
   — never helpers first. Supporting declarations (consts, interfaces, type aliases) sit directly
   above their first use, never below it and never leading the file; types for the primary export's
   signature may sit just above it.
-- Acronyms stay uppercase in identifiers (`runCLI`, `parseCLIArgs`, `ASTNode`, `pkgURL`,
-  `isPackageJSON`) — except when one starts a camelCase name, where it lowercases whole (`cliPath`,
-  `astNode`). ID counts as an acronym: `userID`, `sessionID` — never `userId` — and `idToken` when
-  it starts a name. File names are unaffected: kebab-case lowercases everything (`parse-cli-args.ts`
-  exports `parseCLIArgs`).
+
+## Acronyms
+
+Acronyms stay uppercase in identifiers (`runCLI`, `parseCLIArgs`, `ASTNode`, `pkgURL`,
+`isPackageJSON`) — except when one starts a camelCase name, where it lowercases whole (`cliPath`,
+`astNode`). ID counts as an acronym: `userID`, `sessionID` — never `userId` — and `idToken` when it
+starts a name. File names are unaffected: kebab-case lowercases everything (`parse-cli-args.ts`
+exports `parseCLIArgs`).
 
 ## State lifecycles
 
@@ -38,9 +69,12 @@ modules the split creates share one copy of the rule instead of each keeping its
 
 ## Function naming
 
-Every function name starts with a prefix from the closed list below: pick from it, or extend this
-skill in the same PR that introduces the new verb. The prefix is a contract — a reader should know
-the function's shape without opening it.
+Every function name starts with a prefix from the closed list below. The prefix is a contract — a
+reader should know the function's shape without opening it. A verb that any repo could use extends
+this list and the lint rule's list in zgeoff/tools in one PR, and a test there fails when the two
+differ. A verb that only one repo needs goes in that repo's
+[`.oxlintrc.json`](../../../.oxlintrc.json), under the `verbs` option of `zgeoff/function-verb`, and
+in its `project-code-style` skill.
 
 **Predicates** — return boolean, no side effects:
 
@@ -139,15 +173,3 @@ it does), `execute` (→ `run`), `compute` (→ `build`), `fetch` (→ `read`), 
 
 Algorithm-native vocabulary (`walk`, `backtrack`, `slideDiagonal`) is allowed inside the module
 implementing that algorithm — forcing list verbs onto textbook terms hides the algorithm.
-
-### Project verbs
-
-imp's additions to the shared taxonomy, declared in `.oxlintrc.json`: `allocate`, `list`, `open`,
-`sleep`, `wake`, `hold`, `grow`, `shrink` — the lifecycle an imp moves through, its disk, which only
-grows, and its elastic memory, which also shrinks.
-
-### Exempt names
-
-`main`; `invariant`, the narrowing helper the testing skill names; `init`, `acquireConnection`,
-`beginTransaction`, `commitTransaction`, `rollbackTransaction`, `releaseConnection` and `destroy`,
-which kysely's `Driver` interface fixes; and `up`, which kysely's `Migration` interface fixes.

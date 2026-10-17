@@ -11,13 +11,19 @@ own test shows what it models and what it refuses. The folders are
 [the scripts'](../../../../scripts/test-utils/). The end-to-end harness keeps its own in
 [`e2e/lib/`](../../../../e2e/lib/).
 
+- [Kinds of stand-in](#kinds-of-stand-in)
+- [Booting impd](#booting-impd)
+- [Bun timer and transport facts](#bun-timer-and-transport-facts)
+- [Connectors](#connectors)
+
 ## Kinds of stand-in
 
 Choose the kind by the boundary that the code under test reaches:
 
-- **The fake VMM** stands in for the VM runner, which starts and drives each Firecracker, under
-  every impd test above the VM layer. A test scripts each VM step to succeed, fail, die or hang, and
-  it waits for the count of hung calls to rise before it inspects a held call.
+- **The fake VMM**, [`buildStubVmm`](../../../../packages/daemon/src/test-utils/build-stub-vmm.ts),
+  stands in for the VM runner, which starts and drives each Firecracker, under every impd test above
+  the VM layer. A test scripts each VM step to succeed, fail, die or hang, and it waits for the
+  count of hung calls to rise before it inspects a held call.
 - **Guest agent stand-ins** listen on an imp's vsock socket and speak the agent protocol. Pick the
   one whose protocol area the test drives: exec, sessions, attach, services, dial or echo.
 - **Command-layer fakes** answer the CLIs that impd spawns, such as `zfs`, `nft`, `ip`, `tailscale`,
@@ -33,8 +39,9 @@ Choose the kind by the boundary that the code under test reaches:
   per test, so the preload's handler reset drops it.
 - **Temporary directories** stand in for `/proc`, `/sys` and the cgroup tree, because their readers
   take a root path from the caller.
-- **Timer stand-ins** fire only when the test says so. Use the stub clock for impd's one clock, and
-  the matching repeat, delay or ticker stand-in where a component takes its own timer.
+- **Timer stand-ins** fire only when the test says so. Use
+  [`buildStubClock`](../../../../packages/daemon/src/test-utils/build-stub-clock.ts) for impd's one
+  clock, and the matching repeat, delay or ticker stand-in where a component takes its own timer.
 - **Version-skew proxies** sit in front of the real impd app and drop or add fields, procedures or
   events, so the client, CLI and MCP tests can check behaviour against an older or a newer impd.
 - **Stub binaries on a temporary `PATH`** stand in for the commands that the shell scripts in
@@ -47,11 +54,11 @@ on the next read, and the shrink loop's stand-in unplugs one step per read.
 
 ## Booting impd
 
-`createImpd` holds the wiring that production and the tests share. It builds every service and runs
-the boot steps in production's order, but it opens no port, so a test reaches the app through its
-request handler or listens on a loopback port itself. Its deps take a stand-in for each boundary. A
-boundary that a test leaves out gets the host's real implementation, so pass a stand-in for every
-boundary that the test would otherwise touch for real.
+[`createImpd`](../../../../packages/daemon/src/create-impd.ts) holds the wiring that production and
+the tests share. It builds every service and runs the boot steps in production's order, but it opens
+no port, so a test reaches the app through its request handler or listens on a loopback port itself.
+Its deps take a stand-in for each boundary. A boundary that a test leaves out gets the host's real
+implementation, so pass a stand-in for every boundary that the test would otherwise touch for real.
 
 The `now` dep reaches leases, the RAM governor, memory control, egress, the broker, tokens, OAuth,
 the audit log, moves and the API. Some components stay on the wall clock: the tailnet names'
@@ -61,14 +68,18 @@ time passes the stub clock to them directly.
 
 Three harnesses sit beside `createImpd`:
 
-- **The governed-imps harness** wires impd's parts without the boot steps into a caller's stack. Use
-  it to restart impd over the same database and VMs, to advance its clock, or to hold a lifecycle
-  step. It keeps each unexpected RPC failure in a list and writes it to its own log, not to stderr.
-- **The move hosts** build two impds on the governed-imps harness, with a hook that sees every
-  request the source sends to the target. The fake VMM numbers VMs from 1 on each host, so boot ids
-  of the two hosts collide.
-- **The CLI's impd host** runs one real impd per saved host, each with its own data dir, database,
-  port and root token, for CLI tests that switch between hosts.
+- **The governed-imps harness**,
+  [`createImpTest`](../../../../packages/daemon/src/imps/test-imps.ts), wires impd's parts without
+  the boot steps into a caller's stack. Use it to restart impd over the same database and VMs, to
+  advance its clock, or to hold a lifecycle step. It keeps each unexpected RPC failure in a list and
+  writes it to its own log, not to stderr.
+- **The move hosts**, [`setupMoveHosts`](../../../../packages/daemon/src/moves/test-moves.ts), build
+  two impds on the governed-imps harness, with a hook that sees every request the source sends to
+  the target. The fake VMM numbers VMs from 1 on each host, so boot ids of the two hosts collide.
+- **The CLI's impd host**,
+  [`startImpdHost`](../../../../packages/cli/src/test-utils/start-impd-host.ts), runs one real impd
+  per saved host, each with its own data dir, database, port and root token, for CLI tests that
+  switch between hosts.
 
 The CLI, client and MCP tests boot impd through `createImpd` and drive it with the real client or
 the real binary over a loopback port. A protocol fault that impd never sends, such as a cut stream

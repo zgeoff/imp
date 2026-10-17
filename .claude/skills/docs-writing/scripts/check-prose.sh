@@ -11,10 +11,13 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-# The skill's own files, and the repo's project skill beside them, document the forbidden
-# patterns and contain them as examples.
+# The skill's own files, the repo's project skill beside them, and the skill-writing skill document
+# the forbidden patterns and contain them as examples. A file git marks linguist-vendored belongs to
+# someone else, so a repo marks its third-party skills in .gitattributes.
 set -- "$@" ':(exclude).claude/skills/docs-writing' ':(exclude).claude/skills/project-docs-writing' \
-  ':(exclude)sync/skills/docs-writing'
+  ':(exclude)sync/skills/docs-writing' ':(exclude).claude/skills/skill-writing' \
+  ':(exclude)sync/skills/skill-writing' ':(exclude,attr:linguist-vendored)' \
+  ':(exclude,attr:linguist-vendored=true)'
 
 # Every grep reads untracked files too, so a new doc is checked before it is staged, and skips
 # binary files.
@@ -87,7 +90,8 @@ report '"Should succeed" in a procedure — state the expected outcome instead:'
   "$(grep_docs -nPi 'should (succeed|work|pass)\b' -- "$@")"
 
 report 'Number joined to its unit ("64KB"; write "64 KB"; code blocks are exempt):' \
-  "$(grep_docs -nP '\b[0-9]+(KB|MB|GB|TB|KiB|MiB|GiB|ms)\b' -- "$@" ':(exclude)*.md'
+  "$(
+    grep_docs -nP '\b[0-9]+(KB|MB|GB|TB|KiB|MiB|GiB|ms)\b' -- "$@" ':(exclude)*.md'
     list_markdown "$@" | xargs -r awk "$fence_awk"'
     {
       m = fence_marker($0)
@@ -98,7 +102,8 @@ report 'Number joined to its unit ("64KB"; write "64 KB"; code blocks are exempt
         next
       }
       if (open == "" && $0 ~ /(^|[^[:alnum:]_])[0-9]+(KB|MB|GB|TB|KiB|MiB|GiB|ms)([^[:alnum:]_]|$)/) print FILENAME":"FNR":"$0
-    }')"
+    }'
+  )"
 
 # Architecture docs state rules, never values. Code spans are dropped first, since a command the
 # reader types may hold a value. A bare s, d or h joined to its number is no unit here ("1990s",

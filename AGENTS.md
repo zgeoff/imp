@@ -9,12 +9,13 @@ the hooks, and CI.
 
 The rules a task needs are not repeated here. Load the skill for the work before starting it.
 
-| Skill             | Load before                                                                                 |
-| ----------------- | ------------------------------------------------------------------------------------------- |
-| `code-style`      | writing, reviewing, or renaming any TypeScript — the function-verb taxonomy and imp's verbs |
-| `testing`         | designing, writing, or reviewing tests                                                      |
-| `project-testing` | the same, beside `testing` — imp's own test facts                                           |
-| `docs-writing`    | writing or editing any committed prose: `docs/`, READMEs, this file, skills                 |
+| Skill                | Load before                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| `code-style`         | writing, reviewing, or renaming any TypeScript — the shared function-verb taxonomy |
+| `project-code-style` | the same, beside `code-style` — imp's own verbs and exempt names                   |
+| `testing`            | designing, writing, or reviewing tests                                             |
+| `project-testing`    | the same, beside `testing` — imp's own test facts                                  |
+| `docs-writing`       | writing or editing any committed prose: `docs/`, READMEs, this file, skills        |
 
 ## Operations
 
