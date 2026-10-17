@@ -2404,7 +2404,9 @@ test('it logs a refresh after a rejection without the token', async () => {
   const refresher = createOAuthRefresher({
     db: ctx.db,
     files: ctx.files,
-    log: (line) => lines.push(line),
+    log: (line) => {
+      lines.push(line);
+    },
     resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
     now: () => startedAt + 24 * 3_600_000,
   });
