@@ -447,7 +447,17 @@ let
     };
     # ipv6Host sets services.imp.ipv6.enable = true
     "test with ipv6, imp-host joins the imp-host network" = {
-      expr = lib.hasInfix "--env-file /etc/imp/imp-host.env --network imp-host " ipv6Unit.serviceConfig.ExecStart;
+      expr = lib.hasInfix "-e 'IMP_ENV_FILE=/run/imp/env' --network imp-host " ipv6Unit.serviceConfig.ExecStart;
+      expected = true;
+    };
+    # zfsHost: module defaults
+    "test imp-host reads no env file from the system disk" = {
+      expr = lib.hasInfix "--env-file" unit.serviceConfig.ExecStart;
+      expected = false;
+    };
+    # zfsHost: module defaults
+    "test imp-host mounts its env file from tmpfs, read-only" = {
+      expr = lib.hasInfix "-v /run/imp-host/env:/run/imp/env:ro -e 'IMP_ENV_FILE=/run/imp/env'" unit.serviceConfig.ExecStart;
       expected = true;
     };
     # zfsHost: module defaults (ipv6.enable = false)
@@ -704,6 +714,10 @@ in
     absent imp-authkey ${zfsPre}
     grep -qx 'export IMP_SECRETS=/run/secrets/imp-host.env' ${zfsPre}
     grep -qx 'export IMP_BACKUP_STAGED=/run/imp-host/backup-password' ${zfsPre}
+    # the env file goes to tmpfs, without the keys docker run sets with -e
+    grep -qx 'export IMP_ENV_OUT=/run/imp-host/env' ${zfsPre}
+    grep -qxF "export IMP_CONTAINER_KEYS='IMP_ENV_FILE DOCKER_HOST IMP_TAILSCALE_AUTHKEY_FILE'" ${zfsPre}
+    grep -q "^export IMP_CONTAINER_KEYS=.* IMP_DNS_API_TOKEN_FILE'$" ${writerOf dnsCfg}
     # the staging copies both secrets, by path
     grep -q "stage /run/secrets/imp-authkey /run/imp-host/tailscale-authkey" ${stagePre}
     grep -q "stage /run/secrets/backup-password /run/imp-host/backup-password" ${stagePre}

@@ -1,10 +1,11 @@
 #!/bin/bash
-# imp-host-env.sh HOST_ENV_SH: write /etc/imp/imp-host.env for the NixOS
+# imp-host-env.sh HOST_ENV_SH: write /run/imp-host/env for the NixOS
 # module (deploy/nixos/module.nix), which runs it before each start of
 # imp-host. The module's settings come from the Nix store, so they hold no
 # secret; the secrets come from a file outside it, read here and written
-# only to the env file (0600). The Tailscale key never comes here: the
-# module mounts its file into the container.
+# only to the env file (0600), in tmpfs. The module mounts it into the
+# container, where host/entrypoint exports it. The Tailscale key never
+# comes here: the module mounts its file into the container.
 #
 # It sources deploy/lib/host-env.sh for the RAM budget, which bootstrap.sh
 # shares, so both installers size a host the same way.
@@ -18,7 +19,9 @@
 #   IMP_SECRETS    an env file of secrets, or empty
 #   IMP_BACKUP_STAGED       the host copy of the backup password, or empty
 #   IMP_BACKUP_IN_CONTAINER where the container sees that copy
-#   IMP_ENV_OUT    where to write (default /etc/imp/imp-host.env)
+#   IMP_CONTAINER_KEYS      the keys docker run sets with -e, space-separated,
+#                           which the env file leaves out so they keep those values
+#   IMP_ENV_OUT    where to write (default /run/imp-host/env)
 #   IMP_MEMINFO    default /proc/meminfo
 #   IMP_ARC_PARAM  default /sys/module/zfs/parameters/zfs_arc_max
 set -euo pipefail
@@ -26,7 +29,7 @@ set -euo pipefail
 # shellcheck source=deploy/lib/host-env.sh
 . "${1:?usage: imp-host-env.sh HOST_ENV_SH}"
 
-out=${IMP_ENV_OUT:-/etc/imp/imp-host.env}
+out=${IMP_ENV_OUT:-/run/imp-host/env}
 meminfo=${IMP_MEMINFO:-/proc/meminfo}
 
 arc_param=${IMP_ARC_PARAM:-/sys/module/zfs/parameters/zfs_arc_max}
@@ -89,7 +92,8 @@ addresses=$(host_addresses) || {
 }
 
 # A later line wins, and only it is kept: the secrets file can set any key
-# but the backup ones above, the budget and the host's addresses.
+# but the backup ones above, the budget, the host's addresses and the
+# container's -e keys, which are left out.
 content=$(
   {
     echo "# Written by imp-host-env.sh (the NixOS module) at each start; edits are lost."
@@ -98,14 +102,15 @@ content=$(
     [ ${#backup[@]} = 0 ] || printf '%s\n' "${backup[@]}"
     echo "IMP_RAM_BUDGET_MIB=$budget"
     echo "IMP_HOST_ADDRESSES=$addresses"
-  } | awk '
+  } | awk -v container_keys="${IMP_CONTAINER_KEYS:-}" '
+    BEGIN { n = split(container_keys, keys, " "); for (i = 1; i <= n; i++) dropped[keys[i]] = 1 }
     /^[A-Za-z_][A-Za-z0-9_]*=/ { key = substr($0, 1, index($0, "=") - 1); last[key] = NR }
     { line[NR] = $0 }
     END {
       for (i = 1; i <= NR; i++) {
         if (line[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
           key = substr(line[i], 1, index(line[i], "=") - 1)
-          if (last[key] != i) continue
+          if (last[key] != i || key in dropped) continue
         }
         print line[i]
       }

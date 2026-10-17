@@ -9,9 +9,15 @@
 # Env: IMP_DAEMON (default /src/packages/daemon/src/main.ts) is the impd entry:
 #      a .ts source file runs under bun (dev), anything else is the compiled
 #      impd (the release image sets /usr/local/bin/impd).
+#      IMP_ENV_FILE names a docker --env-file whose lines are exported first,
+#      over the image's env; the NixOS module mounts it from tmpfs.
 set -euo pipefail
 
 lib=/usr/local/lib/imp
+if [ -n "${IMP_ENV_FILE:-}" ]; then
+  # shellcheck source=host/scripts/load-env-file.sh
+  . "$lib/load-env-file.sh" "$IMP_ENV_FILE"
+fi
 daemon=${IMP_DAEMON:-/src/packages/daemon/src/main.ts}
 case $daemon in
   *.ts) run_daemon=(bun "$daemon") ;;
