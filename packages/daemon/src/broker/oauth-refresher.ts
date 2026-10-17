@@ -35,7 +35,12 @@ type RefreshOutcome =
   // replaced or deleted during the call; the result was dropped
   | { readonly kind: 'dropped' }
   | { readonly kind: 'gone' }
-  | { readonly kind: 'unreadable' };
+  | { readonly kind: 'unreadable' }
+
+  // a refresh after a 401 that sent nothing: the token was refreshed since,
+  // or the checks turned it down
+  | { readonly kind: 'superseded' }
+  | { readonly kind: 'skipped' };
 
 export interface OAuthRefresher {
   // Refreshes now and answers after it ends. A refresh already running for
@@ -110,10 +115,6 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
   const log = deps.log;
   const locks = createKeyedMutex();
   const inflight = createSingleFlight<RefreshOutcome>();
-
-  // apart from `inflight`, so a forced refresh never joins one that the
-  // floor turned down
-  const rejections = createSingleFlight<boolean>();
 
   const backoff = new Map<string, { failures: number; nextAt: number }>();
 
@@ -371,31 +372,45 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     return { kind: 'needs-login', error: failure.error };
   };
 
-  const startRefresh = (name: string, force: boolean): Promise<RefreshOutcome> => {
+  const startRefresh = async (name: string, force: boolean): Promise<RefreshOutcome> => {
     if (lifecycle.stopping) {
-      return Promise.resolve({ kind: 'transient', error: 'impd is stopping' });
+      return { kind: 'transient', error: 'impd is stopping' };
     }
 
-    return inflight.run(name, () => withLock(name, () => runRefresh(name, force)));
+    const run = (): Promise<RefreshOutcome> =>
+      inflight.run(name, () => withLock(name, () => runRefresh(name, force)));
+
+    const outcome = await run();
+
+    // A joined refresh after a 401 that sent nothing answers no caller that
+    // wanted a refresh of its own: a due one, or a forced one.
+    if (outcome.kind === 'skipped' || (force && outcome.kind === 'superseded')) {
+      return run();
+    }
+
+    return outcome;
   };
 
   // under the lock, so it sees the result of any refresh before it
-  const runRejectedRefresh = async (name: string, refreshedAt: number | null): Promise<boolean> => {
+  const runRejectedRefresh = async (
+    name: string,
+    refreshedAt: number | null,
+  ): Promise<RefreshOutcome> => {
     const secret = await findSecret(deps.db, name);
 
     if (secret?.kind !== 'oauth' || secret.oauth === null) {
-      return false;
+      return { kind: 'gone' };
     }
 
     const state = loadState(name, secret);
 
     if (state === null) {
-      return false;
+      return { kind: 'unreadable' };
     }
 
     // a refresh since the rejected token was sent already replaced it
     if (state.refreshedAt !== refreshedAt) {
-      return state.status === 'ready';
+      return state.status === 'ready' ? { kind: 'superseded' } : { kind: 'skipped' };
     }
 
     const at = now();
@@ -406,16 +421,16 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
       (wait !== undefined && wait.nextAt > at) ||
       (state.refreshedAt !== null && at - state.refreshedAt < REJECTION_FLOOR_MS)
     ) {
-      return false;
+      return { kind: 'skipped' };
     }
 
     log(`impd: broker: oauth secret ${name}: a granted host refused its access token; refreshing`);
 
-    const outcome = await runRefresh(name, false);
-
-    return outcome.kind === 'refreshed';
+    return runRefresh(name, false);
   };
 
+  // on the same single flight as every other refresh, so a 401 joins a
+  // refresh under way and a tick or a forced refresh joins this one
   const refreshAfterRejection = async (
     name: string,
     refreshedAt: number | null,
@@ -425,9 +440,11 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     }
 
     try {
-      return await rejections.run(name, () =>
+      const outcome = await inflight.run(name, () =>
         withLock(name, () => runRejectedRefresh(name, refreshedAt)),
       );
+
+      return outcome.kind === 'refreshed' || outcome.kind === 'superseded';
     } catch (error) {
       log(`impd: broker: oauth secret ${name}: ${readErrorMessage(error)}`);
 
@@ -549,7 +566,6 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
 
       // a refresh under way ends, its write included, before stop answers
       await inflight.waitForAll();
-      await rejections.waitForAll();
 
       // one last try at each result still unsaved, for a restart to find
       await Promise.allSettled([...unsaved.keys()].map((name) => writeUnsaved(name)));
