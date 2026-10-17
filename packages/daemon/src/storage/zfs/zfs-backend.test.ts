@@ -3726,9 +3726,11 @@ test.skipIf(readZfsTestPool() === null)(
   120_000,
 );
 
-// the disk budget counts back a build tree's blocks against this reading
+// the disk budget counts back a build tree's blocks from `available`, which
+// loses what the dataset takes but is the pool's: the txg that commits the
+// tree may also shrink blocks outside the dataset, such as its space maps
 test.skipIf(readZfsTestPool() === null)(
-  'it shows a tree no more blocks than the pool has taken from its available bytes',
+  'it shows a tree no more blocks than its dataset has taken',
   async () => {
     const ctx = setupTest();
 
@@ -3744,34 +3746,6 @@ test.skipIf(readZfsTestPool() === null)(
 
     mkdirSync(tree);
 
-    // `available` is the whole pool's: the frees of datasets that earlier
-    // tests destroyed raise it as their txgs commit, and a txg that commits
-    // mid-write would count them against the tree, so they land first
-    const [poolName] = pool.root.split('/');
-
-    invariant(poolName);
-
-    const diagFreeing = await runChecked([
-      'zpool',
-      'get',
-      '-Hp',
-      '-o',
-      'value',
-      'freeing',
-      poolName,
-    ]);
-
-    const diagBefore = await pool.backend.readUsage();
-
-    await runChecked(['zpool', 'sync', poolName]);
-    await runChecked(['zpool', 'wait', '-t', 'free', poolName]);
-
-    const diagAfter = await pool.backend.readUsage();
-
-    console.log(
-      `GEO-1226 diag: freeing=${diagFreeing.trim()} availableGain=${String(diagAfter.availableBytes - diagBefore.availableBytes)}`,
-    );
-
     const before = await pool.backend.readUsage();
 
     const fd = openSync(join(tree, 'layer.bin'), 'w');
@@ -3782,8 +3756,9 @@ test.skipIf(readZfsTestPool() === null)(
     });
 
     // no sync between writes: each sample may fall inside an open txg; a
-    // margin is what the pool has taken less what the tree shows, in order
+    // margin is what the dataset has taken less what the tree shows, in order
     const margins: number[] = [];
+    const diagOutside: number[] = [];
 
     for (let chunk = 0; chunk < 16; chunk += 1) {
       writeSync(fd, randomBytes(16 * 1024 ** 2));
@@ -3791,8 +3766,14 @@ test.skipIf(readZfsTestPool() === null)(
       const treeBytes = await countTreeBytes(tree);
       const usage = await pool.backend.readUsage();
 
-      margins.push(before.availableBytes - usage.availableBytes - treeBytes);
+      margins.push(usage.usedBytes - before.usedBytes - treeBytes);
+
+      diagOutside.push(
+        before.availableBytes - usage.availableBytes - (usage.usedBytes - before.usedBytes),
+      );
     }
+
+    console.log(`GEO-1226 diag: margins=${margins.join(',')} outside=${diagOutside.join(',')}`);
 
     expect(margins).toSatisfyAll((margin: number) => margin >= 0);
   },
