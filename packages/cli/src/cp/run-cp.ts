@@ -2,19 +2,26 @@ import { openToolExec } from '@impz/client';
 import { countFileBytes, listLocalEntries, writeLocalEntries } from '@impz/local-tar';
 import { loadCliConfig } from '../cli-config';
 import type { CliConfig } from '../cli-config';
+import type { CliEnv } from '../host-store';
 import { openBunWebSocket } from '../open-bun-web-socket';
-import { printError } from '../run-action';
+import { toCallError } from '../run-action';
 import { UsageError } from '../usage-error';
 import { buildTarArgs } from './build-tar-args';
 import { createCopyProgress } from './copy-progress';
-import type { CopyProgress } from './copy-progress';
+import type { CopyProgress, ProgressOutput } from './copy-progress';
 import { createLocalExtractor } from './extract-local';
 import { parseCpArgs } from './parse-cp-args';
 import type { CpPlan } from './parse-cp-args';
 
 export interface CpOptions {
-  // the saved host `--host` named, or null
+  // the saved host `--host` named, or null, and the environment that picks
+  // the impd without one
   readonly host: string | null;
+  readonly env: CliEnv;
+  readonly warn: (line: string) => void;
+
+  // where the copy's progress goes: stderr
+  readonly output: ProgressOutput;
   readonly source: string;
   readonly target: string;
 
@@ -111,28 +118,20 @@ async function runDownload(config: CliConfig, plan: CpPlan, progress: CopyProgre
 
 // `impz cp`: one side on this machine, the other in an imp
 export async function runCp(options: CpOptions): Promise<void> {
-  let config: CliConfig | null = null;
+  const config = loadCliConfig(options.env, options.host, options.warn);
+  const plan = parseCpArgs(options.source, options.target);
+
+  if (options.owner !== undefined && plan.direction === 'download') {
+    throw new UsageError('--owner sets the owner in the imp: it goes with a copy into the imp');
+  }
+
+  const progress = createCopyProgress(options.output);
 
   try {
-    config = loadCliConfig(process.env, options.host);
-
-    const plan = parseCpArgs(options.source, options.target);
-
-    if (options.owner !== undefined && plan.direction === 'download') {
-      throw new UsageError('--owner sets the owner in the imp: it goes with a copy into the imp');
-    }
-
-    const progress = createCopyProgress({
-      isTTY: process.stderr.isTTY,
-      write: (text) => {
-        process.stderr.write(text);
-      },
-    });
-
     await (plan.direction === 'upload'
       ? runUpload(config, plan, options.owner, progress)
       : runDownload(config, plan, progress));
   } catch (error) {
-    printError(error, config);
+    throw toCallError(error, config);
   }
 }

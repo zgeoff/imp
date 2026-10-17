@@ -26,7 +26,7 @@ import { canUpdateReadOnly } from '@impz/test-utils/can-update-read-only';
 import { updateReadOnly } from '@impz/test-utils/update-read-only';
 import invariant from 'tiny-invariant';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 
 // The CLI's home, and a real impd on a loopback port that the CLI child
 // reaches as a user's would
@@ -157,7 +157,7 @@ async function setupTest() {
 test('#login saves the host as current when impd accepts the token', async () => {
   const ctx = await setupTest();
 
-  const login = await runCli({
+  const login = await runCLIInProcess({
     args: ['login', ctx.url, '--name', 'home'],
     env: ctx.env,
     stdin: `${ctx.rootToken}\n`,
@@ -178,7 +178,7 @@ test('#login saves the host as current when impd accepts the token', async () =>
 test('#login refuses a URL that is not http(s) and saves nothing', async () => {
   const ctx = await setupTest();
 
-  const login = await runCli({
+  const login = await runCLIInProcess({
     args: ['login', 'ftp://imp.example'],
     env: ctx.env,
     stdin: 'login-token\n',
@@ -201,7 +201,7 @@ test('#hosts lists the saved hosts without their tokens', async () => {
     hosts: { home: { url: 'https://home.example', token: 'login-token' } },
   });
 
-  const listed = await runCli({ args: ['hosts'], env: ctx.env });
+  const listed = await runCLIInProcess({ args: ['hosts'], env: ctx.env });
 
   expect(listed).toStrictEqual({
     stdout: '   NAME  URL                   TOKEN\n*  home  https://home.example  saved\n',
@@ -212,7 +212,7 @@ test('#hosts lists the saved hosts without their tokens', async () => {
 
 test('#login saves nothing when impd refuses the token', async () => {
   const ctx = await setupTest();
-  const login = await runCli({ args: ['login', ctx.url], env: ctx.env, stdin: 'wrong\n' });
+  const login = await runCLIInProcess({ args: ['login', ctx.url], env: ctx.env, stdin: 'wrong\n' });
 
   expect(login).toStrictEqual({
     stdout: '',
@@ -227,7 +227,11 @@ test('#login saves nothing when the token is empty', async () => {
   const ctx = await setupTest();
 
   // nothing listens there: a check would fail on the connection instead
-  const login = await runCli({ args: ['login', 'http://127.0.0.1:1'], env: ctx.env, stdin: '\n' });
+  const login = await runCLIInProcess({
+    args: ['login', 'http://127.0.0.1:1'],
+    env: ctx.env,
+    stdin: '\n',
+  });
 
   expect(login).toStrictEqual({
     stdout: '',
@@ -241,7 +245,7 @@ test('#login saves nothing when the token is empty', async () => {
 test('#login saves nothing when impd is out of reach', async () => {
   const ctx = await setupTest();
 
-  const login: unknown = await runCli({
+  const login: unknown = await runCLIInProcess({
     args: ['login', 'http://127.0.0.1:1'],
     env: ctx.env,
     stdin: 'login-token\n',
@@ -261,7 +265,7 @@ test('#login saves nothing when impd is out of reach', async () => {
 test('#login saves without asking impd and warns of plain http under --no-verify', async () => {
   const ctx = await setupTest();
 
-  const login = await runCli({
+  const login = await runCLIInProcess({
     args: ['login', 'http://imp.example:7070', '--no-verify'],
     env: ctx.env,
     stdin: 'login-token\n',
@@ -288,7 +292,7 @@ test('#login leaves a damaged config.json as it was and asks impd nothing', asyn
   await writeFile(resolveConfigPath(ctx.env), '{ damaged', { mode: 0o600 });
 
   // nothing listens there: a check would fail on the connection instead
-  const login: unknown = await runCli({
+  const login: unknown = await runCLIInProcess({
     args: ['login', 'http://127.0.0.1:1'],
     env: ctx.env,
     stdin: 'login-token\n',
@@ -316,7 +320,7 @@ test('#host makes a saved host current on host use', async () => {
     },
   });
 
-  const used = await runCli({ args: ['host', 'use', 'work'], env: ctx.env });
+  const used = await runCLIInProcess({ args: ['host', 'use', 'work'], env: ctx.env });
 
   expect(used.code).toBe(0);
   expect(readHostConfig(ctx.env).current).toBe('work');
@@ -330,7 +334,7 @@ test('#host refuses a host use of a host it has not saved', async () => {
     hosts: { home: { url: 'https://home.example', token: 'home-token' } },
   });
 
-  const used = await runCli({ args: ['host', 'use', 'nope'], env: ctx.env });
+  const used = await runCLIInProcess({ args: ['host', 'use', 'nope'], env: ctx.env });
 
   expect(used).toStrictEqual({
     stdout: '',
@@ -352,7 +356,7 @@ test('#host forgets the current host and clears current on host rm', async () =>
     },
   });
 
-  const removed = await runCli({ args: ['host', 'rm', 'work'], env: ctx.env });
+  const removed = await runCLIInProcess({ args: ['host', 'rm', 'work'], env: ctx.env });
 
   expect(removed.code).toBe(0);
 
@@ -370,7 +374,7 @@ test('#--host sends the saved token over IMP_TOKEN, with a note', async () => {
     hosts: { work: { url: ctx.url, token: ctx.rootToken } },
   });
 
-  const listed = await runCli({
+  const listed = await runCLIInProcess({
     args: ['--host', 'work', 'ls', '--json'],
     env: { ...ctx.env, IMP_TOKEN: 'ignored' },
   });
@@ -404,7 +408,10 @@ test.skipIf(!canUpdateReadOnly())(
 
     updateReadOnly(locks, join(ctx.env.XDG_CONFIG_HOME, 'imp'));
 
-    const listed = await runCli({ args: ['--host', 'work', 'ls', '--json'], env: ctx.env });
+    const listed = await runCLIInProcess({
+      args: ['--host', 'work', 'ls', '--json'],
+      env: ctx.env,
+    });
 
     const note = `impz: cannot move ${join(ctx.env.XDG_CONFIG_HOME, 'imp', 'token')} to ${join(ctx.env.XDG_CONFIG_HOME, 'impz', 'token')}, so it stays there: `;
 
@@ -427,7 +434,7 @@ test('#--host names the host in a 401 for a saved token impd refuses', async () 
 
   writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
 
-  const listed = await runCli({ args: ['--host', 'work', 'ls'], env: ctx.env });
+  const listed = await runCLIInProcess({ args: ['--host', 'work', 'ls'], env: ctx.env });
 
   expect(listed).toStrictEqual({
     stdout: '',
@@ -441,7 +448,7 @@ test('#--host names the host when impd refuses the saved token on exec’s socke
 
   writeHostConfig(ctx.env, { current: null, hosts: { work: { url: ctx.url, token: 'stale' } } });
 
-  const exec = await runCli({
+  const exec = await runCLIInProcess({
     args: ['--host', 'work', 'exec', 'box', '--', 'true'],
     env: ctx.env,
   });
@@ -483,7 +490,7 @@ test('#--host sends the saved token over IMP_TOKEN on exec’s socket', async ()
     hosts: { work: { url: ctx.url, token: ctx.rootToken } },
   });
 
-  const exec = await runCli({
+  const exec = await runCLIInProcess({
     args: ['--host', 'work', 'exec', 'box', '--', 'echo', 'ran'],
     env: { ...ctx.env, IMP_TOKEN: 'ignored' },
   });
@@ -497,7 +504,7 @@ test('#--host sends the saved token over IMP_TOKEN on exec’s socket', async ()
 
 test('#--host refuses a flag without a saved host name', async () => {
   const ctx = await setupTest();
-  const listed = await runCli({ args: ['ls', '--host'], env: ctx.env });
+  const listed = await runCLIInProcess({ args: ['ls', '--host'], env: ctx.env });
 
   expect(listed).toStrictEqual({
     stdout: '',
@@ -508,7 +515,11 @@ test('#--host refuses a flag without a saved host name', async () => {
 
 test('#--host leaves --version to print the version with no saved host', async () => {
   const ctx = await setupTest();
-  const version: unknown = await runCli({ args: ['--host', 'work', '--version'], env: ctx.env });
+
+  const version: unknown = await runCLIInProcess({
+    args: ['--host', 'work', '--version'],
+    env: ctx.env,
+  });
 
   expect(version).toStrictEqual({
     stdout: expect.stringMatching(/^\d+\.\d+\.\d+\n$/u) as unknown,
@@ -519,7 +530,7 @@ test('#--host leaves --version to print the version with no saved host', async (
 
 test('#--host leaves --help to print the help with no saved host', async () => {
   const ctx = await setupTest();
-  const help: unknown = await runCli({ args: ['--host', 'work', '--help'], env: ctx.env });
+  const help: unknown = await runCLIInProcess({ args: ['--host', 'work', '--help'], env: ctx.env });
 
   expect(help).toStrictEqual({
     stdout: expect.stringContaining('--host') as unknown,
@@ -533,7 +544,10 @@ test('#exec prints one line, not a stack, when it cannot read config.json', asyn
 
   await mkdir(resolveConfigPath(ctx.env), { recursive: true });
 
-  const exec: unknown = await runCli({ args: ['exec', 'box', '--', 'true'], env: ctx.env });
+  const exec: unknown = await runCLIInProcess({
+    args: ['exec', 'box', '--', 'true'],
+    env: ctx.env,
+  });
 
   expect(exec).toStrictEqual({
     stdout: '',

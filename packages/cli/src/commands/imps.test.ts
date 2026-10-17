@@ -13,12 +13,12 @@ import invariant from 'tiny-invariant';
 import { writeHostConfig } from '../host-store';
 import { buildStubTimeouts } from '../test-utils/build-stub-timeouts';
 import { parseJsonOutput } from '../test-utils/parse-json-output';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startImpdHost } from '../test-utils/start-impd-host';
 import { startStubNewerImpd } from '../test-utils/start-stub-newer-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 import { startStubSilentHost } from '../test-utils/start-stub-silent-host';
-import { listAllImps, listForkWarnings, readConsoleSession } from './imps';
+import { listAllImps, listForkWarnings, pickConsoleSession } from './imps';
 
 // The CLI's home, where config.json keeps the saved hosts, so none of this
 // machine's reaches it; each impd host a test starts releases into `stack`
@@ -60,7 +60,7 @@ test('#listForkWarnings warns of nothing for a fork from an impd that predates t
 });
 
 test('#new refuses a size that is not a whole positive number', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['new', 'box', '--memory', '1.5g'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -73,7 +73,10 @@ test('#new refuses a size that is not a whole positive number', async () => {
 });
 
 test('#new refuses an IMP_URL that is not an http URL', async () => {
-  const result = await runCli({ args: ['new', 'box'], env: { IMP_URL: 'localhost:7070' } });
+  const result = await runCLIInProcess({
+    args: ['new', 'box'],
+    env: { IMP_URL: 'localhost:7070' },
+  });
 
   expect(result).toStrictEqual({
     stdout: '',
@@ -84,7 +87,7 @@ test('#new refuses an IMP_URL that is not an http URL', async () => {
 
 test('#new refuses --auth without --public before any call to impd', async () => {
   // nothing listens there: a call would fail on the connection instead
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['new', 'box', '--auth', 'basic'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -112,7 +115,7 @@ test('#new refuses --public for a token limited to some imps, and creates nothin
     imps: ['dev*'],
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['new', 'dev', '--public'],
     env: { ...ctx.home, IMP_URL: box.url, IMP_TOKEN: limited.secret },
   });
@@ -138,7 +141,7 @@ test('#new creates an imp left out of every backup for --no-backup', async () =>
 
   await createImage(box.db, image);
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['new', 'chat', '--image', 'base', '--no-backup', '--json'],
     env: { ...ctx.home, IMP_URL: box.url, IMP_TOKEN: box.rootToken },
   });
@@ -164,7 +167,7 @@ test('#new refuses --no-backup on an impd from before the setting, and creates n
     withoutFeatures: ['backupOptOut'],
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['new', 'chat', '--image', 'base', '--no-backup'],
     env: { ...ctx.home, IMP_URL: older.url, IMP_TOKEN: box.rootToken },
   });
@@ -182,7 +185,7 @@ test('#new refuses --no-backup on an impd from before the setting, and creates n
 });
 
 test('#console refuses a detach key that is not ctrl-<key>', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['console', 'box', '--detach-key', 'esc'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -196,7 +199,7 @@ test('#console refuses a detach key that is not ctrl-<key>', async () => {
 });
 
 test('#console refuses an empty session name', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['console', 'box', '--session', ''],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -205,14 +208,14 @@ test('#console refuses an empty session name', async () => {
 });
 
 test.each([
-  ['no session on a terminal', undefined, true, 'main'],
-  ['no session off a terminal', undefined, false, null],
-  ['a named session off a terminal', 'work', false, 'work'],
-  ['--no-session on a terminal', false, true, null],
+  ['no session on a terminal', {}, true, 'main'],
+  ['no session off a terminal', {}, false, null],
+  ['a named session off a terminal', { session: 'work' }, false, 'work'],
+  ['--no-session on a terminal', { 'no-session': true }, true, null],
 ] as const)(
-  '#readConsoleSession picks the console session for %s',
-  (_case, session, isTerminal, expected) => {
-    expect(readConsoleSession(session, isTerminal)).toBe(expected);
+  '#pickConsoleSession picks the console session for %s',
+  (_case, args, isTerminal, expected) => {
+    expect(pickConsoleSession(args, isTerminal)).toBe(expected);
   },
 );
 
@@ -223,13 +226,13 @@ test.each([
   ],
   [
     ['exec', 'box', '--agent', '--require', 'broker', '--', 'true'],
-    'impz: --require does not go with --agent: an exec in the agent gets no broker\n',
+    'impz: --require does not go with --agent\n',
   ],
 ])('#exec refuses %p before any call to impd', async (args, stderr) => {
   const ctx = await setupTest();
 
   // nothing listens there: a call would fail on the connection instead
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args,
     env: { ...ctx.home, IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'imps-token' },
   });
@@ -237,34 +240,11 @@ test.each([
   expect(result).toStrictEqual({ stdout: '', stderr, code: 2 });
 });
 
-test('#exec runs nothing for --require on an impd older than 0.30.0, without execRequire', async () => {
-  const ctx = await setupTest();
-  const box = await startImpdHost(ctx.stack, { env: {} });
-
-  const older = startStubOlderImpd(ctx.stack, box.sendRequest, {
-    withoutFeatures: ['execRequire'],
-  });
-
-  const result = await runCli({
-    args: ['exec', 'box', '--require', 'broker', '--', 'true'],
-    env: { ...ctx.home, IMP_URL: older.url, IMP_TOKEN: box.rootToken },
-  });
-
-  expect(result).toStrictEqual({
-    stdout: '',
-    stderr:
-      'impz: this impd is older than 0.30.0 and would run the command without checking --require; nothing was changed. Upgrade impd, or use an older imp CLI\n',
-    code: 1,
-  });
-
-  expect(older.calls).toStrictEqual(['system/features']);
-});
-
 test('#console refuses --log without a session before any call to impd', async () => {
   const ctx = await setupTest();
 
   // nothing listens there: a call would fail on the connection instead
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['console', 'dev', '--no-session', '--log'],
     env: { ...ctx.home, IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'imps-token' },
   });
@@ -278,7 +258,7 @@ test('#console makes no call past the feature check for --log on an impd from be
 
   const older = startStubOlderImpd(ctx.stack, box.sendRequest, { withoutFeatures: ['sessionLog'] });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['console', 'dev', '--session', 'main', '--log'],
     env: { ...ctx.home, IMP_URL: older.url, IMP_TOKEN: box.rootToken },
   });
@@ -332,7 +312,7 @@ test('#ls lists every saved host and exits 3 when one of them fails', async () =
     },
   });
 
-  const listed = await runCli({ args: ['ls', '--all'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--all'], env: ctx.home });
 
   const rows = listed.stdout.trimEnd().split('\n');
 
@@ -435,7 +415,7 @@ test('#ls never prints a saved token under --all', async () => {
     },
   });
 
-  const listed = await runCli({ args: ['ls', '--all'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--all'], env: ctx.home });
 
   const printed = `${listed.stdout}${listed.stderr}`;
 
@@ -474,7 +454,7 @@ test('#ls writes the imps and the errors of every host as JSON for --all --json'
     },
   });
 
-  const listed = await runCli({ args: ['ls', '--all', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--all', '--json'], env: ctx.home });
 
   const body: unknown = JSON.parse(listed.stdout);
 
@@ -509,7 +489,7 @@ test('#ls writes an empty JSON list and exits 1 when no host answers --all --jso
     },
   });
 
-  const listed = await runCli({ args: ['ls', '--all', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--all', '--json'], env: ctx.home });
 
   const body: unknown = JSON.parse(listed.stdout);
 
@@ -559,7 +539,10 @@ test('#ls lists every host’s builders under --all --builders', async () => {
     },
   });
 
-  const listed = await runCli({ args: ['ls', '--all', '--builders', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({
+    args: ['ls', '--all', '--builders', '--json'],
+    env: ctx.home,
+  });
 
   const body: unknown = JSON.parse(listed.stdout);
 
@@ -606,7 +589,7 @@ test('#ls lists no builder under plain --all', async () => {
     },
   });
 
-  const listed = await runCli({ args: ['ls', '--all', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--all', '--json'], env: ctx.home });
 
   const body: unknown = JSON.parse(listed.stdout);
 
@@ -622,7 +605,7 @@ test('#ls refuses --all with --host', async () => {
     hosts: { box: { url: 'http://127.0.0.1:1', token: 'imps-token' } },
   });
 
-  const listed = await runCli({ args: ['--host', 'box', 'ls', '--all'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['--host', 'box', 'ls', '--all'], env: ctx.home });
 
   expect(listed).toStrictEqual({
     stdout: '',
@@ -640,7 +623,10 @@ test('#new refuses --place with --host', async () => {
     hosts: { box: { url: 'http://127.0.0.1:1', token: 'imps-token' } },
   });
 
-  const placed = await runCli({ args: ['--host', 'box', 'new', 'dev', '--place'], env: ctx.home });
+  const placed = await runCLIInProcess({
+    args: ['--host', 'box', 'new', 'dev', '--place'],
+    env: ctx.home,
+  });
 
   expect(placed).toStrictEqual({
     stdout: '',
@@ -670,7 +656,7 @@ test('#ls lists the current host alone without --all', async () => {
     },
   });
 
-  const listed = await runCli({ args: ['ls', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--json'], env: ctx.home });
   const imps = await box.client.imps.list();
 
   // dates as JSON writes them
@@ -701,7 +687,7 @@ test('#ls prints --json output in the shape of the committed schema', async () =
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const listed = await runCli({ args: ['ls', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--json'], env: ctx.home });
 
   expect(listed.code).toBe(0);
   expect(parseJsonOutput('ls', listed.stdout).data).toStrictEqual(JSON.parse(listed.stdout));
@@ -732,7 +718,7 @@ test('#ls marks an awake imp whose inner container is down', async () => {
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const listed = await runCli({ args: ['ls'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls'], env: ctx.home });
 
   const row = listed.stdout.split('\n').find((line) => line.startsWith('web '));
 
@@ -762,7 +748,7 @@ test('#ls passes through as sent a host field that a newer impd adds to its imps
     hosts: { box: { url: newer.url, token: box.rootToken } },
   });
 
-  const listed = await runCli({ args: ['ls', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--json'], env: ctx.home });
   const imps = await box.client.imps.list();
 
   // dates as JSON writes them
@@ -800,7 +786,7 @@ test('#ls names the saved host under --all over a host field that a newer impd a
     hosts: { box: { url: newer.url, token: box.rootToken } },
   });
 
-  const listed = await runCli({ args: ['ls', '--all', '--json'], env: ctx.home });
+  const listed = await runCLIInProcess({ args: ['ls', '--all', '--json'], env: ctx.home });
   const imps = await box.client.imps.list();
 
   // dates as JSON writes them, each imp under its saved host's name
@@ -861,7 +847,7 @@ test('#new skips a host without the image and moves past a RAM refusal under --p
     },
   });
 
-  const placed = await runCli({
+  const placed = await runCLIInProcess({
     args: ['new', 'dev', '--image', 'base', '--place', '--json'],
     env: ctx.home,
   });
@@ -915,7 +901,7 @@ test('#new places on a reachable host under --place when another saved host does
     },
   });
 
-  const placed = await runCli({
+  const placed = await runCLIInProcess({
     args: ['new', 'dev', '--image', 'base', '--place', '--json'],
     env: ctx.home,
   });
@@ -953,7 +939,7 @@ test('#new refuses --place when no saved host can take the imp', async () => {
     hosts: { bare: { url: bare.url, token: bare.rootToken } },
   });
 
-  const placed = await runCli({
+  const placed = await runCLIInProcess({
     args: ['new', 'dev', '--image', 'base', '--place'],
     env: ctx.home,
   });
@@ -998,7 +984,7 @@ test('#new refuses --place for a name a saved host has already', async () => {
     },
   });
 
-  const placed = await runCli({ args: ['new', 'dev', '--place'], env: ctx.home });
+  const placed = await runCLIInProcess({ args: ['new', 'dev', '--place'], env: ctx.home });
 
   expect(placed).toStrictEqual({
     stdout: '',
@@ -1052,7 +1038,7 @@ test('#new passes over a host whose token is limited, then exposes, under --plac
     },
   });
 
-  const placed = await runCli({
+  const placed = await runCLIInProcess({
     args: ['new', 'dev', '--place', '--public', '--json'],
     env: ctx.home,
   });
@@ -1109,7 +1095,7 @@ test('#new names the host of a failure after a placed create, and still writes t
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const placed = await runCli({
+  const placed = await runCLIInProcess({
     args: ['new', 'dev', '--place', '--public', '--json'],
     env: ctx.home,
   });

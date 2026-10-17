@@ -9,7 +9,7 @@ import {
 } from '@impz/local-tar';
 import type { LocalEntry } from '@impz/local-tar';
 import { createCopyProgress } from '../cp/copy-progress';
-import type { CopyProgress } from '../cp/copy-progress';
+import type { CopyProgress, ProgressOutput } from '../cp/copy-progress';
 import type { ImpClient } from '../create-imp-client';
 import { UsageError } from '../usage-error';
 import { createBuildStatus } from './build-status';
@@ -21,6 +21,9 @@ export interface ImageBuildOptions {
 
   // no progress and no build output; errors still print
   readonly quiet?: boolean;
+
+  // where the progress and the build's output go: stderr
+  readonly output: ProgressOutput;
 }
 
 // A tar of the entries, made as impd reads it: the pack waits while the
@@ -56,10 +59,6 @@ export function createContextStream(
   return pipe.readable;
 }
 
-function writeWarning(text: string): void {
-  process.stderr.write(`impz image build: ${text}\n`);
-}
-
 // `impz image build <dir>`: packs the directory here, honoring its
 // .dockerignore, and uploads it for impd to build
 export async function runImageBuild(
@@ -76,12 +75,11 @@ export async function runImageBuild(
 
   const quiet = options.quiet === true;
 
-  const output = {
-    // the upload's line is for a terminal only
-    isTTY: process.stderr.isTTY && !quiet,
-    write: (text: string) => {
-      process.stderr.write(text);
-    },
+  // the upload's line is for a terminal only
+  const output = { ...options.output, isTTY: options.output.isTTY && !quiet };
+
+  const writeWarning = (text: string): void => {
+    options.output.write(`impz image build: ${text}\n`);
   };
 
   const progress = createCopyProgress(output, Date.now, 'impz image build');

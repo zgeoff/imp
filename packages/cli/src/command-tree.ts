@@ -1,5 +1,4 @@
-import { defineCommand } from 'citty';
-import packageJson from '../package.json' with { type: 'json' };
+import { lazy } from 'gunshi';
 import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
 import { cpCommand } from './commands/cp';
@@ -42,70 +41,73 @@ import {
 import { logsCommand, serviceCommand } from './commands/services';
 import { attachCommand, sessionsCommand } from './commands/sessions';
 import { tokenCommand } from './commands/tokens';
+import { defineGroup } from './define-command';
 
 // Every imp command. `completion` walks this tree to write its scripts, so
 // it loads lazily: a static import would be a cycle.
-export const mainCommand = defineCommand({
-  meta: {
-    name: 'impz',
-    version: packageJson.version,
-    description: 'Persistent Linux microVMs that sleep when idle and wake on request',
-  },
-
-  // main takes --host out before citty parses; declared here for --help
-  args: { host: { type: 'string', description: 'saved host to call (see impz host ls)' } },
-  subCommands: {
-    new: newCommand,
-    ls: lsCommand,
-    rm: rmCommand,
-    start: startCommand,
-    stop: stopCommand,
-    exec: execCommand,
-    console: consoleCommand,
-    attach: attachCommand,
-    sessions: sessionsCommand,
-    service: serviceCommand,
-    logs: logsCommand,
-    sleep: sleepCommand,
-    wake: wakeCommand,
-    hold: holdCommand,
-    set: setCommand,
-    top: topCommand,
-    url: urlCommand,
-    proxy: proxyCommand,
-    cp: cpCommand,
-    policy: policyCommand,
-    expose: exposeCommand,
-    unexpose: unexposeCommand,
-    net: netCommand,
-    checkpoint: checkpointCommand,
-    checkpoints: checkpointsCommand,
-    restore: restoreCommand,
-    fork: forkCommand,
-    move: moveCommand,
-    disk: diskCommand,
-    gc: gcCommand,
-    db: dbCommand,
-    backup: backupCommand,
-    image: imageCommand,
-    template: templateCommand,
-    secret: secretCommand,
-    grant: grantCommand,
-    revoke: revokeCommand,
-    grants: grantsCommand,
-    audit: auditCommand,
-    token: tokenCommand,
-    events: eventsCommand,
-    info: infoCommand,
-    mcp: mcpCommand,
-    oauth: oauthCommand,
-    login: loginCommand,
-    host: hostCommand,
-    hosts: hostsCommand,
-    completion: async () => {
+export const subCommands = {
+  new: newCommand,
+  ls: lsCommand,
+  rm: rmCommand,
+  start: startCommand,
+  stop: stopCommand,
+  exec: execCommand,
+  console: consoleCommand,
+  attach: attachCommand,
+  sessions: sessionsCommand,
+  service: serviceCommand,
+  logs: logsCommand,
+  sleep: sleepCommand,
+  wake: wakeCommand,
+  hold: holdCommand,
+  set: setCommand,
+  top: topCommand,
+  url: urlCommand,
+  proxy: proxyCommand,
+  cp: cpCommand,
+  policy: policyCommand,
+  expose: exposeCommand,
+  unexpose: unexposeCommand,
+  net: netCommand,
+  checkpoint: checkpointCommand,
+  checkpoints: checkpointsCommand,
+  restore: restoreCommand,
+  fork: forkCommand,
+  move: moveCommand,
+  disk: diskCommand,
+  gc: gcCommand,
+  db: dbCommand,
+  backup: backupCommand,
+  image: imageCommand,
+  template: templateCommand,
+  secret: secretCommand,
+  grant: grantCommand,
+  revoke: revokeCommand,
+  grants: grantsCommand,
+  audit: auditCommand,
+  token: tokenCommand,
+  events: eventsCommand,
+  info: infoCommand,
+  mcp: mcpCommand,
+  oauth: oauthCommand,
+  login: loginCommand,
+  host: hostCommand,
+  hosts: hostsCommand,
+  completion: lazy(
+    async () => {
       const completion = await import('./commands/completion');
 
       return completion.completionCommand;
     },
-  },
+    {
+      name: 'completion',
+      description: 'Print the shell completion script (bash, zsh or fish)',
+    },
+  ),
+};
+
+export const mainCommand = defineGroup({
+  name: 'impz',
+  description: 'Persistent Linux microVMs that sleep when idle and wake on request',
+  subCommands,
 });

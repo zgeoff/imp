@@ -1,4 +1,5 @@
-import type { ArgsDef, CommandDef, Resolvable } from 'citty';
+import type { ArgSchema, LazyCommand, SubCommandable } from 'gunshi';
+import { listEntries } from './list-entries';
 
 export const SHELLS = ['bash', 'zsh', 'fish'] as const;
 
@@ -14,63 +15,52 @@ export interface CompletionNode {
   readonly children: readonly CompletionNode[];
 }
 
-// flags main handles itself, outside any citty command
+// flags every command line takes before the command, outside any command
 const ROOT_FLAGS = ['--host', '--version', '--help'];
 
-export async function buildCompletionTree<T extends ArgsDef>(
-  command: CommandDef<T>,
-): Promise<CompletionNode> {
+// a command as gunshi holds it: the command, or the loader of a lazy one
+type CommandEntry = SubCommandable | LazyCommand;
+
+export async function buildCompletionTree(command: CommandEntry): Promise<CompletionNode> {
   const root = await buildNode(command, 'impz');
 
   return { ...root, flags: [...new Set([...ROOT_FLAGS, ...root.flags])] };
 }
 
-async function buildNode<T extends ArgsDef>(
-  command: CommandDef<T>,
-  path: string,
-): Promise<CompletionNode> {
-  const resolvedArgs: ArgsDef | undefined = await resolve(command.args);
-  const resolvedSubCommands = await resolve(command.subCommands);
+async function buildNode(command: CommandEntry, path: string): Promise<CompletionNode> {
+  const resolved = await loadCommand(command);
 
-  const args = resolvedArgs ?? {};
-  const subCommands = resolvedSubCommands ?? {};
+  const args: Readonly<Record<string, ArgSchema>> = resolved.args ?? {};
+  const subCommands = listSubCommands(resolved);
   const children: CompletionNode[] = [];
 
-  for (const [name, child] of Object.entries(subCommands)) {
-    const resolved = await resolve(child);
+  for (const [name, child] of subCommands) {
+    const node = await buildNode(child, `${path} ${name}`);
 
-    if (resolved !== undefined) {
-      const node = await buildNode(resolved, `${path} ${name}`);
-
-      children.push(node);
-    }
+    children.push(node);
   }
 
   const flags = Object.entries(args).flatMap(([name, arg]) => {
-    if (arg.type === 'positional') {
+    if (arg.type === 'positional' || arg.hidden === true) {
       return [];
     }
 
-    const aliases = 'alias' in arg ? arg.alias : undefined;
-
-    const short = (typeof aliases === 'string' ? [aliases] : (aliases ?? [])).map((alias) =>
-      alias.length === 1 ? `-${alias}` : `--${alias}`,
-    );
-
     const names = [`--${name}`];
 
-    if (arg.type === 'boolean' && arg.default === true) {
+    if (arg.type === 'boolean' && arg.negatable === true) {
       names.push(`--no-${name}`);
     }
 
-    names.push(...short);
+    if (arg.short !== undefined) {
+      names.push(`-${arg.short}`);
+    }
 
     return names;
   });
 
   return {
     path,
-    subcommands: Object.keys(subCommands),
+    subcommands: subCommands.map(([name]) => name),
     flags: [...flags, '--help'],
     children,
   };
@@ -86,15 +76,26 @@ export function renderCompletion(shell: Shell, tree: CompletionNode): string {
   return RENDERERS[shell](collectNodes(tree));
 }
 
-// citty's own resolver is not exported
-function resolve<T>(value: Resolvable<T> | undefined): Promise<T | undefined> {
-  // oxlint-disable-next-line no-unsafe-type-assertion -- no command or args object is a function
-  const resolved = typeof value === 'function' ? (value as () => T | Promise<T>)() : value;
+// a command gunshi loads lazily, such as `completion`, loaded now
+async function loadCommand(entry: CommandEntry): Promise<SubCommandable> {
+  if (typeof entry !== 'function') {
+    return entry;
+  }
 
-  return Promise.resolve(resolved);
+  const loaded = await entry();
+
+  return typeof loaded === 'function' ? {} : loaded;
 }
 
-function collectNodes(node: CompletionNode): readonly CompletionNode[] {
+function listSubCommands(command: SubCommandable): [string, CommandEntry][] {
+  const subCommands: Readonly<Record<string, CommandEntry>> | ReadonlyMap<string, CommandEntry> =
+    command.subCommands ?? {};
+
+  return listEntries(subCommands);
+}
+
+// the node and every node under it, depth first
+export function collectNodes(node: CompletionNode): readonly CompletionNode[] {
   return [node, ...node.children.flatMap((child) => collectNodes(child))];
 }
 

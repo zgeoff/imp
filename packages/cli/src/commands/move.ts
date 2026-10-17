@@ -1,5 +1,6 @@
 import type { MovePlan, MoveStatus, WarmHost } from '@impz/api';
 import { loadCliConfig } from '../cli-config';
+import { toProgressOutput } from '../command-io';
 import { createCopyProgress } from '../cp/copy-progress';
 import type { ProgressOutput } from '../cp/copy-progress';
 import { createImpClient } from '../create-imp-client';
@@ -176,11 +177,9 @@ function readFailureHint(run: MoveRun, status: Readonly<MoveStatus>): string {
 }
 
 export const moveCommand = defineCommand({
-  meta: {
-    name: 'move',
-    description:
-      'Move an imp to another saved host: a stopped one cold, a sleeping one with its memory (see docs/guides/hosts.md)',
-  },
+  name: 'move',
+  description:
+    'Move an imp to another saved host: a stopped one cold, a sleeping one with its memory (see docs/guides/hosts.md)',
   args: {
     name: nameArg,
     to: { type: 'positional', description: 'saved host to move it to', required: true },
@@ -191,30 +190,30 @@ export const moveCommand = defineCommand({
     resume: { type: 'boolean', description: 'commit a move the target verified' },
     abort: { type: 'boolean', description: 'end a move; the imp stays here' },
   },
-  run: async (context) => {
-    await runAction(context.host, async (client) => {
-      if (context.args.resume === true && context.args.abort === true) {
+  run: async (ctx) => {
+    await runAction(ctx.extensions.impz, async (client) => {
+      if (ctx.values.resume === true && ctx.values.abort === true) {
         throw new UsageError('--resume and --abort do not go together');
       }
 
-      const target = loadCliConfig(process.env, context.args.to);
-      const mode = readMode(context.args.resume === true, context.args.abort === true);
+      const target = loadCliConfig(
+        ctx.extensions.impz.io.env,
+        ctx.values.to,
+        ctx.extensions.impz.io.printError,
+      );
+
+      const mode = readMode(ctx.values.resume === true, ctx.values.abort === true);
 
       await runMove({
-        name: context.args.name,
+        name: ctx.values.name,
         from: client,
         to: createImpClient(target),
-        toHost: context.args.to,
+        toHost: ctx.values.to,
         mode,
-        stop: context.args.stop === true,
-        output: {
-          isTTY: process.stderr.isTTY,
-          write: (text) => {
-            process.stderr.write(text);
-          },
-        },
+        stop: ctx.values.stop === true,
+        output: toProgressOutput(ctx.extensions.impz.io),
         print: (line) => {
-          console.log(line);
+          ctx.extensions.impz.io.print(line);
         },
         wait: (ms) => Bun.sleep(ms),
         now: Date.now,

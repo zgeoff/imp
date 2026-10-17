@@ -1,13 +1,16 @@
 import { EGRESS_MODE_TRAITS } from '@impz/api';
 import type { ExposeResult, ForkResult, Imp } from '@impz/api';
 import { CONSOLE_SHELL, EXEC_REQUIREMENTS, requireFeatures } from '@impz/client';
-import type { ExecRequirement, FeatureNeeds } from '@impz/client';
+import type { ExecRequirement } from '@impz/client';
 import type { CliConfig } from '../cli-config';
+import { CommandExitError } from '../command-exit-error';
+import type { CommandIO } from '../command-io';
 import { createImpClient } from '../create-imp-client';
 import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
-import { DEFAULT_SESSION } from '../detach-key';
-import { runExec } from '../exec-client';
+import { DEFAULT_SESSION, parseDetachKey } from '../detach-key';
+import { listOperands } from '../dispatch-verb';
+import { buildExecIO, runExec } from '../exec-client';
 import { listSavedTargets, runOnHosts } from '../fan-out';
 import type { SavedTarget, StartTimer } from '../fan-out';
 import {
@@ -25,15 +28,16 @@ import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
 import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
 import type { PlaceRequest } from '../place-imp';
-import { formatError, printError, runAction } from '../run-action';
+import { formatError, runAction, toCallError } from '../run-action';
 import { UsageError } from '../usage-error';
-import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
+import { detachKeyArg, jsonArg, nameArg, requireSessionName } from './common-args';
 import { cpuLimitArg, cpuWeightArg, readCpuArgs } from './cpu';
 import { authArgs } from './expose';
 import { printTrustWarnings } from './networks';
 
 export const newCommand = defineCommand({
-  meta: { name: 'new', description: 'Create an imp and boot it' },
+  name: 'new',
+  description: 'Create an imp and boot it',
   args: {
     name: {
       type: 'positional',
@@ -64,6 +68,7 @@ export const newCommand = defineCommand({
     net: { type: 'string', description: 'networks to join, comma-separated (see impz net)' },
     backup: {
       type: 'boolean',
+      negatable: true,
       default: true,
       description: 'hold the imp in the host’s backups (the default)',
       negativeDescription: 'leave its disk and checkpoints out of every backup, for its life',
@@ -74,31 +79,28 @@ export const newCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: async (context) => {
-    try {
-      const request = readNewRequest(context.args);
+  run: async (ctx) => {
+    const io = ctx.extensions.impz.io;
+    const request = readNewRequest(ctx.values);
 
-      if (context.args.place !== true) {
-        await runAction(context.host, (client) => runNew(client, request, null));
+    if (ctx.values.place !== true) {
+      await runAction(ctx.extensions.impz, (client) => runNew(client, io, request, null));
 
-        return;
-      }
-
-      if (context.host !== null) {
-        throw new UsageError('--place picks among the saved hosts; drop --host');
-      }
-
-      await runPlacedNew(request);
-    } catch (error) {
-      printError(error);
+      return;
     }
+
+    if (ctx.extensions.impz.host !== null) {
+      throw new UsageError('--place picks among the saved hosts; drop --host');
+    }
+
+    await runPlacedNew(io, request);
   },
 });
 
 // Probes every saved host, ranks those that could take the imp, and
 // creates on the best; docs/guides/hosts.md#placement says how it picks.
-async function runPlacedNew(request: NewRequest): Promise<void> {
-  const targets = listSavedTargets(process.env);
+async function runPlacedNew(io: CommandIO, request: NewRequest): Promise<void> {
+  const targets = listSavedTargets(io.env, io.printError);
   const place = toPlaceRequest(request);
 
   const answers = await runOnHosts(targets, (client, signal) =>
@@ -108,7 +110,7 @@ async function runPlacedNew(request: NewRequest): Promise<void> {
   const ranking = buildRanking(answers, place);
 
   for (const dropped of ranking.dropped) {
-    console.error(`impz: ${dropped.host}: skipped: ${dropped.reason}`);
+    io.printError(`impz: ${dropped.host}: skipped: ${dropped.reason}`);
   }
 
   if (ranking.ranked.length === 0) {
@@ -129,16 +131,16 @@ async function runPlacedNew(request: NewRequest): Promise<void> {
 
         config = target.config;
 
-        console.error(`impz: placing on ${host}`);
+        io.printError(`impz: placing on ${host}`);
 
-        await runNew(createImpClient(target.config), request, target);
+        await runNew(createImpClient(target.config), io, request, target);
       },
       (host, message) => {
-        console.error(`impz: ${host}: ${message}; trying the next host`);
+        io.printError(`impz: ${host}: ${message}; trying the next host`);
       },
     );
   } catch (error) {
-    printError(error, config);
+    throw config === null ? error : toCallError(error, config);
   }
 }
 
@@ -227,7 +229,12 @@ function readNewRequest(args: NewArgs): NewRequest {
 // The create on one host, then what follows it there: trust warnings for
 // --net, and the expose for --public. `placed` is the saved host placement
 // picked, null for the usual one-host create.
-async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarget | null) {
+async function runNew(
+  client: ImpClient,
+  io: CommandIO,
+  request: NewRequest,
+  placed: SavedTarget | null,
+) {
   const input = request.input;
   const auth = request.auth;
   const host = placed?.host ?? null;
@@ -262,7 +269,7 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
 
   try {
     if (networks !== undefined) {
-      await printTrustWarnings(client, imp.name);
+      await printTrustWarnings(client, io, imp.name);
     }
 
     // a failure here leaves the imp tailnet-only; `impz expose` tries again
@@ -272,7 +279,7 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
       throw error;
     }
 
-    throw printPlacedFailure(imp, placed, error, request.json);
+    throw printPlacedFailure(io, imp, placed, error, request.json);
   }
 
   if (request.json) {
@@ -282,7 +289,7 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
         ? imp
         : { ...(host !== null && { host }), imp, ...(exposed !== null && { public: exposed }) };
 
-    console.log(formatJson(output));
+    io.print(formatJson(output));
 
     return;
   }
@@ -290,17 +297,23 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
   const text =
     exposed === null ? formatImp(imp) : `${formatImp(imp)}\n${formatExposeResult(exposed)}`;
 
-  console.log(text);
+  io.print(text);
 }
 
 // After a placed create only the stderr line `placing on <host>` says where
 // the imp is, so the error names the host and --json still gets the imp. It
 // is a plain Error: placement never tries the next host for it.
-function printPlacedFailure(imp: Imp, placed: SavedTarget, error: unknown, json: boolean): Error {
+function printPlacedFailure(
+  io: CommandIO,
+  imp: Imp,
+  placed: SavedTarget,
+  error: unknown,
+  json: boolean,
+): Error {
   const message = formatError(error, placed.config);
 
   if (json) {
-    console.log(formatJson({ host: placed.host, imp, error: message }));
+    io.print(formatJson({ host: placed.host, imp, error: message }));
   }
 
   return new Error(`${imp.name} was created on ${placed.host}; ${message}`);
@@ -310,7 +323,8 @@ function printPlacedFailure(imp: Imp, placed: SavedTarget, error: unknown, json:
 const PARTIAL_CODE = 3;
 
 export const lsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List imps' },
+  name: 'ls',
+  description: 'List imps',
   args: {
     all: { type: 'boolean', description: 'list the imps on every saved host (see impz host ls)' },
     builders: {
@@ -319,37 +333,35 @@ export const lsCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: async (context) => {
-    if (context.args.all !== true) {
-      await runAction(context.host, async (client) => {
-        const input = context.args.builders === true ? { builders: true } : undefined;
+  run: async (ctx) => {
+    if (ctx.values.all !== true) {
+      await runAction(ctx.extensions.impz, async (client) => {
+        const input = ctx.values.builders === true ? { builders: true } : undefined;
 
         const imps = await client.imps.list(input);
 
-        console.log(formatOutput(imps, context.args.json, formatImps));
+        ctx.extensions.impz.io.print(formatOutput(imps, ctx.values.json, formatImps));
       });
 
       return;
     }
 
-    try {
-      if (context.host !== null) {
-        throw new UsageError('--all lists every saved host; drop --host');
-      }
+    const io = ctx.extensions.impz.io;
 
-      const code = await listAllImps({
-        env: process.env,
-        isJson: context.args.json === true,
-        hasBuilders: context.args.builders === true,
-        print: console.log,
-        printError: console.error,
-      });
+    if (ctx.extensions.impz.host !== null) {
+      throw new UsageError('--all lists every saved host; drop --host');
+    }
 
-      if (code !== 0) {
-        process.exitCode = code;
-      }
-    } catch (error) {
-      printError(error);
+    const code = await listAllImps({
+      env: io.env,
+      isJson: ctx.values.json === true,
+      hasBuilders: ctx.values.builders === true,
+      print: io.print,
+      printError: io.printError,
+    });
+
+    if (code !== 0) {
+      throw new CommandExitError(code);
     }
   },
 });
@@ -373,7 +385,7 @@ export async function listAllImps(run: Readonly<AllImpsRun>): Promise<number> {
   const input = run.hasBuilders ? { builders: true } : undefined;
 
   const answers = await runOnHosts(
-    listSavedTargets(run.env),
+    listSavedTargets(run.env, run.printError),
     (client, signal) => client.imps.list(input, { signal }),
     undefined,
     run.startTimer,
@@ -403,120 +415,118 @@ export async function listAllImps(run: Readonly<AllImpsRun>): Promise<number> {
 }
 
 export const startCommand = defineCommand({
-  meta: { name: 'start', description: 'Boot a stopped imp' },
+  name: 'start',
+  description: 'Boot a stopped imp',
   args: { name: nameArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const imp = await client.imps.start({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const imp = await client.imps.start({ name: ctx.values.name });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });
 
 export const stopCommand = defineCommand({
-  meta: {
-    name: 'stop',
-    description: 'Shut an imp down (its disk stays, its memory and leases do not)',
-  },
+  name: 'stop',
+  description: 'Shut an imp down (its disk stays, its memory and leases do not)',
   args: { name: nameArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       // a person typed it: the imp's leases end rather than refuse it
-      const imp = await client.imps.stop({ name: context.args.name, force: true });
+      const imp = await client.imps.stop({ name: ctx.values.name, force: true });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });
 
 export const rmCommand = defineCommand({
-  meta: { name: 'rm', description: 'Destroy an imp and its disk and checkpoints' },
+  name: 'rm',
+  description: 'Destroy an imp and its disk and checkpoints',
   args: { name: nameArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      await client.imps.destroy({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      await client.imps.destroy({ name: ctx.values.name });
     }),
 });
 
 export const sleepCommand = defineCommand({
-  meta: {
-    name: 'sleep',
-    description: 'Snapshot an imp to disk and free its RAM, ending its leases',
-  },
+  name: 'sleep',
+  description: 'Snapshot an imp to disk and free its RAM, ending its leases',
   args: { name: nameArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       // as for stop
-      const imp = await client.imps.sleep({ name: context.args.name, force: true });
+      const imp = await client.imps.sleep({ name: ctx.values.name, force: true });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });
 
 export const wakeCommand = defineCommand({
-  meta: { name: 'wake', description: 'Resume a sleeping or stopped imp' },
+  name: 'wake',
+  description: 'Resume a sleeping or stopped imp',
   args: { name: nameArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const imp = await client.imps.wake({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const imp = await client.imps.wake({ name: ctx.values.name });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });
 
 export const holdCommand = defineCommand({
-  meta: { name: 'hold', description: 'Keep an imp awake for a while (0 releases)' },
+  name: 'hold',
+  description: 'Keep an imp awake for a while (0 releases)',
   args: {
     name: nameArg,
     duration: { type: 'positional', description: 'e.g. 90s, 15m, 2h', required: true },
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const imp = await client.imps.hold({
-        name: context.args.name,
-        seconds: parseDuration(context.args.duration),
+        name: ctx.values.name,
+        seconds: parseDuration(ctx.values.duration),
       });
 
-      console.log(`${imp.name} held until ${imp.holdUntil?.toISOString() ?? 'released'}`);
+      ctx.extensions.impz.io.print(
+        `${imp.name} held until ${imp.holdUntil?.toISOString() ?? 'released'}`,
+      );
     }),
 });
 
 export const urlCommand = defineCommand({
-  meta: {
-    name: 'url',
-    description:
-      "Print an imp's URLs: https first when HTTPS is on, then its tailnet name, local and tailnet",
-  },
+  name: 'url',
+  description:
+    "Print an imp's URLs: https first when HTTPS is on, then its tailnet name, local and tailnet",
   args: { name: nameArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const urls = await client.imps.url({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const urls = await client.imps.url({ name: ctx.values.name });
 
       if (urls.https !== null) {
-        console.log(urls.https);
+        ctx.extensions.impz.io.print(urls.https);
       }
 
       // the same name on the internet, which differs only by port
       if (urls.public !== null && urls.public !== urls.https) {
-        console.log(urls.public);
+        ctx.extensions.impz.io.print(urls.public);
       }
 
       if (urls.service !== null) {
-        console.log(urls.service);
+        ctx.extensions.impz.io.print(urls.service);
       }
 
-      console.log(urls.local);
+      ctx.extensions.impz.io.print(urls.local);
 
       if (urls.tailnet !== null) {
-        console.log(urls.tailnet);
+        ctx.extensions.impz.io.print(urls.tailnet);
       }
     }),
 });
 
 export const policyCommand = defineCommand({
-  meta: {
-    name: 'policy',
-    description: "Show or set an imp's egress policy: open, public, box with --allow, or none",
-  },
+  name: 'policy',
+  description: "Show or set an imp's egress policy: open, public, box with --allow, or none",
   args: {
     name: nameArg,
     mode: { type: 'positional', description: 'open, public, box or none', required: false },
@@ -526,9 +536,9 @@ export const policyCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const policy = parsePolicy(context.args.mode, context.args.allow);
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const policy = parsePolicy(ctx.values.mode, ctx.values.allow);
 
       if (policy !== undefined && EGRESS_MODE_TRAITS[policy.mode].isPublic) {
         await requireFeatures(client, { publicEgress: 'refuse the public egress policy' });
@@ -536,13 +546,13 @@ export const policyCommand = defineCommand({
 
       const current =
         policy === undefined
-          ? await client.imps.policy({ name: context.args.name })
-          : await client.imps.setPolicy({ name: context.args.name, policy });
+          ? await client.imps.policy({ name: ctx.values.name })
+          : await client.imps.setPolicy({ name: ctx.values.name, policy });
 
-      console.log(formatOutput(current, context.args.json, formatPolicy));
+      ctx.extensions.impz.io.print(formatOutput(current, ctx.values.json, formatPolicy));
 
       if (policy !== undefined) {
-        await printTrustWarnings(client, context.args.name);
+        await printTrustWarnings(client, ctx.extensions.impz.io, ctx.values.name);
       }
     }),
 });
@@ -563,97 +573,76 @@ export function listForkWarnings(
 }
 
 export const forkCommand = defineCommand({
-  meta: { name: 'fork', description: "Create an imp from another imp's disk or checkpoint" },
+  name: 'fork',
+  description: "Create an imp from another imp's disk or checkpoint",
   args: {
     source: { type: 'positional', description: 'imp to fork', required: true },
     name: { type: 'positional', description: 'name of the new imp', required: true },
     from: { type: 'string', description: 'checkpoint id or label (default: the live disk)' },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const imp = await client.imps.fork({
-        source: context.args.source,
-        name: context.args.name,
-        ...(context.args.from !== undefined && { checkpoint: context.args.from }),
+        source: ctx.values.source,
+        name: ctx.values.name,
+        ...(ctx.values.from !== undefined && { checkpoint: ctx.values.from }),
       });
 
       // the fork exists either way, so these warn and the exit stays 0
-      for (const warning of listForkWarnings(context.args.source, imp)) {
-        console.error(`impz: ${warning}`);
+      for (const warning of listForkWarnings(ctx.values.source, imp)) {
+        ctx.extensions.impz.io.printError(`impz: ${warning}`);
       }
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });
 
 export const execCommand = defineCommand({
-  meta: {
-    name: 'exec',
-    description: 'Run a command in an imp (impz exec [-t] <name> -- cmd args)',
-  },
+  name: 'exec',
+  description: 'Run a command in an imp (impz exec [-t] <name> -- cmd args)',
   args: {
     name: nameArg,
-    tty: { type: 'boolean', alias: 't', description: 'run on a terminal' },
+    tty: { type: 'boolean', short: 't', description: 'run on a terminal' },
     agent: {
       type: 'boolean',
       description:
         "run as root in the imp's agent, outside its container, with busybox (host-wide manage scope)",
     },
     require: {
-      type: 'string',
+      type: 'custom',
+      parse: parseRequire,
+      conflicts: 'agent',
       description:
         'start the command only if impd can ensure these, or fail and run nothing: broker (comma-separated)',
     },
   },
-  run: async (context) => {
-    const argv = splitCommand(process.argv, context.args._.slice(1));
+  run: async (ctx) => {
+    const argv = ctx._.includes('--') ? ctx.rest : listOperands(ctx).slice(1);
 
     if (argv.length === 0) {
-      console.error('impz: exec needs a command: impz exec <name> -- cmd args');
-      process.exit(2);
+      throw new UsageError('exec needs a command: impz exec <name> -- cmd args');
     }
 
-    const requirements = parseRequire(context.args.require, context.args.agent === true);
+    const code = await runExec(
+      {
+        host: ctx.extensions.impz.host,
+        name: ctx.values.name,
+        argv,
+        tty: ctx.values.tty === true,
+        ...(ctx.values.tty === true && { env: readTermEnv(ctx.extensions.impz.io.env) }),
+        ...(ctx.values.agent === true && { outer: true }),
+        ...(ctx.values.require !== undefined && { require: ctx.values.require }),
+      },
+      buildExecIO(ctx.extensions.impz.io),
+    );
 
-    if (requirements === null) {
-      process.exit(2);
-    }
-
-    // an older impd would drop the list and run the command anyway
-    if (
-      requirements !== undefined &&
-      !(await checkFeatures(context.host, {
-        execRequire: 'run the command without checking --require',
-      }))
-    ) {
-      process.exit(1);
-    }
-
-    const code = await runExec({
-      host: context.host,
-      name: context.args.name,
-      argv,
-      tty: context.args.tty === true,
-      ...(context.args.tty === true && { env: readTermEnv() }),
-      ...(context.args.agent === true && { outer: true }),
-      ...(requirements !== undefined && { require: requirements }),
-    });
-
-    process.exit(code);
+    throw new CommandExitError(code, true);
   },
 });
 
-// --require 'broker': what impd must ensure first; undefined when unset, and
-// null once a bad list is reported
-function parseRequire(
-  text: string | undefined,
-  isAgent: boolean,
-): ExecRequirement[] | null | undefined {
-  if (text === undefined) {
-    return undefined;
-  }
-
+// --require 'broker': what impd must ensure before it starts the command
+function parseRequire(text: string): ExecRequirement[] {
   const names = text
     .split(',')
     .map((name) => name.trim())
@@ -664,47 +653,24 @@ function parseRequire(
   const bad = names.find((name) => !known.has(name));
 
   if (names.length === 0 || bad !== undefined) {
-    console.error(`impz: --require takes ${EXEC_REQUIREMENTS.join(', ')}; not ${bad ?? text}`);
-
-    return null;
-  }
-
-  if (isAgent) {
-    console.error('impz: --require does not go with --agent: an exec in the agent gets no broker');
-
-    return null;
+    throw new UsageError(`--require takes ${EXEC_REQUIREMENTS.join(', ')}; not ${bad ?? text}`);
   }
 
   return EXEC_REQUIREMENTS.filter((name) => names.includes(name));
 }
 
-// false once the failed check is reported
-async function checkFeatures(host: string | null, needs: FeatureNeeds): Promise<boolean> {
-  const checked = { ok: false };
-
-  await runAction(host, async (client) => {
-    await requireFeatures(client, needs);
-
-    checked.ok = true;
-  });
-
-  return checked.ok;
-}
-
-// `--no-session` parses to session: false. With no terminal on stdin, as
-// in a script, the shell runs without a session unless one is named.
+// With no terminal on stdin, as in a script, the shell runs without a
+// session unless one is named.
 export const consoleCommand = defineCommand({
-  meta: {
-    name: 'console',
-    description:
-      'Open a shell in an imp, in a session that outlives the terminal (ctrl-] detaches)',
-  },
+  name: 'console',
+  description: 'Open a shell in an imp, in a session that outlives the terminal (ctrl-] detaches)',
   args: {
     name: nameArg,
     session: {
       type: 'string',
       description: `session to start or attach to (default ${DEFAULT_SESSION} on a terminal); --no-session for a shell that ends with the terminal`,
     },
+    'no-session': { type: 'boolean', hidden: true },
     log: {
       type: 'boolean',
       description:
@@ -712,67 +678,58 @@ export const consoleCommand = defineCommand({
     },
     'detach-key': detachKeyArg,
   },
-  run: async (context) => {
-    const session = readConsoleSession(context.args.session, process.stdin.isTTY);
-    const detachKey = readDetachKey(context.args['detach-key']);
-    const log = context.args.log === true;
-
-    if (session === undefined || detachKey === undefined) {
-      return;
-    }
+  run: async (ctx) => {
+    const impz = ctx.extensions.impz;
+    const session = pickConsoleSession(ctx.values, impz.io.isStdinTerminal);
+    const detachKey = parseDetachKey(ctx.values['detach-key']);
+    const log = ctx.values.log === true;
 
     if (log && session === null) {
-      printError(new UsageError('--log needs a session'));
-
-      return;
+      throw new UsageError('--log needs a session');
     }
 
     // an older impd would start the session and keep nothing
-    if (
-      log &&
-      !(await checkFeatures(context.host, { sessionLog: 'start the session without a log' }))
-    ) {
-      return;
+    if (log) {
+      await runAction(impz, (client) =>
+        requireFeatures(client, { sessionLog: 'start the session without a log' }),
+      );
     }
 
-    const code = await runExec({
-      host: context.host,
-      name: context.args.name,
-      argv: ['/bin/sh', '-c', CONSOLE_SHELL],
-      tty: true,
-      env: readTermEnv(),
-      ...(typeof session === 'string' && {
-        session: { name: session, attachOnly: false, detachKey, log },
-      }),
-    });
+    const code = await runExec(
+      {
+        host: impz.host,
+        name: ctx.values.name,
+        argv: ['/bin/sh', '-c', CONSOLE_SHELL],
+        tty: true,
+        env: readTermEnv(impz.io.env),
+        ...(session !== null && {
+          session: { name: session, attachOnly: false, detachKey, log },
+        }),
+      },
+      buildExecIO(impz.io),
+    );
 
-    process.exit(code);
+    throw new CommandExitError(code, true);
   },
 });
 
-// the named session, the default on a terminal, or null for none;
-// undefined once a bad name is reported
-export function readConsoleSession(
-  session: unknown,
+interface ConsoleSessionArgs {
+  readonly session?: string | undefined;
+  readonly 'no-session'?: boolean | undefined;
+}
+
+// the named session, the default on a terminal, or null for none
+export function pickConsoleSession(
+  args: Readonly<ConsoleSessionArgs>,
   isTerminal: boolean,
-): string | null | undefined {
-  if (session === false || (session === undefined && !isTerminal)) {
+): string | null {
+  if (args['no-session'] === true || (args.session === undefined && !isTerminal)) {
     return null;
   }
 
-  const name = typeof session === 'string' ? session : DEFAULT_SESSION;
-
-  return readSessionName(name);
+  return requireSessionName(args.session ?? DEFAULT_SESSION);
 }
 
-// everything after `--` (main.ts keeps it from citty), else the
-// positionals after the name
-function splitCommand(argv: readonly string[], positionals: readonly string[]): string[] {
-  const separator = argv.indexOf('--');
-
-  return separator === -1 ? [...positionals] : argv.slice(separator + 1);
-}
-
-export function readTermEnv(): Record<string, string> {
-  return { TERM: process.env['TERM'] ?? 'xterm-256color' };
+export function readTermEnv(env: CliEnv): Record<string, string> {
+  return { TERM: env['TERM'] ?? 'xterm-256color' };
 }

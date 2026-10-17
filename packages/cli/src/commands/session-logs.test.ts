@@ -22,10 +22,8 @@ import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import invariant from 'tiny-invariant';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
-import { UsageError } from '../usage-error';
-import { writeSessionLog } from './session-logs';
 
 // impd, listening for the spawned CLI
 async function setupTest() {
@@ -190,7 +188,7 @@ test('it writes the newest log to stdout and the bytes the log lost to stderr', 
   await log.append(new TextEncoder().encode('abcdef'));
   await log.finish({ end: 10, exitCode: 0 });
 
-  const result = await runCli({ args: ['sessions', 'log', 'dev', 'main'], env: ctx.env });
+  const result = await runCLIInProcess({ args: ['sessions', 'log', 'dev', 'main'], env: ctx.env });
 
   expect(result).toStrictEqual({
     stdout: 'abcdef',
@@ -233,7 +231,7 @@ test('it reads a named generation from the --from offset', async () => {
   await log.append(new TextEncoder().encode('abcdef'));
   await log.finish({ end: 10, exitCode: 0 });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['sessions', 'log', 'dev', 'main', generation, '--from', '6'],
     env: ctx.env,
   });
@@ -242,25 +240,16 @@ test('it reads a named generation from the --from offset', async () => {
 });
 
 test('it refuses a --from that is not a whole number of bytes', async () => {
-  const result = await runCli({
-    args: ['sessions', 'log', 'dev', 'main', '--from', '-1'],
+  const result = await runCLIInProcess({
+    args: ['sessions', 'log', 'dev', 'main', '--from=-1'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'impz: --from must be an offset, a whole number of bytes, not -1\n',
+    stderr: 'impz: --from must be at least 0, not -1\n',
     code: 2,
   });
-});
-
-test('it refuses a --from that is not a string', () => {
-  const client = createImpClient({ url: 'http://127.0.0.1:1' });
-
-  expect(writeSessionLog(client, ['dev', 'main'], true)).rejects.toThrowWithMessage(
-    UsageError,
-    '--from needs an offset',
-  );
 });
 
 test.each([
@@ -291,7 +280,7 @@ test.each([
     'usage: impz sessions log-rm <name> [session] [generation]',
   ],
 ])('it prints the usage for %s', async (_case, args, usage) => {
-  const result = await runCli({ args, env: { IMP_URL: 'http://127.0.0.1:1' } });
+  const result = await runCLIInProcess({ args, env: { IMP_URL: 'http://127.0.0.1:1' } });
 
   expect(result).toStrictEqual({ stdout: '', stderr: `impz: ${usage}\n`, code: 2 });
 });
@@ -307,7 +296,7 @@ test('it says the imp has no log of a session that never logged', async () => {
 
   await ctx.client.imps.create({ name: 'dev' });
 
-  const result = await runCli({ args: ['sessions', 'log', 'dev', 'main'], env: ctx.env });
+  const result = await runCLIInProcess({ args: ['sessions', 'log', 'dev', 'main'], env: ctx.env });
 
   expect(result).toStrictEqual({
     stdout: '',
@@ -350,7 +339,10 @@ test('it lists the logs of an imp as JSON', async () => {
   await log.append(new TextEncoder().encode('abcdef'));
   await log.finish({ end: 10, exitCode: 0 });
 
-  const result = await runCli({ args: ['sessions', 'logs', 'dev', '--json'], env: ctx.env });
+  const result = await runCLIInProcess({
+    args: ['sessions', 'logs', 'dev', '--json'],
+    env: ctx.env,
+  });
 
   const listed: unknown = JSON.parse(result.stdout);
 
@@ -405,7 +397,10 @@ test('it deletes the logs of the session it names', async () => {
   await log.append(new TextEncoder().encode('abcdef'));
   await log.finish({ end: 6, exitCode: 0 });
 
-  const result = await runCli({ args: ['sessions', 'log-rm', 'dev', 'main'], env: ctx.env });
+  const result = await runCLIInProcess({
+    args: ['sessions', 'log-rm', 'dev', 'main'],
+    env: ctx.env,
+  });
 
   expect(result).toStrictEqual({
     stdout: 'deleted 1 session logs of dev\n',
@@ -491,7 +486,10 @@ test('it never deletes the logs of another session or another imp', async () => 
   await otherImpLog.append(new TextEncoder().encode('abcdef'));
   await otherImpLog.finish({ end: 6, exitCode: 0 });
 
-  const result = await runCli({ args: ['sessions', 'log-rm', 'dev', 'main'], env: ctx.env });
+  const result = await runCLIInProcess({
+    args: ['sessions', 'log-rm', 'dev', 'main'],
+    env: ctx.env,
+  });
 
   expect(result).toStrictEqual({
     stdout: 'deleted 1 session logs of dev\n',
@@ -511,7 +509,7 @@ test('it refuses to read a log from an impd from before sessionLog, before any r
 
   const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { withoutFeatures: ['sessionLog'] });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['sessions', 'log', 'dev', 'main'],
     env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
   });

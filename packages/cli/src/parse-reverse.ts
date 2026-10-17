@@ -64,22 +64,3 @@ export function parseReverse(spec: string): ReverseSpec {
 
   return { guest, local };
 }
-
-// every value of a repeated `--reverse`, which citty keeps only the last of
-export function listReverseSpecs(rawArgs: readonly string[]): readonly string[] {
-  const specs: string[] = [];
-
-  for (const [index, arg] of rawArgs.entries()) {
-    if (arg === '--reverse') {
-      const value = rawArgs[index + 1];
-
-      if (value !== undefined) {
-        specs.push(value);
-      }
-    } else if (arg.startsWith('--reverse=')) {
-      specs.push(arg.slice('--reverse='.length));
-    }
-  }
-
-  return specs;
-}

@@ -22,7 +22,7 @@ import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
 import invariant from 'tiny-invariant';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startStubInfoFaultImpd } from '../test-utils/start-stub-info-fault-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 
@@ -159,14 +159,14 @@ async function setupTest() {
 }
 
 test('it refuses a secret value given as a flag, which only stdin may carry', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--value', 'ghp_x'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'impz: unknown flag --value for add (see --help)\n',
+    stderr: 'impz: unknown flag --value for secret add (see --help)\n',
     code: 2,
   });
 });
@@ -235,7 +235,7 @@ test.each([
     'impz: Invalid option: expected one of "bearer"|"basic"|"raw"',
   ],
 ])('it refuses %s before it asks for a value', async (_case, flags, message) => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'add', 'api', ...flags],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -244,14 +244,14 @@ test.each([
 });
 
 test('it refuses an audit limit outside 1 to 1000', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['audit', '--limit', '0'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'impz: --limit must be a whole number from 1 to 1000\n',
+    stderr: 'impz: --limit must be at least 1, not 0\n',
     code: 2,
   });
 });
@@ -292,7 +292,7 @@ test.each([
     'impz: must be an origin with no path\n',
   ],
 ])('it refuses %p before any call to impd', async (args, stderr) => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args,
     env: { IMP_URL: 'http://127.0.0.1:1', IMP_TOKEN: 'root-token' },
     stdin: 'fake-secret-value\n',
@@ -358,7 +358,7 @@ test.each([
 
     const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { withoutFeatures: [feature] });
 
-    const result = await runCli({
+    const result = await runCLIInProcess({
       args,
       env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
       stdin: 'fake-secret-value\n',
@@ -379,7 +379,7 @@ test('it replaces no secret on an impd from before SystemInfo.features', async (
 
   const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { isWithoutFeatureList: true });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
     env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
@@ -396,7 +396,7 @@ test('it replaces no secret when the feature check’s connection drops', async 
 
   const impd = startStubInfoFaultImpd(ctx.stack, ctx.sendRequest);
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
     env: { IMP_URL: impd.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
@@ -417,7 +417,7 @@ test('it replaces a secret on an impd with the feature', async () => {
 
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'fake-old-value' });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'add', 'gh', '--kind', 'github', '--replace'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
@@ -439,7 +439,7 @@ test('it adds a plain secret without a feature check, even on an impd from befor
 
   const older = startStubOlderImpd(ctx.stack, ctx.sendRequest, { isWithoutFeatureList: true });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'add', 'gh', '--kind', 'github'],
     env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
     stdin: 'fake-secret-value\n',
@@ -459,7 +459,7 @@ test('it says until when an added oauth secret’s access token is valid', async
   server.use(endpoint.handler);
   endpoint.issue('fake-refresh', { access_token: accessToken, refresh_token: 'fake-refresh-1' });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: [
       'secret',
       'add',
@@ -498,7 +498,7 @@ test('it says why an added oauth secret failed its sign-in', async () => {
 
   server.use(endpoint.handler);
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: [
       'secret',
       'add',
@@ -553,7 +553,7 @@ test('it prints a refreshed oauth secret that is ready', async () => {
     },
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'refresh', 'codex'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -590,7 +590,7 @@ test('it exits 1 for a refreshed oauth secret that is not ready', async () => {
     },
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'refresh', 'codex', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -642,7 +642,7 @@ test('it shows a state column on secret ls, with a dash for other kinds', async 
     },
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'ls'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -662,7 +662,7 @@ test('it shows a state column on secret ls, with a dash for other kinds', async 
 test('it sends a secret upstream in the rule to an impd that knows it', async () => {
   const ctx = await setupTest();
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: [
       'secret',
       'add',
@@ -703,7 +703,7 @@ test('it sends a secret upstream in the rule to an impd that knows it', async ()
 test('it stores nothing when stdin gives an empty value', async () => {
   const ctx = await setupTest();
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['secret', 'add', 'gh', '--kind', 'github'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     stdin: '\n',
@@ -723,7 +723,7 @@ test('it stores nothing when stdin gives an empty value', async () => {
 test('it lists the refused broker requests as JSON, none on a new impd', async () => {
   const ctx = await setupTest();
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['audit', '--kind', 'refused', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -738,7 +738,7 @@ test('it lists no refused broker requests from an impd without them', async () =
     withoutFeatures: ['brokerRefusals'],
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['audit', '--kind', 'refused'],
     env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -765,7 +765,7 @@ test('it grants a secret for the methods and paths given', async () => {
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['grant', 'dev', 'gh', '--methods', 'GET,HEAD', '--paths', '/repos/*/*/issues,/user'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -791,7 +791,7 @@ test('it grants a secret for the whole host without --methods or --paths', async
   await ctx.client.imps.create({ name: 'dev' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'ghp_value' });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['grant', 'dev', 'gh'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -803,7 +803,7 @@ test('it grants a secret for the whole host without --methods or --paths', async
 });
 
 test('it refuses a path pattern that is not one, before it calls impd', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['grant', 'dev', 'gh', '--paths', '/v1/**/x'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -823,7 +823,7 @@ test('it makes no filtered grant on an impd from before grant filters', async ()
     withoutFeatures: ['grantFilters'],
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['grant', 'dev', 'gh', '--methods', 'GET'],
     env: { IMP_URL: older.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -859,7 +859,7 @@ test('it lists each grant with the methods and paths it covers', async () => {
 
   await ctx.client.grants.add({ name: 'dev', secret: 'npm' });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['grants', 'dev', '--filters'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -874,14 +874,14 @@ test('it lists each grant with the methods and paths it covers', async () => {
 });
 
 test('it refuses an audit kind other than broker, refused or api', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['audit', '--kind', 'tokens'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'impz: --kind is broker, refused or api\n',
+    stderr: 'impz: --kind must be one of broker, refused, api\n',
     code: 2,
   });
 });

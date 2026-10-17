@@ -49,11 +49,9 @@ export function readCpuArgs(args: CpuArgs) {
 }
 
 export const setCommand = defineCommand({
-  meta: {
-    name: 'set',
-    description:
-      "Change an imp's CPU limit or weight (at once when running), its vCPUs (stopped only), or its HTTP port",
-  },
+  name: 'set',
+  description:
+    "Change an imp's CPU limit or weight (at once when running), its vCPUs (stopped only), or its HTTP port",
   args: {
     name: nameArg,
     'cpu-limit': cpuLimitArg,
@@ -62,13 +60,13 @@ export const setCommand = defineCommand({
     'http-port': { type: 'string', description: "the port the imp's URL reaches" },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const change = {
-        ...readCpuArgs(context.args),
-        ...(context.args.cpus !== undefined && { vcpus: parseCount(context.args.cpus, 'cpus') }),
-        ...(context.args['http-port'] !== undefined && {
-          httpPort: parseCount(context.args['http-port'], 'http-port'),
+        ...readCpuArgs(ctx.values),
+        ...(ctx.values.cpus !== undefined && { vcpus: parseCount(ctx.values.cpus, 'cpus') }),
+        ...(ctx.values['http-port'] !== undefined && {
+          httpPort: parseCount(ctx.values['http-port'], 'http-port'),
         }),
       };
 
@@ -76,9 +74,9 @@ export const setCommand = defineCommand({
         throw new UsageError('impz set needs --cpu-limit, --cpu-weight, --cpus or --http-port');
       }
 
-      const imp = await client.imps.update({ name: context.args.name, ...change });
+      const imp = await client.imps.update({ name: ctx.values.name, ...change });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });
 
@@ -127,17 +125,18 @@ export function formatTop(imps: readonly Imp[]): string {
 }
 
 export const topCommand = defineCommand({
-  meta: { name: 'top', description: "Watch every imp's CPU, memory and traffic" },
+  name: 'top',
+  description: "Watch every imp's CPU, memory and traffic",
   args: {
     once: { type: 'boolean', description: 'print the table once and exit' },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const imps = await client.imps.list();
 
-      if (context.args.once === true || context.args.json === true) {
-        console.log(formatOutput(imps, context.args.json, formatTop));
+      if (ctx.values.once === true || ctx.values.json === true) {
+        ctx.extensions.impz.io.print(formatOutput(imps, ctx.values.json, formatTop));
 
         return;
       }

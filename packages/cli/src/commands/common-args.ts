@@ -1,5 +1,4 @@
-import { DEFAULT_DETACH_KEY, parseDetachKey } from '../detach-key';
-import { printError } from '../run-action';
+import { DEFAULT_DETACH_KEY } from '../detach-key';
 import { UsageError } from '../usage-error';
 
 export const nameArg = { type: 'positional', description: 'imp name', required: true } as const;
@@ -11,24 +10,10 @@ export const detachKeyArg = {
   default: DEFAULT_DETACH_KEY,
 } as const;
 
-// the --detach-key byte, or undefined once a bad key is reported
-export function readDetachKey(text: string): number | null | undefined {
-  try {
-    return parseDetachKey(text);
-  } catch (error) {
-    printError(error);
-
-    return undefined;
-  }
-}
-
-// the session name, or undefined once an empty one is reported; impd checks
-// the rest of its form
-export function readSessionName(session: string): string | undefined {
+// the session name; impd checks the rest of its form
+export function requireSessionName(session: string): string {
   if (session === '') {
-    printError(new UsageError('a session needs a name'));
-
-    return undefined;
+    throw new UsageError('a session needs a name');
   }
 
   return session;

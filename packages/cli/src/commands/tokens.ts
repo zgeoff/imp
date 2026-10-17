@@ -2,23 +2,14 @@ import { readFileSync } from 'node:fs';
 import { ImageRefPrefixSchema, ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@impz/api';
 import type { Scope } from '@impz/api';
 import { requireFeatures } from '@impz/client';
-import { defineCommand } from '../define-command';
+import { choice } from 'gunshi/combinators';
+import { defineCommand, defineGroup } from '../define-command';
 import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 const tokenArg = { type: 'positional', description: 'token name', required: true } as const;
-
-function parseScope(scope: string): Scope {
-  const parsed = ScopeSchema.safeParse(scope);
-
-  if (!parsed.success) {
-    throw new UsageError(`--scope must be one of ${ScopeSchema.options.join(', ')}`);
-  }
-
-  return parsed.data;
-}
 
 // --imps 'dev-*,ci-*': the imps a token may touch; unset for every imp
 function parseImpPatterns(text: string | undefined): string[] | undefined {
@@ -124,17 +115,14 @@ function readKeyFile(path: string): string[] {
 }
 
 const newCommand = defineCommand({
-  meta: {
-    name: 'new',
-    description: 'Make a token; its secret prints once, on stdout, and impd keeps only a hash',
-  },
+  name: 'new',
+  description: 'Make a token; its secret prints once, on stdout, and impd keeps only a hash',
   args: {
     name: tokenArg,
-    scope: {
-      type: 'string',
+    scope: choice(ScopeSchema.options, {
       description: 'read, exec (read and run things in imps) or manage (everything)',
       required: true,
-    },
+    }),
     imps: {
       type: 'string',
       description: "limit it to these imps, such as 'dev-*' (comma-separated; default every imp)",
@@ -155,12 +143,12 @@ const newCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const scope = parseScope(context.args.scope);
-      const imps = parseImpPatterns(context.args.imps);
-      const grantable = parseGrantable(context.args.grantable);
-      const prefixArg = context.args['image-ref-prefix'];
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const scope = ctx.values.scope;
+      const imps = parseImpPatterns(ctx.values.imps);
+      const grantable = parseGrantable(ctx.values.grantable);
+      const prefixArg = ctx.values['image-ref-prefix'];
       const imageRefPrefix = prefixArg === undefined ? undefined : parseImageRefPrefix(prefixArg);
 
       if (imageRefPrefix !== undefined && (scope !== 'manage' || imps === undefined)) {
@@ -180,11 +168,11 @@ const newCommand = defineCommand({
         }),
       });
 
-      const keyFile = context.args['ssh-key'];
+      const keyFile = ctx.values['ssh-key'];
       const sshKeys = keyFile === undefined ? undefined : readKeyFile(keyFile);
 
       const made = await client.tokens.create({
-        name: context.args.name,
+        name: ctx.values.name,
         scope,
         ...(imps !== undefined && { imps }),
         ...(sshKeys !== undefined && { sshKeys }),
@@ -192,23 +180,24 @@ const newCommand = defineCommand({
         ...(imageRefPrefix !== undefined && { imageRefPrefix }),
       });
 
-      if (context.args.json === true) {
-        console.log(formatOutput(made, true, () => ''));
+      if (ctx.values.json === true) {
+        ctx.extensions.impz.io.print(formatOutput(made, true, () => ''));
 
         return;
       }
 
-      console.error(`impz: token ${made.token.name} made; impd shows its secret only this once`);
-      console.log(made.secret);
+      ctx.extensions.impz.io.printError(
+        `impz: token ${made.token.name} made; impd shows its secret only this once`,
+      );
+
+      ctx.extensions.impz.io.print(made.secret);
     }),
 });
 
 const setCommand = defineCommand({
-  meta: {
-    name: 'set',
-    description:
-      "Change a token's grantable secrets or its image ref prefix; its secret stays, and a secret taken off loses its grants on the token's imps",
-  },
+  name: 'set',
+  description:
+    "Change a token's grantable secrets or its image ref prefix; its secret stays, and a secret taken off loses its grants on the token's imps",
   args: {
     name: tokenArg,
     grantable: {
@@ -223,10 +212,10 @@ const setCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const grantableArg = context.args.grantable;
-      const prefixArg = context.args['image-ref-prefix'];
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const grantableArg = ctx.values.grantable;
+      const prefixArg = ctx.values['image-ref-prefix'];
 
       if (grantableArg === undefined && prefixArg === undefined) {
         throw new UsageError('give --grantable, --image-ref-prefix or both');
@@ -244,48 +233,44 @@ const setCommand = defineCommand({
         : requireFeatures(client, { tokenImageAdd: 'not change the image ref prefix' }));
 
       const token = await client.tokens.update({
-        name: context.args.name,
+        name: ctx.values.name,
         ...(grantable !== undefined && { grantable }),
         ...(imageRefPrefix !== undefined && { imageRefPrefix }),
       });
 
-      console.log(formatOutput(token, context.args.json, (shown) => formatTokens([shown])));
+      ctx.extensions.impz.io.print(
+        formatOutput(token, ctx.values.json, (shown) => formatTokens([shown])),
+      );
     }),
 });
 
 const lsCommand = defineCommand({
-  meta: {
-    name: 'ls',
-    description:
-      'List tokens: their scopes, imps, grantable secrets and image ref prefixes, never their secrets',
-  },
+  name: 'ls',
+  description:
+    'List tokens: their scopes, imps, grantable secrets and image ref prefixes, never their secrets',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const tokens = await client.tokens.list();
 
-      console.log(formatOutput(tokens, context.args.json, formatTokens));
+      ctx.extensions.impz.io.print(formatOutput(tokens, ctx.values.json, formatTokens));
     }),
 });
 
 const rmCommand = defineCommand({
-  meta: {
-    name: 'rm',
-    description:
-      'Delete a token; its dashboard sessions, streams, sockets and ssh logins end at once',
-  },
+  name: 'rm',
+  description:
+    'Delete a token; its dashboard sessions, streams, sockets and ssh logins end at once',
   args: { name: tokenArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      await client.tokens.delete({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      await client.tokens.delete({ name: ctx.values.name });
     }),
 });
 
 const keyAddCommand = defineCommand({
-  meta: {
-    name: 'add',
-    description: 'Bind the keys in a public key file to a token: an ssh login with one runs as it',
-  },
+  name: 'add',
+  description: 'Bind the keys in a public key file to a token: an ssh login with one runs as it',
   args: {
     name: tokenArg,
     file: {
@@ -295,19 +280,19 @@ const keyAddCommand = defineCommand({
     },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const lines = readKeyFile(context.args.file);
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const lines = readKeyFile(ctx.values.file);
       const added = [];
 
       for (const key of lines) {
-        const bound = await client.tokens.addKey({ name: context.args.name, key });
+        const bound = await client.tokens.addKey({ name: ctx.values.name, key });
 
         added.push(bound);
       }
 
-      console.log(
-        formatOutput(added, context.args.json, (keys) =>
+      ctx.extensions.impz.io.print(
+        formatOutput(added, ctx.values.json, (keys) =>
           keys.map((key) => formatSshKey(key)).join('\n'),
         ),
       );
@@ -315,62 +300,64 @@ const keyAddCommand = defineCommand({
 });
 
 const keyRmCommand = defineCommand({
-  meta: {
-    name: 'rm',
-    description: 'Unbind a key from a token; the ssh logins made with it end at once',
-  },
+  name: 'rm',
+  description: 'Unbind a key from a token; the ssh logins made with it end at once',
   args: {
     name: tokenArg,
     fingerprint: { type: 'positional', description: 'the key, as SHA256:...', required: true },
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       await client.tokens.removeKey({
-        name: context.args.name,
-        fingerprint: context.args.fingerprint,
+        name: ctx.values.name,
+        fingerprint: ctx.values.fingerprint,
       });
     }),
 });
 
 const keyLsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List the SSH keys bound to a token, by fingerprint' },
+  name: 'ls',
+  description: 'List the SSH keys bound to a token, by fingerprint',
   args: { name: tokenArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const tokens = await client.tokens.list();
 
-      const token = tokens.find((each) => each.name === context.args.name);
+      const token = tokens.find((each) => each.name === ctx.values.name);
 
       if (token === undefined) {
-        throw new UsageError(`no token named ${context.args.name}`);
+        throw new UsageError(`no token named ${ctx.values.name}`);
       }
 
-      console.log(
-        formatOutput(token.sshKeys, context.args.json, (keys) =>
+      ctx.extensions.impz.io.print(
+        formatOutput(token.sshKeys, ctx.values.json, (keys) =>
           keys.map((key) => formatSshKey(key)).join('\n'),
         ),
       );
     }),
 });
 
-const keyCommand = defineCommand({
-  meta: { name: 'key', description: 'Bind SSH keys to a token, list or unbind them' },
+const keyCommand = defineGroup({
+  name: 'key',
+  description: 'Bind SSH keys to a token, list or unbind them',
   subCommands: { add: keyAddCommand, ls: keyLsCommand, rm: keyRmCommand },
 });
 
 const whoamiCommand = defineCommand({
-  meta: { name: 'whoami', description: 'Show who impd takes this CLI for, and what it may do' },
+  name: 'whoami',
+  description: 'Show who impd takes this CLI for, and what it may do',
   args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const identity = await client.tokens.whoami();
 
-      console.log(formatOutput(identity, context.args.json, formatIdentity));
+      ctx.extensions.impz.io.print(formatOutput(identity, ctx.values.json, formatIdentity));
     }),
 });
 
-export const tokenCommand = defineCommand({
-  meta: { name: 'token', description: 'Manage API tokens and their scopes (needs manage)' },
+export const tokenCommand = defineGroup({
+  name: 'token',
+  description: 'Manage API tokens and their scopes (needs manage)',
   subCommands: {
     new: newCommand,
     set: setCommand,

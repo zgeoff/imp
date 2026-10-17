@@ -1,14 +1,15 @@
-import { writeSync } from 'node:fs';
-import { constants } from 'node:os';
-import type { Readable } from 'node:stream';
 import { openExecSession } from '@impz/client';
-import type { ExecOutcome, ExecRequirement, ExecSession, ExecSessionOptions } from '@impz/client';
+import type { ExecRequirement, ExecSession, ExecSessionOptions } from '@impz/client';
+import pRetry from 'p-retry';
+import { advanceExec, formatSession, readSignalNumber } from './advance-exec';
+import type { ExecEvent, ExecMachine, ExecStep } from './advance-exec';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
+import { buildProcessIO } from './command-io';
+import type { CommandIO, CommandStdin } from './command-io';
 import { createImpClient } from './create-imp-client';
 import { findDetachKey } from './detach-key';
 import { openBunWebSocket } from './open-bun-web-socket';
-import { formatUnauthorized } from './run-action';
 import { createModeWatcher } from './terminal-modes';
 
 export interface ExecOptions {
@@ -47,15 +48,12 @@ interface SessionOptions {
 // what runExec touches besides signals; tests swap it
 export interface ExecIo {
   readonly env: Readonly<Record<string, string | undefined>>;
-  readonly stdin: Pick<Readable, 'on' | 'off' | 'pause' | 'resume'> & {
-    readonly isTTY?: boolean;
-    readonly setRawMode?: (mode: boolean) => unknown;
-  };
+  readonly stdin: CommandStdin;
   readonly writeOutput: (fd: 1 | 2, data: Uint8Array) => void;
   readonly connect?: ExecSessionOptions['connect'];
 
   // how long a lost session is tried again, and the first pause between
-  // tries; each later pause doubles, up to REATTACH_MAX_DELAY_MS
+  // tries; each later pause doubles, up to a cap advanceExec holds
   readonly reattachWindowMs?: number;
   readonly reattachDelayMs?: number;
 
@@ -73,17 +71,7 @@ export interface ExecIo {
   readonly wait?: (ms: number) => Promise<void>;
 }
 
-// Exit codes as ssh and shells use them (the README has the table): 127
-// could not start, 141 our output went away, 254 another client took the
-// session over, 255 imp failed. A detach exits 0.
-const EXEC_FAILED_CODE = 127;
-
-// the imp answers, but the container its commands run in is down
-const INNER_DOWN_HINT =
-  ' (the container in the imp starts again on its own; impz stop and impz start, or impz restore, bring it back)';
-
-const BROKEN_PIPE_CODE = 141;
-const TAKEN_OVER_CODE = 254;
+// impd failed, as advanceExec reports it too
 const IMP_FAILED_CODE = 255;
 
 // ctrl-c in a raw terminal, and the code SIGINT gives
@@ -97,7 +85,6 @@ const HANDLED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
 // impd restarts in seconds, and a wake takes less than one
 const REATTACH_WINDOW_MS = 60_000;
 const REATTACH_DELAY_MS = 1000;
-const REATTACH_MAX_DELAY_MS = 8000;
 
 // input typed while the session is away waits for it, up to this much
 const MAX_PENDING_INPUT = 64 * 1024;
@@ -105,25 +92,36 @@ const MAX_PENDING_INPUT = 64 * 1024;
 // before a replay: the terminal shows the session, not what was there
 const CLEAR_SCREEN = '\u001B[H\u001B[2J';
 
-const PROCESS_IO: ExecIo = {
-  env: process.env,
-  stdin: process.stdin,
-  writeOutput: (fd, data) => {
-    writeFully(fd, data);
-  },
-};
+// the command's stdio and environment, and its line for each error
+export function buildExecIO(io: CommandIO): ExecIo {
+  return {
+    env: io.env,
+    stdin: io.openStdin(),
+    writeOutput: (fd, data) => {
+      if (fd === 1) {
+        io.writeOut(data);
+      } else {
+        io.writeErr(data);
+      }
+    },
+    printError: io.printError,
+  };
+}
 
 // Runs one command in an imp, wired to this process's stdio and signals,
 // and resolves with the exit code for this process. A session attaches
 // again by itself when impd restarts or the imp sleeps under it.
-export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO): Promise<number> {
+export function runExec(
+  options: Readonly<ExecOptions>,
+  io: ExecIo = buildExecIO(buildProcessIO()),
+): Promise<number> {
   const printError = io.printError ?? console.error;
   const now = io.now ?? Date.now;
   const wait = io.wait ?? Bun.sleep;
   let config: CliConfig;
 
   try {
-    config = loadCliConfig(io.env, options.host);
+    config = loadCliConfig(io.env, options.host, printError);
   } catch (error) {
     // a usage error, or a config.json that cannot be read (EACCES, EISDIR)
     printError(`impz: ${error instanceof Error ? error.message : String(error)}`);
@@ -147,15 +145,31 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
     draining: false,
     stdinStarted: false,
 
-    // a session that never started has nothing to attach to again
-    started: false,
-
-    // set while a lost session is being attached again
-    reattachUntil: null as number | null,
-    reattachTries: 0,
     pendingInput: [] as Uint8Array[],
     pendingBytes: 0,
   };
+
+  // what the exec has decided so far; advanceExec moves it on each event
+  let machine: ExecMachine = {
+    imp: options.name,
+    session: session?.name ?? null,
+    config,
+    windowMs: io.reattachWindowMs ?? REATTACH_WINDOW_MS,
+    firstDelayMs: io.reattachDelayMs ?? REATTACH_DELAY_MS,
+    started: false,
+    reattachUntil: null,
+    tries: 0,
+  };
+
+  const advance = (event: ExecEvent): ExecStep => {
+    const transition = advanceExec(machine, event);
+
+    machine = transition.machine;
+
+    return transition.step;
+  };
+
+  const isAway = (): boolean => machine.reattachUntil !== null;
 
   const writeNotice = (text: string): void => {
     io.writeOutput(2, encoder.encode(`${isRaw ? '\r\n' : ''}impz: ${text}\r\n`));
@@ -184,11 +198,8 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
       token: config.token,
       start,
       onStarted: (started) => {
-        const wasAway = state.reattachUntil !== null;
-
-        state.started = true;
-        state.reattachUntil = null;
-        state.reattachTries = 0;
+        const step = advance({ kind: 'started' });
+        const wasAway = step.kind === 'attached' && step.wasAway;
 
         if (isRaw && !started.created && started.session !== null) {
           io.writeOutput(1, encoder.encode(CLEAR_SCREEN));
@@ -263,7 +274,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
   const handleDetachKey = (): void => {
     stopSession(0);
-    printError(`impz: detached from ${formatSession(options.name, session?.name ?? '')}`);
+    printError(`impz: detached from ${formatSession(machine)}`);
   };
 
   const sendStdin = (chunk: Uint8Array): void => {
@@ -271,7 +282,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
     const found = key === null ? null : findDetachKey(chunk, key);
     const before = found === null ? chunk : chunk.subarray(0, found.at);
 
-    if (state.reattachUntil !== null) {
+    if (isAway()) {
       holdInput(before);
     } else if (before.byteLength > 0) {
       sendInput(before);
@@ -328,7 +339,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
     await waiting.waitForDrain();
 
     // a reattach took over stdin; it reads on for the detach key
-    if (state.ended || current.session !== waiting || state.reattachUntil !== null) {
+    if (state.ended || current.session !== waiting || isAway()) {
       return;
     }
 
@@ -398,98 +409,112 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
     process.on(signal, handler);
   }
 
-  // whether the outcome leaves the session running, so the CLI may attach
-  // again: never after another client took it over, or once the window is
-  // over
-  const canReattach = (outcome: ExecOutcome): boolean => {
-    if (session === null || !state.started) {
-      return false;
-    }
-
-    if (state.reattachUntil !== null && now() >= state.reattachUntil) {
-      return false;
-    }
-
-    if (outcome.kind === 'detached') {
-      return outcome.reason === 'lost' || outcome.reason === 'slow';
-    }
-
-    return outcome.kind === 'closed' || outcome.kind === 'unreachable';
-  };
-
   const isAttachedElsewhere = io.isAttachedElsewhere ?? createAttachedCheck(config);
 
-  // the pause before the next try: 1 s, 2 s, 4 s, then the cap
-  const readReattachDelay = (): number => {
-    const first = io.reattachDelayMs ?? REATTACH_DELAY_MS;
+  const stopWith = (step: Extract<ExecStep, { kind: 'stop' }>): void => {
+    stopSession(step.code);
 
-    state.reattachTries += 1;
-
-    return Math.min(first * 2 ** (state.reattachTries - 1), REATTACH_MAX_DELAY_MS);
+    if (step.message !== null) {
+      printError(`impz: ${step.message}`);
+    }
   };
 
-  const waitForOutcome = async (): Promise<void> => {
-    for (;;) {
-      const outcome = await current.session.outcome;
-
-      if (state.ended) {
-        return;
-      }
-
-      if (!canReattach(outcome)) {
-        const result = buildOutcomeResult(
-          outcome,
-          config,
-          formatSession(options.name, session?.name ?? ''),
-        );
-
-        stopSession(result.code);
-
-        if (result.message !== null) {
-          printError(`impz: ${result.message}`);
-        }
-
-        return;
-      }
-
-      const sessionName = session?.name ?? '';
-
-      if (state.reattachUntil === null) {
-        state.reattachUntil = now() + (io.reattachWindowMs ?? REATTACH_WINDOW_MS);
-
-        // stdin reads on, for the detach key and ctrl-c
-        if (state.draining) {
-          state.draining = false;
-
-          stdin.resume();
-        }
-
-        writeNotice(`lost the connection to session ${sessionName}; attaching again`);
-      }
-
-      await wait(readReattachDelay());
-
-      // a terminal that was away must not take the session from a newer one
-      const elsewhere = state.ended ? false : await isAttachedElsewhere(options.name, sessionName);
+  // One attach, until its outcome: the end of the exec, or a session that is
+  // away, which p-retry attaches to again after the pause advanceExec picks.
+  // A terminal that was away must not take the session from a newer one.
+  const runAttach = async (attempt: number): Promise<void> => {
+    if (attempt > 1) {
+      const elsewhere = state.ended
+        ? false
+        : await isAttachedElsewhere(options.name, machine.session ?? '');
 
       if (state.ended) {
         return;
       }
 
       if (elsewhere) {
-        stopSession(TAKEN_OVER_CODE);
-        printError(`impz: another client attached to ${formatSession(options.name, sessionName)}`);
+        stopWith(requireStop(advance({ kind: 'taken_over' })));
 
         return;
       }
 
       current.session = openSession(true);
     }
+
+    const outcome = await current.session.outcome;
+
+    if (state.ended) {
+      return;
+    }
+
+    const step = advance({ kind: 'outcome', outcome, now: now() });
+
+    if (step.kind !== 'reattach') {
+      stopWith(requireStop(step));
+
+      return;
+    }
+
+    if (step.isFirst) {
+      // stdin reads on, for the detach key and ctrl-c
+      if (state.draining) {
+        state.draining = false;
+
+        stdin.resume();
+      }
+
+      writeNotice(`lost the connection to session ${machine.session ?? ''}; attaching again`);
+    }
+
+    throw new SessionAwayError(step.delayMs);
+  };
+
+  const waitForOutcome = async (): Promise<void> => {
+    try {
+      await pRetry(runAttach, {
+        retries: Number.POSITIVE_INFINITY,
+        minTimeout: 0,
+        shouldRetry: async (context) => {
+          if (!(context.error instanceof SessionAwayError)) {
+            return false;
+          }
+
+          // the pause is the CLI's own, so a test drives its clock
+          await wait(context.error.delayMs);
+
+          return true;
+        },
+      });
+    } catch (error) {
+      stopSession(IMP_FAILED_CODE);
+      printError(`impz: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   void waitForOutcome();
 
   return done.promise;
+}
+
+// a session that is away, tried again after `delayMs`
+class SessionAwayError extends Error {
+  override name = 'SessionAwayError';
+
+  readonly delayMs: number;
+
+  constructor(delayMs: number) {
+    super('the session is away');
+
+    this.delayMs = delayMs;
+  }
+}
+
+function requireStop(step: ExecStep): Extract<ExecStep, { kind: 'stop' }> {
+  if (step.kind !== 'stop') {
+    throw new Error(`advanceExec gave ${step.kind} where it ends the exec`);
+  }
+
+  return step;
 }
 
 // asks impd's last view of the sessions, which never wakes the imp; when
@@ -508,125 +533,10 @@ function createAttachedCheck(
   };
 }
 
-function formatSession(imp: string, session: string): string {
-  return `session ${session} (impz attach ${imp} ${session})`;
-}
-
-interface OutcomeResult {
-  readonly code: number;
-
-  // the line for stderr, printed once the terminal is reset
-  readonly message: string | null;
-}
-
-// the exit code for an outcome, and the line that explains a failure
-function buildOutcomeResult(
-  outcome: ExecOutcome,
-  config: CliConfig,
-  session: string,
-): OutcomeResult {
-  switch (outcome.kind) {
-    case 'exit': {
-      if (outcome.code !== null) {
-        return { code: outcome.code, message: null };
-      }
-
-      const signal = readSignalNumber(outcome.signal);
-
-      if (signal === 0) {
-        return {
-          code: IMP_FAILED_CODE,
-          message: 'impd reported an exit with no code and no known signal',
-        };
-      }
-
-      return { code: 128 + signal, message: null };
-    }
-    case 'failed': {
-      const prefix = outcome.code === null ? '' : `${outcome.code}: `;
-      const code = outcome.code === 'EXEC_FAILED' ? EXEC_FAILED_CODE : IMP_FAILED_CODE;
-      const hint = outcome.code === 'INNER_DOWN' ? INNER_DOWN_HINT : '';
-
-      return { code, message: `${prefix}${outcome.message}${hint}` };
-    }
-    case 'detached': {
-      if (outcome.reason === 'taken_over') {
-        return { code: TAKEN_OVER_CODE, message: `another client attached to ${session}` };
-      }
-
-      const why =
-        outcome.reason === 'slow' ? 'this terminal fell behind' : 'the connection was lost';
-
-      return { code: IMP_FAILED_CODE, message: `detached, ${why}: ${session}` };
-    }
-    case 'unauthorized': {
-      return { code: IMP_FAILED_CODE, message: formatUnauthorized(config) };
-    }
-    case 'unreachable': {
-      return {
-        code: IMP_FAILED_CODE,
-        message: `cannot reach impd at ${config.url} (${outcome.detail})`,
-      };
-    }
-    case 'closed': {
-      return { code: IMP_FAILED_CODE, message: `exec connection closed (${outcome.reason})` };
-    }
-    case 'bad_message': {
-      return { code: IMP_FAILED_CODE, message: `bad message from impd: ${outcome.detail}` };
-    }
-    case 'local_error': {
-      break;
-    }
-  }
-
-  // a callback threw; a reader such as `head` that went away is quiet, as
-  // for a local command
-  if (isBrokenPipe(outcome.error)) {
-    return { code: BROKEN_PIPE_CODE, message: null };
-  }
-
-  const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
-
-  return { code: IMP_FAILED_CODE, message };
-}
-
 // null when stdout is no terminal or reports no size (a pty nobody sized)
 function readTerminalSize(): { cols: number; rows: number } | null {
   const cols = process.stdout.columns;
   const rows = process.stdout.rows;
 
   return process.stdout.isTTY && cols > 0 && rows > 0 ? { cols, rows } : null;
-}
-
-// synchronous, so output is on the terminal before the exit code returns
-function writeFully(fd: number, data: Uint8Array): void {
-  let offset = 0;
-
-  while (offset < data.byteLength) {
-    try {
-      offset += writeSync(fd, data, offset);
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EAGAIN')) {
-        throw error;
-      }
-
-      Bun.sleepSync(1);
-    }
-  }
-}
-
-function isBrokenPipe(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'EPIPE';
-}
-
-// impd names a signal Node does not know (a real-time one) `SIG<n>`
-function readSignalNumber(signal: string | null): number {
-  if (signal === null) {
-    return 0;
-  }
-
-  const signals: Readonly<Record<string, number>> = constants.signals;
-  const numbered = /^SIG(?<number>\d+)$/u.exec(signal)?.groups?.['number'];
-
-  return signals[signal] ?? (numbered === undefined ? 0 : Number(numbered));
 }

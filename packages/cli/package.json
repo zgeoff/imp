@@ -13,7 +13,8 @@
     "@impz/local-tar": "workspace:*",
     "@impz/mcp": "workspace:*",
     "@impz/shared": "workspace:*",
-    "citty": "catalog:",
+    "gunshi": "catalog:",
+    "p-retry": "catalog:",
     "tar-stream": "catalog:",
     "ts-pattern": "catalog:",
     "zod": "catalog:"

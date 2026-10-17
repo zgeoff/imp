@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 
 test('it refuses --secret-files without --orphans before it deletes anything', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['gc', '--secret-files'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });

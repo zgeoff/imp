@@ -1,75 +1,74 @@
 import { defineCommand } from '../define-command';
+import { dispatchVerb, listOperands } from '../dispatch-verb';
 import { formatCheckpoints, formatImp, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
 
-// `impz checkpoint rm <name> <checkpoint>` shares the command with
-// `impz checkpoint <name> [label]`: citty cannot mix subcommands with
-// positionals, so a first positional `rm` always means a delete.
 export const checkpointCommand = defineCommand({
-  meta: {
-    name: 'checkpoint',
-    description: "Checkpoint an imp's disk (impz checkpoint rm <name> <checkpoint> deletes one)",
-  },
+  name: 'checkpoint',
+  description: "Checkpoint an imp's disk (impz checkpoint rm <name> <checkpoint> deletes one)",
   args: {
     name: nameArg,
     label: { type: 'positional', description: 'label for the checkpoint', required: false },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const positionals = context.args._;
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, (client) =>
+      dispatchVerb(
+        listOperands(ctx),
+        {
+          rm: async (operands) => {
+            const [name, checkpoint] = operands;
 
-      if (positionals[0] === 'rm') {
-        const [, name, checkpoint] = positionals;
+            if (operands.length !== 2 || name === undefined || checkpoint === undefined) {
+              throw new UsageError('usage: impz checkpoint rm <name> <checkpoint>');
+            }
 
-        if (positionals.length !== 3 || name === undefined || checkpoint === undefined) {
-          throw new UsageError('usage: impz checkpoint rm <name> <checkpoint>');
-        }
+            await client.checkpoints.delete({ name, checkpoint });
+          },
+        },
+        async () => {
+          const checkpoint = await client.checkpoints.create({
+            name: ctx.values.name,
+            ...(ctx.values.label !== undefined && { label: ctx.values.label }),
+          });
 
-        await client.checkpoints.delete({ name, checkpoint });
-
-        return;
-      }
-
-      const checkpoint = await client.checkpoints.create({
-        name: context.args.name,
-        ...(context.args.label !== undefined && { label: context.args.label }),
-      });
-
-      console.log(formatOutput(checkpoint, context.args.json, (one) => formatCheckpoints([one])));
-    }),
+          ctx.extensions.impz.io.print(
+            formatOutput(checkpoint, ctx.values.json, (one) => formatCheckpoints([one])),
+          );
+        },
+      ),
+    ),
 });
 
 export const checkpointsCommand = defineCommand({
-  meta: { name: 'checkpoints', description: "List an imp's checkpoints, newest first" },
+  name: 'checkpoints',
+  description: "List an imp's checkpoints, newest first",
   args: { name: nameArg, json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const checkpoints = await client.checkpoints.list({ name: context.args.name });
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
+      const checkpoints = await client.checkpoints.list({ name: ctx.values.name });
 
-      console.log(formatOutput(checkpoints, context.args.json, formatCheckpoints));
+      ctx.extensions.impz.io.print(formatOutput(checkpoints, ctx.values.json, formatCheckpoints));
     }),
 });
 
 export const restoreCommand = defineCommand({
-  meta: {
-    name: 'restore',
-    description: "Roll an imp's disk back to a checkpoint; an awake imp reboots",
-  },
+  name: 'restore',
+  description: "Roll an imp's disk back to a checkpoint; an awake imp reboots",
   args: {
     name: nameArg,
     checkpoint: { type: 'positional', description: 'checkpoint id or label', required: true },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
+  run: (ctx) =>
+    runAction(ctx.extensions.impz, async (client) => {
       const imp = await client.checkpoints.restore({
-        name: context.args.name,
-        checkpoint: context.args.checkpoint,
+        name: ctx.values.name,
+        checkpoint: ctx.values.checkpoint,
       });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      ctx.extensions.impz.io.print(formatOutput(imp, ctx.values.json, formatImp));
     }),
 });

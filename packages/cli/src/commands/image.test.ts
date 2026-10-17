@@ -25,7 +25,7 @@ import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
 import * as z from 'zod';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 
 // impd's real app, listening on a loopback port for the spawned CLI
 async function setupTest() {
@@ -187,7 +187,7 @@ test('#imageCommand prints progress lines and the step output of a build whose s
 
   ctx.engine.setAnswer(buildStubTracedBuild({ imageId: `sha256:${'e'.repeat(64)}` }));
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['image', 'build', join(ctx.dataDir, 'context'), '--name', 'web'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -235,7 +235,7 @@ test('#imageCommand prints no progress and no step output for --quiet', async ()
 
   ctx.engine.setAnswer(buildStubTracedBuild({ imageId: `sha256:${'e'.repeat(64)}` }));
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['image', 'build', join(ctx.dataDir, 'context'), '--name', 'web', '-q'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -270,7 +270,7 @@ test('#imageCommand prints the image as JSON alone on stdout with --json, and th
 
   ctx.engine.setAnswer(buildStubTracedBuild({ imageId: `sha256:${'e'.repeat(64)}` }));
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['image', 'build', join(ctx.dataDir, 'context'), '--name', 'web', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -318,13 +318,13 @@ test('#imageCommand lists a running build with its start and step from another s
 
   const before = new Date();
 
-  const building = runCli({
+  const building = runCLIInProcess({
     args: ['image', 'build', join(ctx.dataDir, 'context'), '--name', 'web', '-q'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
 
   const listedJson = await waitFor(async () => {
-    const result = await runCli({
+    const result = await runCLIInProcess({
       args: ['image', 'builds', '--json'],
       env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
     });
@@ -340,7 +340,7 @@ test('#imageCommand lists a running build with its start and step from another s
 
   const listed: unknown = JSON.parse(listedJson);
 
-  const table = await runCli({
+  const table = await runCLIInProcess({
     args: ['image', 'builds'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -376,7 +376,7 @@ test('#imageCommand lists a running build with its start and step from another s
 });
 
 test('#imageCommand refuses a relative path for --on-host, which names no directory on the impd host', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['image', 'build', 'images/base', '--name', 'base', '--on-host'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -393,7 +393,7 @@ test('#imageCommand refuses a build context without a Dockerfile before any uplo
 
   onTestFinished(() => rm(context, { recursive: true, force: true }));
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['image', 'build', context, '--name', 'base'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
@@ -417,7 +417,7 @@ test('#templateCommand refuses to remove a docker image as a template', async ()
 
   await createImage(ctx.db, image);
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['template', 'rm', 'ubuntu'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });

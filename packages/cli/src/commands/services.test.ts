@@ -25,7 +25,7 @@ import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubServiceAgent } from '@impz/daemon/src/test-utils/start-stub-service-agent';
 import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { UsageError } from '../usage-error';
 import { buildServiceDef, createLogPrinter, formatLogEvent } from './services';
 
@@ -190,14 +190,6 @@ test('#buildServiceDef takes the words after -- as the argv and the flags for th
   });
 });
 
-test('#buildServiceDef takes one --env given as a string', () => {
-  expect(buildServiceDef('web', { argv: ['x'], env: 'ONE=1' })).toStrictEqual({
-    name: 'web',
-    argv: ['x'],
-    env: ['ONE=1'],
-  });
-});
-
 test.each([
   ['no command', { argv: [] }, 'give the command once: --cmd "…" or after --'],
   [
@@ -205,16 +197,11 @@ test.each([
     { cmd: 'a', argv: ['b'] },
     'give the command once: --cmd "…" or after --',
   ],
-  ['an --env with no =', { argv: ['x'], env: 'NOEQUALS' }, '--env NOEQUALS: want KEY=VALUE'],
+  ['an --env with no =', { argv: ['x'], env: ['NOEQUALS'] }, '--env NOEQUALS: want KEY=VALUE'],
   [
     'an --env key that starts with a digit',
     { argv: ['x'], env: ['1X=2'] },
     '--env 1X=2: want KEY=VALUE',
-  ],
-  [
-    'an unknown --restart',
-    { argv: ['x'], restart: 'sometimes' },
-    '--restart must be one of always, on-failure, never',
   ],
 ])('#buildServiceDef refuses %s as a usage error', (_case, args, message) => {
   expect(() => buildServiceDef('web', args)).toThrowWithMessage(UsageError, message);
@@ -284,7 +271,7 @@ test('#serviceCommand sends the definition to the guest with --env given more th
     stack: ctx.stack,
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: [
       'service',
       'add',
@@ -322,7 +309,7 @@ test('#serviceCommand adds the service and then sets the imp’s HTTP port for -
     stack: ctx.stack,
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['service', 'add', 'box', 'web', '--cmd', 'httpd -f -p 8081', '--http-port', '8081'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -368,7 +355,7 @@ test('#serviceCommand sets no HTTP port when the guest refuses the add', async (
   // the guest has a service web already, so an add without --replace is refused
   await sendServicesAdd(vsockPath, { name: 'web', argv: ['httpd'] }, false);
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['service', 'add', 'box', 'web', '--cmd', 'httpd -f -p 8081', '--http-port', '8081'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -402,7 +389,7 @@ test('#serviceCommand says the service runs and how to set the port when an exec
     stack: ctx.stack,
   });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['service', 'add', 'box', 'web', '--cmd', 'httpd', '--http-port', '8081'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: made.secret },
   });
@@ -429,14 +416,27 @@ test('#serviceCommand says the service runs and how to set the port when an exec
 });
 
 test('#serviceCommand refuses a bad --http-port before it calls impd', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['service', 'add', 'box', 'web', '--cmd', 'httpd', '--http-port', '70000'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'impz: --http-port must be a port from 1 to 65535\n',
+    stderr: 'impz: --http-port must be at most 65535, not 70000\n',
+    code: 2,
+  });
+});
+
+test('#serviceCommand refuses an unknown --restart before it calls impd', async () => {
+  const result = await runCLIInProcess({
+    args: ['service', 'add', 'box', 'web', '--cmd', 'httpd', '--restart', 'sometimes'],
+    env: { IMP_URL: 'http://127.0.0.1:1' },
+  });
+
+  expect(result).toStrictEqual({
+    stdout: '',
+    stderr: 'impz: --restart must be one of always, on-failure, never\n',
     code: 2,
   });
 });
@@ -447,7 +447,7 @@ test('#serviceCommand says when a sleeping imp’s last sleep recorded no list',
   await ctx.client.imps.create({ name: 'box' });
   await ctx.client.imps.sleep({ name: 'box' });
 
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['service', 'ls', 'box', '--json'],
     env: { IMP_URL: ctx.url, IMP_TOKEN: ctx.rootToken },
   });
@@ -460,14 +460,14 @@ test('#serviceCommand says when a sleeping imp’s last sleep recorded no list',
 });
 
 test('#logsCommand refuses a line count that is not a number before it calls impd', async () => {
-  const result = await runCli({
+  const result = await runCLIInProcess({
     args: ['logs', 'box', '-n', 'ten'],
     env: { IMP_URL: 'http://127.0.0.1:1' },
   });
 
   expect(result).toStrictEqual({
     stdout: '',
-    stderr: 'impz: --lines must be a whole number from 0 to 100000\n',
+    stderr: 'impz: --lines must be a whole number, not ten\n',
     code: 2,
   });
 });

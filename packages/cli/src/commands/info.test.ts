@@ -8,7 +8,7 @@ import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-im
 import { startStubInnerAgent } from '@impz/daemon/src/test-utils/start-stub-inner-agent';
 import { writeHostConfig } from '../host-store';
 import { parseJsonOutput } from '../test-utils/parse-json-output';
-import { runCli } from '../test-utils/start-cli';
+import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startImpdHost } from '../test-utils/start-impd-host';
 
 // The CLI's home, where config.json keeps the saved hosts, so none of this
@@ -50,7 +50,7 @@ test('it shows an awake imp’s inner container as down, with its restarts and l
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const shown = await runCli({ args: ['info', 'web'], env: ctx.home });
+  const shown = await runCLIInProcess({ args: ['info', 'web'], env: ctx.home });
 
   expect(shown.code).toBe(0);
 
@@ -80,7 +80,7 @@ test('it shows an imp’s inner container as unknown before its agent answered',
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const shown = await runCli({ args: ['info', 'web'], env: ctx.home });
+  const shown = await runCLIInProcess({ args: ['info', 'web'], env: ctx.home });
 
   expect(shown.stdout.split('\n')).toContain('container   unknown');
   expect(shown.stdout).not.toInclude('restarts');
@@ -95,7 +95,7 @@ test('it shows impd itself without a name', async () => {
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const shown = await runCli({ args: ['info'], env: ctx.home });
+  const shown = await runCLIInProcess({ args: ['info'], env: ctx.home });
 
   expect(shown.stdout).toStartWith('version     ');
 });
@@ -109,7 +109,7 @@ test('it prints impd’s --json output in the shape of the committed schema', as
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const shown = await runCli({ args: ['info', '--json'], env: ctx.home });
+  const shown = await runCLIInProcess({ args: ['info', '--json'], env: ctx.home });
 
   expect(shown.code).toBe(0);
   expect(parseJsonOutput('info', shown.stdout).data).toStrictEqual(JSON.parse(shown.stdout));
@@ -132,7 +132,7 @@ test('it prints an imp’s --json output in the shape of the committed schema', 
     hosts: { box: { url: box.url, token: box.rootToken } },
   });
 
-  const shown = await runCli({ args: ['info', 'web', '--json'], env: ctx.home });
+  const shown = await runCLIInProcess({ args: ['info', 'web', '--json'], env: ctx.home });
 
   expect(shown.code).toBe(0);
   expect(parseJsonOutput('info <name>', shown.stdout).data).toStrictEqual(JSON.parse(shown.stdout));

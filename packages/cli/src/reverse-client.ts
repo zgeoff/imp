@@ -9,6 +9,7 @@ import type {
   ReverseRelay,
   ReverseRelayHandlers,
 } from '@impz/client';
+import pRetry from 'p-retry';
 import { P, match } from 'ts-pattern';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
@@ -167,6 +168,11 @@ function openLocalRelay(
   });
 }
 
+// a forward the imp lost, which listens again once the imp runs
+class ForwardLostError extends Error {
+  override name = 'ForwardLostError';
+}
+
 function formatEnd(end: ReverseForwardEnd): string {
   return match(end)
     .with({ kind: 'failed' }, (failed) => `${failed.code ?? 'error'}: ${failed.message}`)
@@ -286,11 +292,28 @@ export async function startReverseForward(
     return openForward();
   };
 
+  // each turn holds one forward until it ends; one the imp lost is opened
+  // again, by p-retry, once the imp runs
   const runForward = async (first: ReverseForward): Promise<void> => {
-    let forward = first;
+    const turn: { forward: ReverseForward; lost: ReverseForwardEnd | null } = {
+      forward: first,
+      lost: null,
+    };
 
-    for (;;) {
-      const end = await forward.ended;
+    const holdForward = async (): Promise<void> => {
+      if (turn.lost !== null) {
+        turn.forward = await waitAndListen(turn.lost);
+
+        try {
+          const again = await turn.forward.listening;
+
+          io.writeNotice(`forwarding ${name}:${formatGuest(again)} -> ${local} again`);
+        } catch {
+          // `ended` says why, below
+        }
+      }
+
+      const end = await turn.forward.ended;
 
       if (watching.signal.aborted || end.kind === 'stopped') {
         return;
@@ -306,24 +329,21 @@ export async function startReverseForward(
         `reverse forward to ${local}: ${formatEnd(end)}; listening again once ${name} runs`,
       );
 
-      try {
-        forward = await waitAndListen(end);
-      } catch (error) {
-        const failure = error instanceof Error ? error : new Error(String(error));
+      turn.lost = end;
+      throw new ForwardLostError(formatEnd(end));
+    };
 
-        if (!watching.signal.aborted) {
-          failed.resolve(failure);
-        }
+    try {
+      await pRetry(holdForward, {
+        retries: Number.POSITIVE_INFINITY,
+        minTimeout: 0,
+        shouldRetry: (context) => context.error instanceof ForwardLostError,
+      });
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
 
-        return;
-      }
-
-      try {
-        const again = await forward.listening;
-
-        io.writeNotice(`forwarding ${name}:${formatGuest(again)} -> ${local} again`);
-      } catch {
-        // `ended` says why, on the next turn
+      if (!watching.signal.aborted) {
+        failed.resolve(failure);
       }
     }
   };

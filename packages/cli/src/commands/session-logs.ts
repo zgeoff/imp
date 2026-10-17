@@ -1,5 +1,6 @@
 import type { SessionLog } from '@impz/api';
 import { requireFeatures } from '@impz/client';
+import type { CommandIO } from '../command-io';
 import type { ImpClient } from '../create-imp-client';
 import { formatOutput, formatSessionLogs } from '../format-output';
 import { UsageError } from '../usage-error';
@@ -16,6 +17,7 @@ const LOG_RM_USAGE = 'usage: impz sessions log-rm <name> [session] [generation]'
 
 export async function listSessionLogs(
   client: SessionLogClient,
+  io: CommandIO,
   positionals: readonly string[],
   isJson: boolean,
 ): Promise<void> {
@@ -29,7 +31,7 @@ export async function listSessionLogs(
 
   const logs = await client.sessions.logs({ name, ...(session !== undefined && { session }) });
 
-  console.log(formatOutput(logs, isJson, formatSessionLogs));
+  io.print(formatOutput(logs, isJson, formatSessionLogs));
 }
 
 // the newest log of the session when no generation is named
@@ -54,30 +56,13 @@ async function findGeneration(
   return newest.executionGeneration;
 }
 
-function parseOffset(value: unknown): number {
-  if (value === undefined) {
-    return 0;
-  }
-
-  if (typeof value !== 'string') {
-    throw new UsageError('--from needs an offset');
-  }
-
-  const offset = Number(value);
-
-  if (!Number.isSafeInteger(offset) || offset < 0) {
-    throw new UsageError(`--from must be an offset, a whole number of bytes, not ${value}`);
-  }
-
-  return offset;
-}
-
 // Writes the raw output from `--from` to the log's end on stdout; a range
 // the log lost goes to stderr, as the ring's gap would.
 export async function writeSessionLog(
   client: SessionLogClient,
+  io: CommandIO,
   positionals: readonly string[],
-  from: unknown,
+  from: number,
 ): Promise<void> {
   const [name, session, named] = positionals;
 
@@ -85,7 +70,7 @@ export async function writeSessionLog(
     throw new UsageError(LOG_USAGE);
   }
 
-  let offset = parseOffset(from);
+  let offset = from;
 
   await requireFeatures(client, { sessionLog: 'read no log' });
 
@@ -93,7 +78,7 @@ export async function writeSessionLog(
 
   // the output of one generation only: a reader who named none learns which
   if (named === undefined) {
-    console.error(`impz: generation ${executionGeneration}`);
+    io.printError(`impz: generation ${executionGeneration}`);
   }
 
   for (;;) {
@@ -105,7 +90,7 @@ export async function writeSessionLog(
     });
 
     if (read.gap !== undefined) {
-      console.error(
+      io.printError(
         `impz: bytes ${String(read.gap.from)} to ${String(read.gap.to)} are not in the log`,
       );
     }
@@ -118,7 +103,7 @@ export async function writeSessionLog(
       return;
     }
 
-    process.stdout.write(data);
+    io.writeOut(data);
 
     offset = read.offset + data.byteLength;
   }
@@ -126,6 +111,7 @@ export async function writeSessionLog(
 
 export async function removeSessionLogs(
   client: SessionLogClient,
+  io: CommandIO,
   positionals: readonly string[],
 ): Promise<void> {
   const [name, session, executionGeneration] = positionals;
@@ -142,5 +128,5 @@ export async function removeSessionLogs(
     ...(executionGeneration !== undefined && { executionGeneration }),
   });
 
-  console.log(`deleted ${String(result.deleted)} session logs of ${name}`);
+  io.print(`deleted ${String(result.deleted)} session logs of ${name}`);
 }

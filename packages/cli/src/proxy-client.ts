@@ -7,13 +7,14 @@ import { match } from 'ts-pattern';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
+import type { CliEnv } from './host-store';
 import { openBunWebSocket } from './open-bun-web-socket';
 import { parseForward } from './parse-forward';
 import type { Forward } from './parse-forward';
 import { parseReverse } from './parse-reverse';
 import { formatGuest, formatLocal, startReverseForward } from './reverse-client';
 import type { ReverseIo } from './reverse-client';
-import { printError } from './run-action';
+import { toCallError } from './run-action';
 import { UsageError } from './usage-error';
 
 // what runProxy touches besides the network; tests swap it
@@ -355,8 +356,11 @@ export async function startProxy(
 }
 
 export interface ProxyOptions {
-  // the saved host `--host` named, or null
+  // the saved host `--host` named, or null, and the environment that picks
+  // the impd without one
   readonly host: string | null;
+  readonly env: CliEnv;
+  readonly warn: (line: string) => void;
   readonly name: string;
   readonly specs: readonly string[];
 
@@ -431,18 +435,18 @@ async function startForwards(
 // `impz proxy`: runs until SIGINT or SIGTERM, then exits 0, or until a reverse
 // forward fails for good
 export async function runProxy(options: ProxyOptions, io: ProxyIo = PROCESS_IO): Promise<void> {
-  let config: CliConfig | null = null;
-  let proxy: RunningProxy;
+  const config = loadCliConfig(options.env, options.host, options.warn);
 
   try {
-    config = loadCliConfig(process.env, options.host);
-
-    proxy = await startForwards(config, options, io);
+    await runForwards(config, options, io);
   } catch (error) {
-    printError(error, config);
-
-    return;
+    throw toCallError(error, config);
   }
+}
+
+// the forwards until a signal stops them, or the first of them fails
+async function runForwards(config: CliConfig, options: ProxyOptions, io: ProxyIo): Promise<void> {
+  const proxy = await startForwards(config, options, io);
 
   const stopped = Promise.withResolvers<Error | null>();
 
@@ -460,6 +464,6 @@ export async function runProxy(options: ProxyOptions, io: ProxyIo = PROCESS_IO):
   proxy.stop();
 
   if (failure !== null) {
-    printError(failure, config);
+    throw failure;
   }
 }
