@@ -118,7 +118,23 @@ let
     "-e"
     "IMP_HOST_ADDRESSES"
   ];
-  sharedLines = lib.filter (line: line != addressesLine) hostArgs.lines;
+  # the unit's --env-file becomes the env file's read-only mount from tmpfs
+  envFileLine = [
+    "--env-file"
+    "/etc/imp/imp-host.env"
+  ];
+  sharedLines = map (
+    line:
+    if line == envFileLine then
+      [
+        "-v"
+        "/run/imp-host/env:/run/imp/env:ro"
+        "-e"
+        "IMP_ENV_FILE=/run/imp/env"
+      ]
+    else
+      line
+  ) (lib.filter (line: line != addressesLine) hostArgs.lines);
   sharedArgs = lib.escapeShellArgs (
     lib.filter (word: !(lib.hasPrefix "$" word)) (lib.flatten sharedLines)
   );
