@@ -9,9 +9,56 @@ description:
 
 # imp tests
 
-The `testing` skill holds the rules. This skill holds only what is particular to imp: the commands,
-the layers they cover, and the traps that cost time here. The references hold the full inventory;
-open one when the task touches its area.
+The `testing` skill holds the rules. This skill holds only what is particular to imp: the traps that
+cost time here, the commands, and the layers they cover. The references hold the detail for one area
+each; open one when the task touches its area.
+
+## References
+
+- [preloads-and-utils.md](./references/preloads-and-utils.md): the root and dashboard preloads, the
+  two kinds of util for cleanup order, and what a daemon `setupTest()` returns.
+- [stand-ins.md](./references/stand-ins.md): the kinds of stand-in and when to use each, booting
+  impd and its harnesses, Bun's timer and transport facts, and the broker's test upstreams.
+- [e2e.md](./references/e2e.md): what a run does around each journey, what the baseline reset
+  covers, how to write a journey, sets and groups, and host safety.
+- [zfs-nixos-go-ci.md](./references/zfs-nixos-go-ci.md): when to use the ZFS fake or a real pool,
+  the NixOS checks, agent Go timer and golden tests, and the CI facts that a test change touches.
+
+## Traps
+
+- **Cleanup runs first-in, first-out.** On Bun 1.4.2, `onTestFinished` callbacks run in registration
+  order, and a callback that throws skips the ones after it. A util that registers its own cleanup
+  therefore releases before anything the test registers after it.
+- **Ambient `IMP_*` settings vanish.** The root preload deletes every `IMP_*` variable the shell
+  passed, except the run gates in [Layers](#layers), so a developer's settings never reach a unit
+  test. Set an impd setting with [`updateEnv`](../../../packages/test-utils/src/update-env.ts)
+  before `setupTest()`, which reads it through
+  [`readImpEnv`](../../../packages/test-utils/src/read-imp-env.ts).
+- **MSW sees only `fetch`, and not all of it.** A `fetch` to loopback or a unix socket skips MSW and
+  goes to the real network. `node:http` clients and WebSockets bypass MSW too, so those boundaries
+  need a real stand-in server.
+- **Reuse a stand-in before writing one.** imp has a tested stand-in for nearly every boundary;
+  [stand-ins.md](./references/stand-ins.md) sorts them by kind and links each package's folder. To
+  boot a real impd, use [`createImpd`](../../../packages/daemon/src/create-impd.ts) on the stubs, or
+  [`createImpTest`](../../../packages/daemon/src/imps/test-imps.ts) for the governed-imps harness.
+- **`createImpd` disks are 32 GiB.** A test whose storage clones with `copyFile` sets
+  `defaultDiskBytes` to 0, or each checkpoint copy or fork takes minutes.
+- **`createImpd`'s `now` does not reach every clock.** Some services stay on the wall clock;
+  [Booting impd](./references/stand-ins.md#booting-impd) lists the gaps and the clocks those
+  components take instead.
+- **Ports come from [`findFreePorts`](../../../packages/daemon/src/test-utils/find-free-ports.ts).**
+  It claims each port until the test ends, so parallel test processes never share one. A fixed port
+  collides.
+- **tmpfs lacks disk features.** `tmpdir()` is a tmpfs on some hosts; a test that needs FIEMAP or
+  similar makes its directory under `/var/tmp`, never in the checkout.
+- **Git hooks leak `GIT_DIR`.** A test that runs git spawns it through the helpers in
+  [`git-env.ts`](../../../e2e/lib/git-env.ts), `runGitCommand`, `runGitChecked` or
+  `createGitFreeEnv`; otherwise a child git works on this checkout whatever its `-C` says.
+- **One impd runs one suite at a time.** A worktree's dev instance needs its own `IMP_DEV_NAME` and
+  `IMP_DEV_PORT_OFFSET`. A journey run alone gets no baseline reset and no fixture image build.
+- **A journey removes what it makes.** It registers each removal with
+  [`registerRemoval`](../../../e2e/lib/register-removal.ts) on the line after the act that made the
+  thing, so an imp goes before the template it boots.
 
 ## Commands
 
@@ -32,8 +79,9 @@ open one when the task touches its area.
 | ZFS on a real pool          | `sudo env "PATH=$PATH" scripts/test-zfs.sh`                                                                     | Root, the zfs module, `zpool`                                  |
 | ZFS host with VMs           | `scripts/zfs-host-test.sh`                                                                                      | sudo, Docker, KVM, the zfs module                              |
 
-CI runs every row but the lone journey, in `.github/workflows/ci.yml` and `nix.yml`. When this host
-lacks what a row needs, push and read that CI job's result instead of working around it.
+CI runs every row but the lone journey, in [`ci.yml`](../../../.github/workflows/ci.yml) and
+[`nix.yml`](../../../.github/workflows/nix.yml). When this host lacks what a row needs, push and
+read that CI job's result instead of working around it.
 
 ## Layers
 
@@ -47,46 +95,3 @@ lacks what a row needs, push and read that CI job's result instead of working ar
   into a failure.
 - Go tests that need root carry the `root` build tag.
 - `e2e/lib/*.test.ts` are unit tests of the harness: they run in plain `bun test` with no KVM.
-
-## Traps
-
-- **Cleanup runs first-in, first-out.** On Bun 1.4.2, `onTestFinished` callbacks run in registration
-  order, and a callback that throws skips the ones after it. A util that registers its own cleanup
-  therefore releases before anything the test registers after it.
-- **Ambient `IMP_*` settings vanish.** The root preload deletes every `IMP_*` variable the shell
-  passed, except the run gates above, so a developer's settings never reach a unit test. Set an impd
-  setting with `updateEnv` before `setupTest()`, which reads it through `readImpEnv()`.
-- **MSW sees only `fetch`, and not all of it.** A `fetch` to loopback or a unix socket skips MSW and
-  goes to the real network. `node:http` clients and WebSockets bypass MSW too, so those boundaries
-  need a real stand-in server.
-- **Reuse a stand-in before writing one.** imp has a tested stand-in for nearly every boundary;
-  [stand-ins.md](./references/stand-ins.md) sorts them by kind and links each package's folder. To
-  boot a real impd, use `createImpd` on the stubs, or `createImpTest(stack, …)` for the
-  governed-imps harness.
-- **`createImpd` disks are 32 GiB.** A test whose storage clones with `copyFile` sets
-  `defaultDiskBytes` to 0, or each checkpoint copy or fork takes minutes.
-- **`createImpd`'s `now` does not reach every clock.** Some services stay on the wall clock;
-  [Booting impd](./references/stand-ins.md#booting-impd) lists the gaps and the clocks those
-  components take instead.
-- **Ports come from `findFreePorts`.** It claims each port until the test ends, so parallel test
-  processes never share one. A fixed port collides.
-- **tmpfs lacks disk features.** `tmpdir()` is a tmpfs on some hosts; a test that needs FIEMAP or
-  similar makes its directory under `/var/tmp`, never in the checkout.
-- **Git hooks leak `GIT_DIR`.** A test that runs git spawns it through `runGitCommand`,
-  `runGitChecked` or `createGitFreeEnv` (`e2e/lib/git-env.ts`); otherwise a child git works on this
-  checkout whatever its `-C` says.
-- **One impd runs one suite at a time.** A worktree's dev instance needs its own `IMP_DEV_NAME` and
-  `IMP_DEV_PORT_OFFSET`. A journey run alone gets no baseline reset and no fixture image build.
-- **A journey removes what it makes.** It registers each removal with `registerRemoval` on the line
-  after the act that made the thing, so an imp goes before the template it boots.
-
-## References
-
-- [preloads-and-utils.md](./references/preloads-and-utils.md): the root and dashboard preloads, the
-  two kinds of util for cleanup order, and what a daemon `setupTest()` returns.
-- [stand-ins.md](./references/stand-ins.md): the kinds of stand-in and when to use each, booting
-  impd and its harnesses, Bun's timer and transport facts, and the broker's test upstreams.
-- [e2e.md](./references/e2e.md): what a run does around each journey, what the baseline reset
-  covers, how to write a journey, sets and groups, and host safety.
-- [zfs-nixos-go-ci.md](./references/zfs-nixos-go-ci.md): when to use the ZFS fake or a real pool,
-  the NixOS checks, agent Go timer and golden tests, and the CI facts that a test change touches.

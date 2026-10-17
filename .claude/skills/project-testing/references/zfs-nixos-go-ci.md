@@ -5,10 +5,12 @@ to use for a change and what each one proves; the scripts and their tests show h
 
 ## ZFS
 
-Test the ZFS backend against the in-memory `zfs` fake first. The fake models datasets, snapshots,
-clones, promote, deferred destroy and legacy mounts, and it can block, fail or crash a command and
-restart, so a test can stop a backend halfway through an operation. Its space numbers are fixed, and
-it refuses to unmount a dir that is not itself a mount, as util-linux does.
+Test the ZFS backend against the in-memory `zfs` fake,
+[`buildStubZfs`](../../../../packages/daemon/src/test-utils/build-stub-zfs.ts), first. The fake
+models datasets, snapshots, clones, promote, deferred destroy and legacy mounts, and it can block,
+fail or crash a command and restart, so a test can stop a backend halfway through an operation. Its
+space numbers are fixed, and it refuses to unmount a dir that is not itself a mount, as util-linux
+does.
 
 Write a real-pool test only for behaviour that depends on the kernel module, such as space
 accounting or a real mount. Real-pool tests skip until their two gates name a dataset and its mount
@@ -17,10 +19,12 @@ releases only what it made.
 
 Two scripts run the real-pool layer:
 
-- **The real-pool script** makes a throwaway sparse-file pool, runs the ZFS backend's tests with
-  both gates set, and destroys the pool on exit when `zpool status` proves the pool is its own.
-- **The ZFS host script** runs the real-pool script, then runs end-to-end suites on a ZFS-backed dev
-  instance over a second throwaway pool. `IMP_ZFS_E2E_SUITES` picks the suites.
+- **The real-pool script**, [`test-zfs.sh`](../../../../scripts/test-zfs.sh), makes a throwaway
+  sparse-file pool, runs the ZFS backend's tests with both gates set, and destroys the pool on exit
+  when `zpool status` proves the pool is its own.
+- **The ZFS host script**, [`zfs-host-test.sh`](../../../../scripts/zfs-host-test.sh), runs the
+  real-pool script, then runs end-to-end suites on a ZFS-backed dev instance over a second throwaway
+  pool. `IMP_ZFS_E2E_SUITES` picks the suites.
 
 Both scripts have tests that run them against stub binaries; a change to either script's cleanup
 extends those tests.
@@ -59,8 +63,10 @@ disk grow calls this way, because the disk package tests the sysfs and ioctl edg
 
 ## CI
 
-Every command in the skill's table runs in a CI job, in `.github/workflows/ci.yml` or `nix.yml`. Two
-facts about those jobs matter when you change a test:
+Every command in the skill's table runs in a CI job, in
+[`ci.yml`](../../../../.github/workflows/ci.yml) or
+[`nix.yml`](../../../../.github/workflows/nix.yml). Two facts about those jobs matter when you
+change a test:
 
 - The end-to-end work runs as three groups on KVM runners, and the required `e2e` check passes only
   when every group passes. One group also runs the host networking tests as root, and one sets up

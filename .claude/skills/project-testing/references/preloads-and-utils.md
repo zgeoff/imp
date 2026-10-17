@@ -1,24 +1,30 @@
 # Preloads, shared test utils and cleanup
 
-Two preloads own the shared state of a test process: the root preload serves every package but the
-dashboard, and the dashboard has its own. Helpers that every package uses live in
-[the shared test utils](../../../../packages/test-utils/src/), and each package keeps its own
-stand-ins in its `test-utils` folder. Read a helper's own test before you rely on it, because that
-test pins what the helper does.
+Two preloads own the shared state of a test process: the
+[root preload](../../../../packages/test-utils/src/preload.ts) serves every package but the
+dashboard, and the dashboard has [its own](../../../../packages/dashboard/test-setup.ts). Helpers
+that every package uses live in [the shared test utils](../../../../packages/test-utils/src/), and
+each package keeps its own stand-ins in its `test-utils` folder. Read a helper's own test before you
+rely on it, because that test pins what the helper does.
 
 ## The root preload
 
 The root preload gives each unit test a clean impd environment. It deletes every `IMP_*` variable
 the shell passed in, except the run gates, so a developer's own settings never reach a test. A test
-that needs an impd setting sets it through the env util before it calls `setupTest()`, and the
-test's impd then reads it through the config loader that production uses.
+that needs an impd setting sets it through
+[`updateEnv`](../../../../packages/test-utils/src/update-env.ts) before it calls `setupTest()`, and
+the test's impd then reads it through
+[`readImpEnv`](../../../../packages/test-utils/src/read-imp-env.ts), as production does.
 
 The end-to-end suites run under a preload of their own, with no MSW server, because each journey
 talks to a real dev instance over the network.
 
-The shared test utils hold the condition wait, the narrowing helper, and a scripted answer queue.
-The queue hands out a dependency's answers in order and throws on a call past the last one, so a
-test that expects three calls fails on a fourth.
+The shared test utils hold the condition wait
+[`waitFor`](../../../../packages/test-utils/src/wait-for.ts), the narrowing helper
+[`invariant`](../../../../packages/test-utils/src/invariant.ts), and the scripted answer queue
+[`buildStubAnswerQueue`](../../../../packages/test-utils/src/build-stub-answer-queue.ts). The queue
+hands out a dependency's answers in order and throws on a call past the last one, so a test that
+expects three calls fails on a fourth.
 
 ## The dashboard's preload
 
@@ -34,8 +40,11 @@ the session's token again. A changed token therefore takes effect at once, and a
 nobody in. A procedure that the mock router leaves out returns impd's `not found`, so add the
 procedure to the router when the dashboard starts to call it.
 
-To write a test, log in through the session helper, mount the whole app through the render helper,
-and add a per-test MSW handler when the test reads a call's input.
+To write a test, log in through
+[`createDashboardSession`](../../../../packages/dashboard/src/test-utils/create-dashboard-session.ts),
+mount the whole app through
+[`renderApp`](../../../../packages/dashboard/src/test-utils/render-app.tsx), and add a per-test MSW
+handler when the test reads a call's input.
 [The dashboard's test utils](../../../../packages/dashboard/src/test-utils/) and
 [mocks](../../../../packages/dashboard/src/mocks/) hold them.
 
@@ -60,5 +69,5 @@ A daemon test file's `setupTest()` seeds the image that every imp create boots. 
 on that image reads it from `setupTest()` as `ctx.image` instead of naming it again.
 
 To test behaviour that spans a whole test process, such as a preload, run the test file in a child
-`bun test` through the shared child-test runner. The runner gives the child its own working
-directory and kills it at a timeout.
+`bun test` through [`runChildTests`](../../../../packages/test-utils/src/run-child-tests.ts). The
+runner gives the child its own working directory and kills it at a timeout.
