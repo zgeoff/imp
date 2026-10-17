@@ -268,7 +268,11 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
       return response;
     }
 
-    await response.body?.cancel();
+    // an upstream that hung up mid-body fails the cancel; the 401 is
+    // discarded either way, and the retry goes on
+    try {
+      await response.body?.cancel();
+    } catch {}
 
     return sendWith(renewed);
   };

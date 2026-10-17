@@ -1238,6 +1238,45 @@ test('it sends a method-override header on a grant with no filter', async () => 
   expect(received).toHaveBeenCalledExactlyOnceWith('PATCH');
 });
 
+test('it sends a request without a body again when the body of the 401 fails', async () => {
+  const answers = buildStubAnswerQueue([
+    () =>
+      new HttpResponse(
+        new ReadableStream({
+          pull: (controller) => {
+            controller.error(new Error('the upstream hung up'));
+          },
+        }),
+        { status: 401 },
+      ),
+    () => HttpResponse.text('models'),
+  ]);
+
+  const credentials = buildStubAnswerQueue([
+    buildMockCredential({ secretName: 'codex', oauth: { refreshedAt: 1000 } }),
+    buildMockCredential({ secretName: 'codex', oauth: { refreshedAt: 2000 } }),
+  ]);
+
+  server.use(http.get('https://chatgpt.com/backend-api/codex/models', () => answers.next()()));
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () => Promise.resolve(credentials.next()),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection: () => Promise.resolve(true),
+  });
+
+  const response = await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  expect(response.status).toBe(200);
+});
+
 test('it sends a request without a body again with the new oauth token after a 401', async () => {
   const received = mock<(authorization: string | null) => void>();
   const statuses = buildStubAnswerQueue([401, 200]);
