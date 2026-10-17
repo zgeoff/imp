@@ -70,13 +70,13 @@ test('#formatTop lists the busiest imp first, with disk use, traffic, wakes and 
       '200',
       '4s',
       '300 MiB',
-      '<=1203 MiB / 8 GiB',
+      '<=1.2 GiB / 8.0 GiB',
       '2.0 KiB',
       '10 B',
       '0',
-      '2h',
+      '2h 0m',
     ],
-    ['idle', 'running', '2%', '100', '0s', '300 MiB', '- / 8 GiB', '2.0 KiB', '10 B', '3', '90s'],
+    ['idle', 'running', '2%', '100', '0s', '300 MiB', '- / 8.0 GiB', '2.0 KiB', '10 B', '3', '1m'],
   ]);
 });
 

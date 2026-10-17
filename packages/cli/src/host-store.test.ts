@@ -12,8 +12,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { UsageError } from './errors';
 import { checkHostName, readHostConfig, resolveConfigPath, writeHostConfig } from './host-store';
-import { UsageError } from './usage-error';
 
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-hosts-'));

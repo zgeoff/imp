@@ -6,8 +6,8 @@ import type { ProgressOutput } from '../cp/copy-progress';
 import { createImpClient } from '../create-imp-client';
 import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
+import { UsageError } from '../errors';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { nameArg } from './common-args';
 
 // how often `impz move` asks the source how far the send is

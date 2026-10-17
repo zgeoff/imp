@@ -2,8 +2,8 @@ import type { SessionLog } from '@impz/api';
 import { requireFeatures } from '@impz/client';
 import type { CommandIO } from '../command-io';
 import type { ImpClient } from '../create-imp-client';
+import { UsageError } from '../errors';
 import { formatOutput, formatSessionLogs } from '../format-output';
-import { UsageError } from '../usage-error';
 
 // `impz sessions logs|log|log-rm`: the session logs impd keeps on the host
 // (docs/guides/session-logs.md). None of them wakes the imp.

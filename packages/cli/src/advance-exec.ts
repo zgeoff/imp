@@ -1,8 +1,8 @@
-import { constants } from 'node:os';
 import type { ExecOutcome } from '@impz/client';
 import { match } from 'ts-pattern';
 import type { CliConfig } from './cli-config';
 import { formatUnauthorized } from './run-action';
+import { toSignalExitCode } from './to-signal-exit-code';
 
 // Exit codes as ssh and shells use them (docs/guides/cli.md has the table): 1 a
 // --require impd cannot meet, 127 could not start, 141 our output went away,
@@ -142,16 +142,16 @@ function buildOutcomeResult(
         return { code: exit.code, message: null };
       }
 
-      const signal = readSignalNumber(exit.signal);
+      const code = exit.signal === null ? null : toSignalExitCode(exit.signal);
 
-      if (signal === 0) {
+      if (code === null) {
         return {
           code: IMP_FAILED_CODE,
           message: 'impd reported an exit with no code and no known signal',
         };
       }
 
-      return { code: 128 + signal, message: null };
+      return { code, message: null };
     })
     .with({ kind: 'failed' }, (failed) => {
       const prefix = failed.code === null ? '' : `${failed.code}: `;
@@ -214,16 +214,4 @@ function pickFailedCode(code: string | null): number {
 
 function isBrokenPipe(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'EPIPE';
-}
-
-// impd names a signal Node does not know (a real-time one) `SIG<n>`
-export function readSignalNumber(signal: string | null): number {
-  if (signal === null) {
-    return 0;
-  }
-
-  const signals: Readonly<Record<string, number>> = constants.signals;
-  const numbered = /^SIG(?<number>\d+)$/u.exec(signal)?.groups?.['number'];
-
-  return signals[signal] ?? (numbered === undefined ? 0 : Number(numbered));
 }

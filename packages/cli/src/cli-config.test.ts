@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadCliConfig } from './cli-config';
+import { UsageError } from './errors';
 import { writeHostConfig } from './host-store';
-import { UsageError } from './usage-error';
 
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-cli-'));

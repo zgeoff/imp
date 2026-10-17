@@ -1,7 +1,8 @@
 import { watchEvents } from '@impz/client';
 import type { Imp } from '@impz/client';
-import { formatBytes } from '@impz/shared';
+import { formatBytes, formatDuration } from '@impz/shared';
 import { defineCommand } from '../define-command';
+import { UsageError } from '../errors';
 import {
   formatCpuUse,
   formatDiskUse,
@@ -12,7 +13,7 @@ import {
 import { parseCpuLimit, parseCpuWeight } from '../parse-cpu';
 import { parseCount } from '../parse-size';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
+import { toSignalExitCode } from '../to-signal-exit-code';
 import { jsonArg, nameArg } from './common-args';
 
 // how often `impz top` asks again when no event comes
@@ -23,8 +24,8 @@ const TOP_EVENT_DEBOUNCE_MS = 200;
 const HIDE_CURSOR = '\u001B[?25l';
 const SHOW_CURSOR = '\u001B[?25h';
 
-// 128 + the signal's number, as a shell reports it
-const SIGNAL_EXIT_CODES = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
+// the signals that end top, each with its shell exit code
+const ENDING_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 
 export const cpuLimitArg = {
   type: 'string',
@@ -112,13 +113,13 @@ export function formatTop(imps: readonly Imp[]): string {
         imp.state,
         formatCpuUse(imp),
         String(imp.cpu?.weight ?? '-'),
-        sample === undefined ? '-' : formatSeconds(sample.cpuThrottledMs),
+        sample === undefined ? '-' : formatDuration(sample.cpuThrottledMs),
         imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
         formatDiskUse(imp),
         sample === undefined ? '-' : formatBytes(sample.netRxBytes),
         sample === undefined ? '-' : formatBytes(sample.netTxBytes),
         String(imp.resources?.wakeCount ?? '-'),
-        imp.resources === undefined ? '-' : formatSeconds(imp.resources.awakeMs),
+        imp.resources === undefined ? '-' : formatDuration(imp.resources.awakeMs),
       ];
     }),
   );
@@ -145,10 +146,10 @@ export const topCommand = defineCommand({
       const refresh = { wake: (): void => {} };
 
       // the cursor comes back however top ends
-      for (const [signal, code] of Object.entries(SIGNAL_EXIT_CODES)) {
+      for (const signal of ENDING_SIGNALS) {
         process.once(signal, () => {
           process.stdout.write(`${SHOW_CURSOR}\n`);
-          process.exit(code);
+          process.exit(toSignalExitCode(signal) ?? 1);
         });
       }
 
@@ -191,15 +192,3 @@ export const topCommand = defineCommand({
       }
     }),
 });
-
-function formatSeconds(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-
-  if (seconds < 120) {
-    return `${String(seconds)}s`;
-  }
-
-  const minutes = Math.round(seconds / 60);
-
-  return minutes < 120 ? `${String(minutes)}m` : `${String(Math.round(minutes / 60))}h`;
-}

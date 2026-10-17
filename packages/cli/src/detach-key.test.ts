@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { findDetachKey, parseDetachKey } from './detach-key';
-import { UsageError } from './usage-error';
+import { UsageError } from './errors';
 
 test.each([
   ['ctrl-]', 0x1d],

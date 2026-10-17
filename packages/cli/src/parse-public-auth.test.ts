@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
+import { UsageError } from './errors';
 import { parsePublicAuth } from './parse-public-auth';
-import { UsageError } from './usage-error';
 
 test('it takes token auth when no flag is given', () => {
   expect(parsePublicAuth(undefined, undefined)).toStrictEqual({ auth: 'token' });

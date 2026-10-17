@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
+import { UsageError } from './errors';
 import { formatPolicy, parsePolicy } from './parse-policy';
-import { UsageError } from './usage-error';
 
 test('#parsePolicy leaves the policy unset when neither flag is given', () => {
   expect(parsePolicy(undefined, undefined)).toBeUndefined();

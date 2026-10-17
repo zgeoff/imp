@@ -4,9 +4,9 @@ import type { Scope } from '@impz/api';
 import { requireFeatures } from '@impz/client';
 import { choice } from 'gunshi/combinators';
 import { defineCommand, defineGroup } from '../define-command';
+import { UsageError } from '../errors';
 import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 const tokenArg = { type: 'positional', description: 'token name', required: true } as const;

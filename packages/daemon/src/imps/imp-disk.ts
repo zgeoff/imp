@@ -1,4 +1,5 @@
 import { statSync, truncateSync } from 'node:fs';
+import { formatBytes } from '@impz/shared';
 import { ORPCError } from '@orpc/server';
 import { runChecked } from '../process/run-command';
 
@@ -42,10 +43,6 @@ export function readFileBytes(path: string): number {
 
 export function buildDiskTooSmallError(diskBytes: number, floorBytes: number, why: string) {
   return new ORPCError('BAD_REQUEST', {
-    message: `a disk of ${formatMib(diskBytes)} is smaller than ${why} (${formatMib(floorBytes)})`,
+    message: `a disk of ${formatBytes(diskBytes)} is smaller than ${why} (${formatBytes(floorBytes)})`,
   });
-}
-
-function formatMib(bytes: number): string {
-  return `${String(Math.ceil(bytes / MIB))} MiB`;
 }

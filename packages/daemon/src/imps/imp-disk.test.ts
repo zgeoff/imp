@@ -92,7 +92,7 @@ test('it refuses a disk smaller than its image filesystem', async () => {
     ctx.client.imps.create({ name: 'small', image: 'big', diskMib: 2048 }),
   ).rejects.toMatchObject({
     code: 'BAD_REQUEST',
-    message: "a disk of 2048 MiB is smaller than the image's filesystem (3072 MiB)",
+    message: "a disk of 2.0 GiB is smaller than the image's filesystem (3.0 GiB)",
   });
 });
 
@@ -139,7 +139,7 @@ test('it refuses to shrink a disk', async () => {
 
   expect(ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3072 })).rejects.toMatchObject({
     code: 'BAD_REQUEST',
-    message: 'a disk of 3072 MiB is smaller than the disk now; a disk only grows (4096 MiB)',
+    message: 'a disk of 3.0 GiB is smaller than the disk now; a disk only grows (4.0 GiB)',
   });
 });
 

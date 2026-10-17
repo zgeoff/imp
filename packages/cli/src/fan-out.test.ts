@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { ORPCError } from '@impz/client';
 import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
+import { UsageError } from './errors';
 import { listSavedTargets, runOnHosts } from './fan-out';
 import { writeHostConfig } from './host-store';
 import { buildMockSavedTarget } from './test-utils/build-mock-saved-target';
 import { buildStubTimeouts } from './test-utils/build-stub-timeouts';
-import { UsageError } from './usage-error';
 
 function setupTest() {
   const dir = mkdtempSync(join(tmpdir(), 'imp-fan-out-'));

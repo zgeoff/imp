@@ -13,8 +13,8 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as z from 'zod';
+import { UsageError } from './errors';
 import { updateLegacyConfig } from './update-legacy-config';
-import { UsageError } from './usage-error';
 
 export type CliEnv = Readonly<Record<string, string | undefined>>;
 

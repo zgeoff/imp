@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
+import { UsageError } from './errors';
 import { parseCpuLimit, parseCpuWeight } from './parse-cpu';
-import { UsageError } from './usage-error';
 
 test.each([
   ['1.5', 1.5],

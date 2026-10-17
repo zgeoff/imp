@@ -1,7 +1,7 @@
 import { defineCommand, defineGroup } from '../define-command';
+import { UsageError } from '../errors';
 import { formatBackupRun, formatBackupStatus, formatImps, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 // a zone is required to be unambiguous; without one the time is UTC, never

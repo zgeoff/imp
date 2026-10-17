@@ -1,6 +1,6 @@
 import { PublicAuthSchema } from '@impz/api';
 import type { PublicAuth } from '@impz/api';
-import { UsageError } from './usage-error';
+import { UsageError } from './errors';
 
 export interface PublicAuthRequest {
   readonly auth: PublicAuth;

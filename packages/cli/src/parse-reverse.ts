@@ -1,5 +1,5 @@
 import type { ReverseGuest } from '@impz/client';
-import { UsageError } from './usage-error';
+import { UsageError } from './errors';
 
 // The local side of a reverse forward: a unix socket or a port on this
 // machine's 127.0.0.1.

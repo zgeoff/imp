@@ -1,8 +1,8 @@
 import { defineWithTypes } from 'gunshi';
 import type { SubCommandable } from 'gunshi';
+import { UsageError } from './errors';
 import type { ImpzExtension } from './impz-plugin';
 import { renderUsage } from './render-usage';
-import { UsageError } from './usage-error';
 
 interface ImpzParams {
   readonly extensions: { readonly impz: ImpzExtension };

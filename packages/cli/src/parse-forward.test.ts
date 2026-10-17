@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
+import { UsageError } from './errors';
 import { parseForward } from './parse-forward';
-import { UsageError } from './usage-error';
 
 test.each([
   ['5432', 5432, 5432],

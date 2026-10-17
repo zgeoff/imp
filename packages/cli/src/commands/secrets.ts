@@ -8,6 +8,7 @@ import type { BrokerRule, GrantFilter, OAuthConfig, Secret, SecretKind } from '@
 import { requireFeatures } from '@impz/client';
 import { choice, integer } from 'gunshi/combinators';
 import { defineCommand, defineGroup } from '../define-command';
+import { UsageError } from '../errors';
 import {
   formatApiCalls,
   formatAudit,
@@ -18,7 +19,6 @@ import {
 } from '../format-output';
 import { buildTokenTerminal, readToken } from '../read-token';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
 
 const secretArg = { type: 'positional', description: 'secret name', required: true } as const;

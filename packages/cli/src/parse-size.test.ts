@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
+import { UsageError } from './errors';
 import { parseCount, parseSize } from './parse-size';
-import { UsageError } from './usage-error';
 
 test.each([
   ['2048', 2048],

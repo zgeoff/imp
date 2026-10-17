@@ -1,10 +1,10 @@
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
 import type { ImpClient } from './create-imp-client';
+import { UsageError } from './errors';
 import { readHostConfig } from './host-store';
 import type { CliEnv } from './host-store';
 import { formatError } from './run-action';
-import { UsageError } from './usage-error';
 
 // how long one saved host gets to answer before the rest go on without it
 const HOST_TIMEOUT_MS = 5000;

@@ -1,7 +1,7 @@
 import { openExecSession } from '@impz/client';
 import type { ExecRequirement, ExecSession, ExecSessionOptions } from '@impz/client';
 import pRetry from 'p-retry';
-import { advanceExec, formatSession, readSignalNumber } from './advance-exec';
+import { advanceExec, formatSession } from './advance-exec';
 import type { ExecEvent, ExecMachine, ExecStep } from './advance-exec';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
@@ -11,6 +11,7 @@ import { createImpClient } from './create-imp-client';
 import { findDetachKey } from './detach-key';
 import { openBunWebSocket } from './open-bun-web-socket';
 import { createModeWatcher } from './terminal-modes';
+import { toSignalExitCode } from './to-signal-exit-code';
 
 export interface ExecOptions {
   // the saved host `--host` named, or null
@@ -74,9 +75,8 @@ export interface ExecIo {
 // impd failed, as advanceExec reports it too
 const IMP_FAILED_CODE = 255;
 
-// ctrl-c in a raw terminal, and the code SIGINT gives
+// ctrl-c in a raw terminal
 const CTRL_C = 0x03;
-const INTERRUPTED_CODE = 130;
 
 // the first one goes to the command; a second ends the session, so the CLI
 // still stops when the command ignores it or impd stopped answering
@@ -259,7 +259,7 @@ export function runExec(
       // a session outlives the CLI: a hangup or a kill detaches from it.
       // Before `started`, impd would only queue the signal.
       if (session !== null || !current.session.isStarted() || state.signalled) {
-        stopSession(128 + readSignalNumber(signal));
+        stopSession(toSignalExitCode(signal) ?? IMP_FAILED_CODE);
 
         return;
       }
@@ -304,7 +304,7 @@ export function runExec(
   // while the session is away: ctrl-c gives up, anything else waits for it
   const holdInput = (data: Uint8Array): void => {
     if (isRaw && data.includes(CTRL_C)) {
-      stopSession(INTERRUPTED_CODE);
+      stopSession(toSignalExitCode('SIGINT') ?? IMP_FAILED_CODE);
 
       return;
     }

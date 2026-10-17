@@ -4,9 +4,9 @@ import { ORPCError } from '@impz/client';
 import { choice, integer } from 'gunshi/combinators';
 import { match } from 'ts-pattern';
 import { defineCommand, defineGroup } from '../define-command';
+import { UsageError } from '../errors';
 import { formatOutput, formatServices } from '../format-output';
 import { formatError, runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
 
 const serviceArg = { type: 'positional', description: 'service name', required: true } as const;

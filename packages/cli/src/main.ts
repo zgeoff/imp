@@ -2,16 +2,15 @@
 import { isCommandNotFoundError } from 'gunshi';
 import { cli } from 'gunshi/bone';
 import packageJson from '../package.json' with { type: 'json' };
-import { CommandExitError } from './command-exit-error';
 import { buildProcessIO } from './command-io';
 import type { CommandIO } from './command-io';
-import { CommandLineError } from './command-line-error';
 import { mainCommand, subCommands } from './command-tree';
+import { CommandExitError, CommandLineError, UsageError } from './errors';
 import { formatValidationError } from './format-validation-error';
 import { buildImpzPlugin } from './impz-plugin';
 import { PromptCancelledError } from './read-token';
 import { formatError } from './run-action';
-import { UsageError } from './usage-error';
+import { toSignalExitCode } from './to-signal-exit-code';
 
 interface CliOutcome {
   readonly code: number;
@@ -20,9 +19,6 @@ interface CliOutcome {
   // process exits at once instead of when they close
   readonly mustExit: boolean;
 }
-
-// 128 + SIGINT, as a shell reports a Ctrl-C
-const CANCELLED_CODE = 130;
 
 // Runs one impz command line to its end. A failure prints one line on stderr
 // and maps to its exit code: 2 for a usage error, 1 for any other.
@@ -54,7 +50,8 @@ function printFailure(error: unknown, io: CommandIO): CliOutcome {
   }
 
   if (error instanceof PromptCancelledError) {
-    return { code: CANCELLED_CODE, mustExit: false };
+    // a Ctrl-C at the prompt, as a shell reports it
+    return { code: toSignalExitCode('SIGINT') ?? 1, mustExit: false };
   }
 
   const usage = formatUsageError(error);

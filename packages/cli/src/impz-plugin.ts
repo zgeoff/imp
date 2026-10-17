@@ -1,7 +1,7 @@
 import { hasPriorityValidationError, plugin } from 'gunshi/plugin';
 import type { CommandContext } from 'gunshi/plugin';
 import type { CommandIO } from './command-io';
-import { CommandLineError } from './command-line-error';
+import { CommandLineError } from './errors';
 import { checkHostName } from './host-store';
 import { renderUsage } from './render-usage';
 

@@ -64,6 +64,11 @@
       }
     },
     {
+      // the cli keeps every error that main.ts maps to an exit code in one module
+      "files": ["packages/cli/src/errors.ts"],
+      "rules": { "max-classes-per-file": "off" }
+    },
+    {
       // stage 1 import rules, one override per package. A later override
       // replaces an earlier one's no-restricted-imports, so each block carries
       // every pattern its files need, and type-only imports count. No pattern

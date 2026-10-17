@@ -1,7 +1,7 @@
 import { defineCommand } from '../define-command';
+import { UsageError } from '../errors';
 import { formatGc, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 export const gcCommand = defineCommand({

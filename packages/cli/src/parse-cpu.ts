@@ -1,4 +1,4 @@
-import { UsageError } from './usage-error';
+import { UsageError } from './errors';
 
 // `--cpu-limit 1.5` in cores, or `none` to take the limit away
 export function parseCpuLimit(text: string): number | null {

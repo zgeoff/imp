@@ -3,11 +3,11 @@ import { isHttpUrl } from '../cli-config';
 import type { CommandIO } from '../command-io';
 import { createImpClient } from '../create-imp-client';
 import { defineCommand, defineGroup } from '../define-command';
+import { UsageError } from '../errors';
 import { formatJson, formatTable } from '../format-output';
 import { checkHostName, readHostConfig, writeHostConfig } from '../host-store';
 import type { HostConfig } from '../host-store';
 import { buildTokenTerminal, readToken } from '../read-token';
-import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);

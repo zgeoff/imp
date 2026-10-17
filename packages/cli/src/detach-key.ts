@@ -1,4 +1,4 @@
-import { UsageError } from './usage-error';
+import { UsageError } from './errors';
 
 export const DEFAULT_DETACH_KEY = 'ctrl-]';
 

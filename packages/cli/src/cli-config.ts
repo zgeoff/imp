@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { UsageError } from './errors';
 import { checkHostName, readHostConfig, resolveConfigDir } from './host-store';
 import type { CliEnv } from './host-store';
 import { updateLegacyConfig } from './update-legacy-config';
-import { UsageError } from './usage-error';
 
 export interface CliConfig {
   readonly url: string;

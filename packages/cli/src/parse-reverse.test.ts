@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
+import { UsageError } from './errors';
 import { parseReverse } from './parse-reverse';
 import type { ReverseSpec } from './parse-reverse';
-import { UsageError } from './usage-error';
 
 test.each<[string, ReverseSpec]>([
   [

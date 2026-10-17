@@ -1,8 +1,8 @@
 import { defineCommand } from '../define-command';
 import { dispatchVerb, listOperands } from '../dispatch-verb';
+import { UsageError } from '../errors';
 import { formatCheckpoints, formatImp, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
 
 export const checkpointCommand = defineCommand({

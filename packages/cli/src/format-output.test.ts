@@ -62,8 +62,8 @@ test('#formatCheckpoints lists checkpoints with their size in MiB and their disk
 
   expect(table.split('\n')).toStrictEqual([
     'ID         LABEL  CREATED                   SIZE   DISK',
-    'cp-a2b3c4  clean  1970-01-01T00:00:00.000Z  3 MiB  32 GiB',
-    'cp-d5e6f7         1970-01-01T00:00:00.000Z         66048 MiB',
+    'cp-a2b3c4  clean  1970-01-01T00:00:00.000Z  3 MiB  32.0 GiB',
+    'cp-d5e6f7         1970-01-01T00:00:00.000Z         64.5 GiB',
   ]);
 });
 
@@ -206,8 +206,8 @@ test('#formatImps shows what a destroy frees and what the imp shares', () => {
 
   expect(cells).toStrictEqual([
     ['USED', 'SHARED'],
-    ['300 MiB', '1200 MiB'],
-    ['<=300 MiB?', '1200 MiB?'],
+    ['300 MiB', '1.2 GiB'],
+    ['<=300 MiB?', '1.2 GiB?'],
     ['-', '-'],
   ]);
 });
@@ -438,9 +438,9 @@ test('#formatGc lists the orphans it kept, with their size, age and snapshots', 
     'nothing to remove',
     '',
     'kept 2 orphans the database does not name; `impz gc --orphans` retires them:',
-    'KIND   ID    LOCATION                  SIZE   CREATED                   SNAPSHOTS',
-    'imp    a     tank/imp/disks/a          3 MiB  2026-10-03T00:00:00.000Z  cp-1,cp-2',
-    'image  9f2c  /var/lib/imp/images/9f2c  0 MiB  -                         -',
+    'KIND   ID    LOCATION                  SIZE     CREATED                   SNAPSHOTS',
+    'imp    a     tank/imp/disks/a          3.0 MiB  2026-10-03T00:00:00.000Z  cp-1,cp-2',
+    'image  9f2c  /var/lib/imp/images/9f2c  0 B      -                         -',
   ]);
 });
 
@@ -465,8 +465,8 @@ test('#formatGc shows how many files each directory of kept secret values holds'
     'nothing to remove',
     '',
     'kept 1 orphans the database does not name; `impz gc --orphans` retires them:',
-    'KIND     ID                        LOCATION                                                 SIZE   CREATED                   SNAPSHOTS',
-    'secrets  2026-10-04T05-30-00.000Z  /var/lib/imp/secrets/.orphaned/2026-10-04T05-30-00.000Z  0 MiB  2026-10-04T05:30:00.000Z  2 files',
+    'KIND     ID                        LOCATION                                                 SIZE  CREATED                   SNAPSHOTS',
+    'secrets  2026-10-04T05-30-00.000Z  /var/lib/imp/secrets/.orphaned/2026-10-04T05-30-00.000Z  8 B   2026-10-04T05:30:00.000Z  2 files',
   ]);
 });
 

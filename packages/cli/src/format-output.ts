@@ -25,7 +25,7 @@ import type {
   SystemInfo,
   Token,
 } from '@impz/api';
-import { formatDuration } from '@impz/shared';
+import { formatBytes, formatDuration, formatMib } from '@impz/shared';
 
 type Row = readonly string[];
 
@@ -84,7 +84,7 @@ function toImpRow(imp: Imp): Row {
     String(imp.vcpus),
     formatMemory(imp),
     imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
-    formatDiskMib(imp.diskMib),
+    formatMib(imp.diskMib),
     ...formatDiskUsage(imp.diskUsage),
     formatCpuUse(imp),
     imp.sessions === undefined ? '-' : String(imp.sessions),
@@ -116,26 +116,17 @@ function formatDiskUsage(usage: Imp['diskUsage']): [string, string] {
   const partial = usage.isPartial ? '?' : '';
 
   return [
-    `${bound}${formatBytesMib(usage.exclusiveBytes)}${partial}`,
-    `${formatBytesMib(usage.sharedBytes)}${partial}`,
+    `${bound}${formatBytes(usage.exclusiveBytes)}${partial}`,
+    `${formatBytes(usage.sharedBytes)}${partial}`,
   ];
 }
 
-function formatBytesMib(bytes: number): string {
-  return `${String(Math.round(bytes / 1_048_576))} MiB`;
-}
-
-// GiB when whole, as sizes are given
-function formatDiskMib(mib: number): string {
-  return mib % 1024 === 0 ? `${String(mib / 1024)} GiB` : `${String(mib)} MiB`;
-}
-
 // what the imp's storage takes over its disk size, as `impz top` shows it:
-// `<=1203 MiB / 32 GiB`
+// `<=1.2 GiB / 32.0 GiB`
 export function formatDiskUse(imp: Imp): string {
   const [used] = formatDiskUsage(imp.diskUsage);
 
-  return `${used} / ${formatDiskMib(imp.diskMib)}`;
+  return `${used} / ${formatMib(imp.diskMib)}`;
 }
 
 // the last sample's CPU, in percent of one core, over the limit when there is
@@ -275,7 +266,7 @@ export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
       checkpoint.sizeBytes === undefined
         ? ''
         : `${String(Math.round(checkpoint.sizeBytes / 1_048_576))} MiB`,
-      formatDiskMib(checkpoint.diskMib),
+      formatMib(checkpoint.diskMib),
     ]),
   );
 }
@@ -696,7 +687,7 @@ export function formatGc(gc: Readonly<StorageGc>): string {
           orphan.kind,
           orphan.id,
           orphan.location,
-          formatBytesMib(orphan.bytes),
+          formatBytes(orphan.bytes),
           orphan.createdAt?.toISOString() ?? '-',
           formatOrphanContents(orphan),
         ]),

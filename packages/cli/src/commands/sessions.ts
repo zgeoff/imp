@@ -1,12 +1,11 @@
 import { integer } from 'gunshi/combinators';
-import { CommandExitError } from '../command-exit-error';
 import { defineCommand } from '../define-command';
 import { DEFAULT_SESSION, parseDetachKey } from '../detach-key';
 import { dispatchVerb, listOperands } from '../dispatch-verb';
+import { CommandExitError, UsageError } from '../errors';
 import { buildExecIO, runExec } from '../exec-client';
 import { formatOutput, formatSessions } from '../format-output';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, requireSessionName } from './common-args';
 import { readTermEnv } from './imps';
 import { listSessionLogs, removeSessionLogs, writeSessionLog } from './session-logs';

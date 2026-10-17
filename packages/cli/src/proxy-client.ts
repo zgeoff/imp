@@ -7,6 +7,7 @@ import { match } from 'ts-pattern';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
+import { UsageError } from './errors';
 import type { CliEnv } from './host-store';
 import { openBunWebSocket } from './open-bun-web-socket';
 import { parseForward } from './parse-forward';
@@ -15,7 +16,6 @@ import { parseReverse } from './parse-reverse';
 import { formatGuest, formatLocal, startReverseForward } from './reverse-client';
 import type { ReverseIo } from './reverse-client';
 import { toCallError } from './run-action';
-import { UsageError } from './usage-error';
 
 // what runProxy touches besides the network; tests swap it
 export interface ProxyIo {

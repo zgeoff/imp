@@ -1,4 +1,4 @@
-import { UsageError } from './usage-error';
+import { UsageError } from './errors';
 
 const UNIT_MIB: Readonly<Record<string, number>> = { m: 1, g: 1024, t: 1024 * 1024 };
 

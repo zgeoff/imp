@@ -5,11 +5,11 @@ import { toProgressOutput } from '../command-io';
 import type { ProgressOutput } from '../cp/copy-progress';
 import type { ImpClient } from '../create-imp-client';
 import { defineCommand, defineGroup } from '../define-command';
+import { UsageError } from '../errors';
 import { formatImageBuilds, formatImages, formatOutput } from '../format-output';
 import { runImageBuild } from '../image/run-image-build';
 import { runImageAdd, runOnHostBuild } from '../image/run-image-op';
 import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 const addCommand = defineCommand({

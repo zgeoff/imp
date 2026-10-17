@@ -1,5 +1,5 @@
 import { DEFAULT_DETACH_KEY } from '../detach-key';
-import { UsageError } from '../usage-error';
+import { UsageError } from '../errors';
 
 export const nameArg = { type: 'positional', description: 'imp name', required: true } as const;
 export const jsonArg = { type: 'boolean', description: 'print JSON' } as const;
