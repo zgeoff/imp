@@ -63,8 +63,8 @@ test('it signs a client in to tokens for the approved scope', async () => {
   );
 
   expect(issued).toStrictEqual({
-    access_token: expect.any(String),
-    refresh_token: expect.any(String),
+    access_token: expect.toBeString(),
+    refresh_token: expect.toBeString(),
     scope: 'read exec offline_access',
   });
 });

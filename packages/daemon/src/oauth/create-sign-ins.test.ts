@@ -23,7 +23,7 @@ test('it starts a sign-in with an 8-symbol code that ends in 10 minutes', () => 
       clientName: 'conn',
       redirectURI: 'https://client.example/callback',
       requestedScope: 'exec',
-      approvalCode: expect.stringMatching(/^[A-HJ-NP-Z2-9]{8}$/),
+      approvalCode: expect.toSatisfy((code: string) => /^[A-HJ-NP-Z2-9]{8}$/v.test(code)),
       createdAt: Date.UTC(2026, 0, 1),
       expiresAt: Date.UTC(2026, 0, 1) + 600_000,
       approval: null,

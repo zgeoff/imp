@@ -50,8 +50,8 @@ test('it starts a sign-in and reads its approval code from the login page', asyn
   });
 
   expect(pending).toStrictEqual({
-    code: expect.stringMatching(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/),
-    oauthQuery: expect.stringContaining(`client_id=${client.clientId}`),
+    code: expect.toSatisfy((code: string) => /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/v.test(code)),
+    oauthQuery: expect.toInclude(`client_id=${client.clientId}`),
   });
 });
 

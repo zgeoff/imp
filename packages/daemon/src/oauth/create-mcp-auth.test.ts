@@ -82,7 +82,7 @@ test('it signs a client in on an approval, and its access token acts within the 
     grantable: [],
     imageRefPrefix: null,
     tokenId: approver.tokenId,
-    grantId: expect.any(String),
+    grantId: expect.toBeString(),
     expiresAt: null,
     principal: expect.toStartWith('grant:'),
     display: 'conn via laptop',
@@ -340,7 +340,7 @@ test('#listGrants lists a signed-in grant with its client, token, scope and imps
 
   expect(grants).toStrictEqual([
     {
-      id: expect.any(String),
+      id: expect.toBeString(),
       client: 'conn',
       token: 'laptop',
       scope: 'exec',

@@ -233,7 +233,7 @@ test('it serves the authorization server metadata, with public clients only and 
     issuer: 'http://127.0.0.1:7171',
     authorization_endpoint: 'http://127.0.0.1:7171/oauth2/authorize',
     token_endpoint: 'http://127.0.0.1:7171/oauth2/token',
-    code_challenge_methods_supported: expect.arrayContaining(['S256']),
+    code_challenge_methods_supported: expect.arrayContaining(['S256']) as unknown,
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
   });
@@ -759,6 +759,7 @@ test('it signs an MCP client in through its OAuth provider and lists the tools i
 
   // the operator's front: a request for the route's origin goes to the
   // listener's own port, with the origin's host
+  // oxlint-disable-next-line prefer-readonly-parameter-types -- the MCP SDK's fetch signature
   const sendThroughFront = (url: string | URL, init?: RequestInit): Promise<Response> => {
     const target = new URL(url);
 
