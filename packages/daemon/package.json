@@ -8,6 +8,7 @@
     "start": "bun src/main.ts"
   },
   "dependencies": {
+    "@better-auth/mcp": "1.7.7",
     "@bufbuild/protobuf": "catalog:",
     "@impz/api": "workspace:*",
     "@impz/client": "workspace:*",
@@ -23,6 +24,7 @@
     "@orpc/server": "catalog:",
     "@peculiar/x509": "catalog:",
     "acme-client": "catalog:",
+    "better-auth": "1.7.7",
     "dns-packet": "catalog:",
     "elysia": "catalog:",
     "kysely": "catalog:",
