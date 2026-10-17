@@ -182,6 +182,6 @@ function requireCleanEnd(error: unknown, signal: AbortSignal | undefined): void 
   }
 
   if (error.reason !== null) {
-    throw new Error(String(error.reason));
+    throw new Error('the event stream failed', { cause: error.reason });
   }
 }
