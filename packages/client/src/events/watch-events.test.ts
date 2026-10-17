@@ -182,6 +182,29 @@ test('it ends with what the open callback throws', () => {
   expect(watching).rejects.toBe(failure);
 });
 
+test('it closes the stream when the open callback throws', async () => {
+  const close = mock(() => Promise.resolve({ done: true as const, value: undefined }));
+
+  const stream: AsyncIterable<ImpEvent> = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.resolve({ done: true, value: undefined }),
+      return: close,
+    }),
+  };
+
+  const watching = watchEvents(
+    { events: { stream: () => Promise.resolve(stream) } },
+    {
+      onEvent: () => {},
+      onOpen: () => Promise.reject(new Error('the snapshot failed')),
+    },
+  );
+
+  await expect(watching).rejects.toThrow('the snapshot failed');
+
+  expect(close).toHaveBeenCalledTimes(1);
+});
+
 test('it resolves once the signal aborts while it waits to reconnect', async () => {
   const controller = new AbortController();
 

@@ -55,12 +55,12 @@ export async function watchEvents(
       throw new StreamEndError(error);
     });
 
-    await runCallback(() => options.onOpen?.(attempt));
-
     const events = stream[Symbol.asyncIterator]();
     const reading = { done: false };
 
     try {
+      await runCallback(() => options.onOpen?.(attempt));
+
       for (;;) {
         const next = await events.next().catch((error: unknown) => {
           throw new StreamEndError(error);
