@@ -80,8 +80,8 @@ export async function requireFeatures(
 
   const features = await readFeatures(client, options);
 
-  for (const [feature, outcome] of Object.entries(needs) as [ImpdFeature, string][]) {
-    if (features[feature] !== true) {
+  for (const [feature, outcome] of Object.entries(needs)) {
+    if (isImpdFeature(feature) && outcome !== undefined && features[feature] !== true) {
       throw new MissingFeatureError(feature, FEATURE_GAPS[feature], outcome);
     }
   }
@@ -124,4 +124,8 @@ function isMissingProcedure(error: unknown): boolean {
   return (
     error instanceof UnknownProcedureError || (error instanceof ORPCError && error.status === 404)
   );
+}
+
+function isImpdFeature(key: string): key is ImpdFeature {
+  return Object.hasOwn(FEATURE_GAPS, key);
 }

@@ -177,7 +177,11 @@ function requireCleanEnd(error: unknown, signal: AbortSignal | undefined): void 
     throw error;
   }
 
-  if (error.reason !== null) {
+  if (error.reason instanceof Error) {
     throw error.reason;
+  }
+
+  if (error.reason !== null) {
+    throw new Error(String(error.reason));
   }
 }

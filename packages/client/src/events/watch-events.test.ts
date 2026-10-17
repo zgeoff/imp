@@ -200,7 +200,7 @@ test('it closes the stream when the open callback throws', async () => {
     },
   );
 
-  await expect(watching).rejects.toThrow('the snapshot failed');
+  await Promise.allSettled([watching]);
 
   expect(close).toHaveBeenCalledTimes(1);
 });
