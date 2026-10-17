@@ -79,7 +79,7 @@ export async function watchEvents(
     } finally {
       // a callback that threw leaves the stream open; close it
       if (!reading.done) {
-        void events.return?.();
+        await disposeEvents(events);
       }
     }
   };
@@ -141,6 +141,16 @@ function readEventImpName(event: Readonly<ImpEvent>): string {
       (named) => named.name,
     )
     .exhaustive();
+}
+
+// a stream that failed can fail its close too; the read's own error is the
+// one the caller gets
+async function disposeEvents(events: AsyncIterator<ImpEvent>): Promise<void> {
+  try {
+    await events.return?.();
+  } catch {
+    // the stream has ended either way
+  }
 }
 
 // impd refusing the call refuses it again; a 5xx, a dropped connection or a

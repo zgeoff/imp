@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, onTestFinished, test } from 'bun:test';
 import { Readable } from 'node:stream';
 import { EVENT_VERSION } from '@impz/api';
 import type { ImpEvent } from '@impz/api';
@@ -203,6 +203,41 @@ test('it closes the stream when the open callback throws', async () => {
   await Promise.allSettled([watching]);
 
   expect(close).toHaveBeenCalledTimes(1);
+});
+
+test('it ends with what the callback throws when closing the stream fails too', async () => {
+  const unhandled = mock<(reason: unknown) => void>();
+
+  process.on('unhandledRejection', unhandled);
+
+  onTestFinished(() => {
+    process.off('unhandledRejection', unhandled);
+  });
+
+  const failure = new Error('the snapshot failed');
+
+  const stream: AsyncIterable<ImpEvent> = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.resolve({ done: true, value: undefined }),
+      return: () => Promise.reject(new Error('the reader was already cancelled')),
+    }),
+  };
+
+  const watching = watchEvents(
+    { events: { stream: () => Promise.resolve(stream) } },
+    {
+      onEvent: () => {},
+      onOpen: () => Promise.reject(failure),
+    },
+  );
+
+  const [settled] = await Promise.allSettled([watching]);
+
+  // one turn of the event loop, after which an unhandled rejection is reported
+  await Bun.sleep(0);
+
+  expect(settled).toStrictEqual({ status: 'rejected', reason: failure });
+  expect(unhandled).not.toHaveBeenCalled();
 });
 
 test('it resolves once the signal aborts while it waits to reconnect', async () => {
