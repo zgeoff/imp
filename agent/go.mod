@@ -2,7 +2,7 @@ module github.com/zgeoff/impz/agent
 
 go 1.26.0
 
-toolchain go1.26.8
+toolchain go1.26.9
 
 require (
 	github.com/charmbracelet/x/ansi v0.11.8
