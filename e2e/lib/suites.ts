@@ -247,7 +247,7 @@ export const FAST_GROUPS: readonly (readonly string[])[] = [
     'socket',
   ],
   ['sleep', 'reverse', 'jail'],
-  ['mcp', 'inner', 'memory', 'ksm'],
+  ['mcp', 'mcp-oauth', 'inner', 'memory', 'ksm'],
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.

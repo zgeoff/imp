@@ -4,7 +4,7 @@ import { tryImp } from './imp-cli';
 import type { DevInstance } from './instance';
 
 // A client of impd's public MCP route (docs/guides/mcp.md#public-route): the
-// sign-in page, the CLI's approval, the token endpoint, and /mcp.
+// login and consent pages, the CLI's approval, the token endpoint, and /mcp.
 
 export const RouteTokensSchema = z.object({
   access_token: z.string(),
@@ -29,17 +29,17 @@ export interface ApprovalPage {
   // what `impz oauth approve` takes
   readonly code: string;
 
-  // the form's hidden fields
-  readonly id: string;
-  readonly signature: string;
+  // the signed query the form posts back
+  readonly oauthQuery: string;
 }
 
-// the sign-in page's approval code and form fields, '' for each it lacks
+// the login page's approval code and form field, '' for each it lacks
 export function parseApprovalPage(page: string): ApprovalPage {
+  const query = /name="oauth_query" value="(?<query>[^"]+)"/v.exec(page)?.groups?.['query'] ?? '';
+
   return {
     code: /impz oauth approve (?<code>[A-Z0-9\-]+)/v.exec(page)?.groups?.['code'] ?? '',
-    id: /name="id" value="(?<id>[^"]+)"/v.exec(page)?.groups?.['id'] ?? '',
-    signature: /name="signature" value="(?<sig>[^"]+)"/v.exec(page)?.groups?.['sig'] ?? '',
+    oauthQuery: query.replaceAll('&amp;', '&'),
   };
 }
 
@@ -58,7 +58,19 @@ export function parseMcpBody(text: string): unknown {
   }
 }
 
+// the cookies a response sets, as a request sends them back
+export function readCookies(response: Response): string {
+  return response.headers
+    .getSetCookie()
+    .map((line) => line.split(';')[0])
+    .join('; ');
+}
+
 // Thin glue over the live route below.
+
+// as a browser posts a page's form under a same-origin referrer policy:
+// Origin null, and Sec-Fetch-Site it sets itself
+export const BROWSER_FORM = { origin: 'null', 'sec-fetch-site': 'same-origin' };
 
 export function sendForm(
   url: string,
@@ -122,18 +134,78 @@ export async function openRouteMcp(origin: string, bearer: string): Promise<stri
   return opened.session;
 }
 
-export interface SignIn {
-  readonly origin: string;
-  readonly clientId: string;
-  readonly redirect: string;
-
+export interface Approval {
   // the named token that approves, with the scope it grants
   readonly approverToken: string;
   readonly scope: string;
 }
 
-// A sign-in from the page to the client's tokens, approved with the CLI, as
-// arrangement: each step that goes another way throws, naming it.
+// The browser's part of a sign-in, as arrangement: authorization, the login
+// page, the CLI's approval, Continue and Allow, to the redirect back with its
+// code. Each step that goes another way throws, naming it.
+export async function runBrowserSignIn(
+  authorizationURL: string,
+  approval: Readonly<Approval>,
+): Promise<URL> {
+  const origin = new URL(authorizationURL).origin;
+
+  const authorized = await fetch(authorizationURL, { redirect: 'manual' });
+
+  const loginURL = new URL(authorized.headers.get('location') ?? '/', origin);
+
+  if (loginURL.pathname !== '/login') {
+    throw new Error(`authorize answered ${String(authorized.status)} to ${loginURL.href}`);
+  }
+
+  const login = await fetch(loginURL);
+  const loginPage = await login.text();
+
+  const page = parseApprovalPage(loginPage);
+
+  const approved = await tryImp(
+    ['oauth', 'approve', page.code, '--scope', approval.scope, '--yes'],
+    { token: approval.approverToken },
+  );
+
+  if (approved.exitCode !== 0) {
+    throw new Error(`impz oauth approve: ${approved.stderr}`);
+  }
+
+  const continued = await sendForm(
+    `${origin}/login`,
+    { oauth_query: page.oauthQuery, action: 'continue' },
+    BROWSER_FORM,
+  );
+
+  const consentURL = new URL(continued.headers.get('location') ?? '/', origin);
+
+  if (consentURL.pathname !== '/consent') {
+    throw new Error(`Continue answered ${String(continued.status)}, not a redirect to consent`);
+  }
+
+  const allowed = await sendForm(
+    `${origin}/consent`,
+    { oauth_query: consentURL.search.slice(1), action: 'allow' },
+    { ...BROWSER_FORM, cookie: readCookies(continued) },
+  );
+
+  const back = new URL(allowed.headers.get('location') ?? '/', origin);
+
+  if (!back.searchParams.has('code')) {
+    throw new Error(`Allow answered ${String(allowed.status)} with no code: ${back.href}`);
+  }
+
+  return back;
+}
+
+export interface SignIn extends Approval {
+  readonly origin: string;
+  readonly clientId: string;
+  readonly redirect: string;
+}
+
+// A sign-in from authorization to the client's tokens, approved with the
+// CLI, as arrangement
 export async function runSignIn(signIn: Readonly<SignIn>): Promise<RouteTokens> {
   const verifier = randomBytes(32).toString('base64url');
 
@@ -148,32 +220,15 @@ export async function runSignIn(signIn: Readonly<SignIn>): Promise<RouteTokens> 
     resource: `${signIn.origin}/mcp`,
   });
 
-  const opened = await fetch(`${signIn.origin}/oauth/authorize?${query.toString()}`);
-  const page = await opened.text();
-
-  const approval = parseApprovalPage(page);
-
-  const approved = await tryImp(
-    ['oauth', 'approve', approval.code, '--scope', signIn.scope, '--yes'],
-    { token: signIn.approverToken },
+  const back = await runBrowserSignIn(
+    `${signIn.origin}/oauth2/authorize?${query.toString()}`,
+    signIn,
   );
 
-  if (approved.exitCode !== 0) {
-    throw new Error(`impz oauth approve: ${approved.stderr}`);
-  }
-
-  const allowed = await sendForm(
-    `${signIn.origin}/oauth/authorize`,
-    { id: approval.id, signature: approval.signature, action: 'allow' },
-    { origin: 'null', 'sec-fetch-site': 'same-origin' },
-  );
-
-  const location = new URL(allowed.headers.get('location') ?? '');
-
-  const exchanged = await sendForm(`${signIn.origin}/oauth/token`, {
+  const exchanged = await sendForm(`${signIn.origin}/oauth2/token`, {
     grant_type: 'authorization_code',
     client_id: signIn.clientId,
-    code: location.searchParams.get('code') ?? '',
+    code: back.searchParams.get('code') ?? '',
     redirect_uri: signIn.redirect,
     code_verifier: verifier,
     resource: `${signIn.origin}/mcp`,

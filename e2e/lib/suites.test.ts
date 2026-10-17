@@ -120,6 +120,7 @@ test('#SUITE_SETS builds the fast set from the groups, in run order', () => {
     'sleep',
     'restart',
     'mcp',
+    'mcp-oauth',
     'offsets',
     'session-logs',
     'services',

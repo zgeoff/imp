@@ -4,6 +4,7 @@ import {
   buildRouteOrigin,
   parseApprovalPage,
   parseMcpBody,
+  readCookies,
 } from './oauth-route';
 
 test('#buildRouteOrigin publishes the route at the instance’s port offset', () => {
@@ -16,24 +17,31 @@ test('#buildPkceChallenge gives RFC 7636 appendix B challenge', () => {
   );
 });
 
-test('#parseApprovalPage reads the approval code and the form fields', () => {
+test('#parseApprovalPage reads the approval code and the signed query, unescaped', () => {
   const page = [
     '<p>Run <code>impz oauth approve K7QX-29TB</code> to approve.</p>',
-    '<form method="post">',
-    '<input type="hidden" name="id" value="req_01">',
-    '<input type="hidden" name="signature" value="c2lnbmVk">',
+    '<form method="post" action="/login">',
+    '<input type="hidden" name="oauth_query" value="client_id=impc_a&amp;sig=c2ln">',
     '</form>',
   ].join('\n');
 
   expect(parseApprovalPage(page)).toStrictEqual({
     code: 'K7QX-29TB',
-    id: 'req_01',
-    signature: 'c2lnbmVk',
+    oauthQuery: 'client_id=impc_a&sig=c2ln',
   });
 });
 
 test('#parseApprovalPage reads a page without the form as empty fields', () => {
-  expect(parseApprovalPage('<p>expired</p>')).toStrictEqual({ code: '', id: '', signature: '' });
+  expect(parseApprovalPage('<p>expired</p>')).toStrictEqual({ code: '', oauthQuery: '' });
+});
+
+test('#readCookies sends back each cookie a response sets, without its attributes', () => {
+  const headers = new Headers();
+
+  headers.append('set-cookie', 'session=abc; Path=/; HttpOnly');
+  headers.append('set-cookie', 'data=xyz; Max-Age=60');
+
+  expect(readCookies(new Response(null, { headers }))).toBe('session=abc; data=xyz');
 });
 
 test('#parseMcpBody reads the last event of a stream', () => {

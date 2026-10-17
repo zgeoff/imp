@@ -48,7 +48,7 @@ drives it through a browser. The suites run in this order:
 | `restart`        | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                                                                                                                                      |
 | `tailscale`      | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names                                                                                                                   |
 | `mcp`            | `impz mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                                                                                                                                            |
-| `mcp-oauth`      | the public MCP route: a sign-in approved with `impz oauth approve`, tools by scope, refresh replay, a removed token stopping a command, 429                                                                                                |
+| `mcp-oauth`      | the public MCP route: a sign-in approved with `impz oauth approve`, an MCP client's own OAuth sign-in, tools by scope, refresh replay, a removed token stopping a command, 429                                                             |
 | `sessions`       | detach, attach after sleep, takeover, idle and busy sessions, kill                                                                                                                                                                         |
 | `offsets`        | output offsets: a gap past the ring, exact after a wake, cold-boot causes, `wake: false`                                                                                                                                                   |
 | `session-logs`   | session logs: 1 MiB kept past the ring, through a sleep and a wake to the exit, read with the imp stopped, kept through a restore, deleted                                                                                                 |
@@ -83,7 +83,7 @@ drives it through a browser. The suites run in this order:
 
 ```sh
 e2e/test-e2e.sh                          # the acceptance set: every suite
-e2e/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
+e2e/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, mcp-oauth, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
 e2e/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 e2e/test-e2e.sh --group 2                # one third of the CI subset, as one CI runner runs it
 e2e/test-e2e.sh --clean                  # wipe the dev instance's data first

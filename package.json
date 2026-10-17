@@ -115,6 +115,7 @@
     "@commitlint/cli": "catalog:",
     "@faker-js/faker": "catalog:",
     "@impz/test-utils": "workspace:*",
+    "@modelcontextprotocol/client": "catalog:",
     "@stylistic/eslint-plugin": "catalog:",
     "@tsconfig/strictest": "catalog:",
     "@types/bun": "catalog:",

@@ -1,5 +1,12 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  UnauthorizedError,
+} from '@modelcontextprotocol/client';
+import type { OAuthClientProvider, OAuthTokens } from '@modelcontextprotocol/client';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -7,11 +14,14 @@ import { createInstanceClient, readImpEnv, runImp, tryImp } from '../lib/imp-cli
 import { waitForExec } from '../lib/imps';
 import { instance } from '../lib/instance';
 import {
+  BROWSER_FORM,
   RouteTokensSchema,
   buildPkceChallenge,
   buildRouteOrigin,
   openRouteMcp,
   parseApprovalPage,
+  readCookies,
+  runBrowserSignIn,
   runSignIn,
   sendForm,
   sendMcp,
@@ -75,7 +85,8 @@ test('it serves the route’s discovery documents and nothing private', async ()
 
   expect(issuer).toMatchObject({
     issuer: ctx.origin,
-    code_challenge_methods_supported: ['S256'],
+    code_challenge_methods_supported: expect.toIncludeAllMembers(['S256']),
+    token_endpoint_auth_methods_supported: ['none'],
   });
 
   expect(protectedResource).toMatchObject({
@@ -132,7 +143,13 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
     resource: `${ctx.origin}/mcp`,
   });
 
-  const opened = await fetch(`${ctx.origin}/oauth/authorize?${query.toString()}`);
+  const authorized = await fetch(`${ctx.origin}/oauth2/authorize?${query.toString()}`, {
+    redirect: 'manual',
+  });
+
+  const loginURL = new URL(authorized.headers.get('location') ?? '/', ctx.origin);
+
+  const opened = await fetch(loginURL);
   const page = await opened.text();
 
   const approval = parseApprovalPage(page);
@@ -153,12 +170,20 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
     ]),
   });
 
-  // as a browser posts it from a page whose referrer policy is same-origin
-  // or stricter: Origin null, and Sec-Fetch-Site it sets itself
+  const continued = await sendForm(
+    `${ctx.origin}/login`,
+    { oauth_query: approval.oauthQuery, action: 'continue' },
+    BROWSER_FORM,
+  );
+
+  const consentURL = new URL(continued.headers.get('location') ?? '/', ctx.origin);
+
+  const consentQuery = consentURL.search.slice(1);
+
   const allowed = await sendForm(
-    `${ctx.origin}/oauth/authorize`,
-    { id: approval.id, signature: approval.signature, action: 'allow' },
-    { origin: 'null', 'sec-fetch-site': 'same-origin' },
+    `${ctx.origin}/consent`,
+    { oauth_query: consentQuery, action: 'allow' },
+    { ...BROWSER_FORM, cookie: readCookies(continued) },
   );
 
   const location = new URL(allowed.headers.get('location') ?? '');
@@ -172,7 +197,7 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
   expect(location.searchParams.get('state')).toBe('e2e');
   expect(caught.status).toBe(200);
 
-  const exchanged = await sendForm(`${ctx.origin}/oauth/token`, {
+  const exchanged = await sendForm(`${ctx.origin}/oauth2/token`, {
     grant_type: 'authorization_code',
     client_id: added.clientId,
     code: location.searchParams.get('code') ?? '',
@@ -185,7 +210,7 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
 
   const tokens = RouteTokensSchema.parse(exchangedBody);
 
-  expect(tokens.scope).toBe('read exec');
+  expect(tokens.scope).toBe('read exec offline_access');
 
   const session = await openRouteMcp(ctx.origin, tokens.access_token);
   const listed = await sendMcp(ctx.origin, tokens.access_token, session, 'tools/list');
@@ -209,6 +234,93 @@ test('it signs a client in on an approval from the CLI, and the grant lists the 
   expect(JSON.stringify(ran.body)).toContain('from-the-route');
   expect(grants).toContain(clientName);
   expect(grants).toContain(approver);
+});
+
+test('it signs an MCP client in through its own OAuth provider, and lists the tools its grant allows', async () => {
+  const ctx = await setupTest();
+
+  const clientName = `${ctx.prefix}sdk-conn`;
+  const approver = `${ctx.prefix}sdk-approver`;
+
+  const added = await ctx.client.oauth.clients.add({
+    name: clientName,
+    redirectUris: [ctx.redirect],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeOAuthClientIfPresent(ctx.client, clientName));
+
+  const token = await ctx.client.tokens.create({
+    name: approver,
+    scope: 'exec',
+    imps: [`${ctx.prefix}*`],
+  });
+
+  registerRemoval(ctx.stack, config.keep, () => removeTokenIfPresent(ctx.client, approver));
+
+  // what the client keeps between its runs, as a connector stores it
+  const saved: {
+    tokens?: OAuthTokens;
+    verifier: string;
+    authorizationURL: URL | null;
+  } = { verifier: '', authorizationURL: null };
+
+  const provider: OAuthClientProvider = {
+    redirectUrl: ctx.redirect,
+    clientMetadata: {
+      client_name: clientName,
+      redirect_uris: [ctx.redirect],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    },
+    clientInformation: () => ({ client_id: added.clientId }),
+    tokens: () => saved.tokens,
+    saveTokens: (tokens) => {
+      saved.tokens = tokens;
+    },
+    redirectToAuthorization: (url) => {
+      saved.authorizationURL = url;
+    },
+    saveCodeVerifier: (verifier) => {
+      saved.verifier = verifier;
+    },
+    codeVerifier: () => saved.verifier,
+  };
+
+  const first = new StreamableHTTPClientTransport(new URL(`${ctx.origin}/mcp`), {
+    authProvider: provider,
+  });
+
+  const refused = await new Client({ name: 'e2e', version: '1.0.0' }).connect(first).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  invariant(saved.authorizationURL);
+
+  // the client asks for the scope the route's 401 names, read
+  const back = await runBrowserSignIn(saved.authorizationURL.href, {
+    approverToken: token.secret,
+    scope: 'read',
+  });
+
+  await first.finishAuth(back.searchParams);
+
+  const client = new Client({ name: 'e2e', version: '1.0.0' });
+
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${ctx.origin}/mcp`), { authProvider: provider }),
+  );
+
+  ctx.stack.defer(() => client.close());
+
+  const listed = await client.listTools();
+
+  const names = listed.tools.map((tool) => tool.name);
+
+  expect(refused).toBeInstanceOf(UnauthorizedError);
+  expect(names).toContain('imp_list');
+  expect(names).not.toContain('imp_exec');
 });
 
 test('it rotates a refresh, and ends the grant when a spent refresh token comes again', async () => {
@@ -246,9 +358,9 @@ test('it rotates a refresh, and ends the grant when a spent refresh token comes 
     refresh_token: first.refresh_token,
   };
 
-  const rotated = await sendForm(`${ctx.origin}/oauth/token`, refresh);
+  const rotated = await sendForm(`${ctx.origin}/oauth2/token`, refresh);
   const rotatedBody: unknown = await rotated.json();
-  const replayed = await sendForm(`${ctx.origin}/oauth/token`, refresh);
+  const replayed = await sendForm(`${ctx.origin}/oauth2/token`, refresh);
   const replayBody: unknown = await replayed.json();
 
   const second = RouteTokensSchema.parse(rotatedBody);
@@ -259,7 +371,7 @@ test('it rotates a refresh, and ends the grant when a spent refresh token comes 
     clientInfo: { name: 'e2e', version: '1.0.0' },
   });
 
-  expect(second.scope).toBe('read');
+  expect(second.scope).toBe('read offline_access');
   expect(replayBody).toMatchObject({ error: 'invalid_grant' });
   expect(after.status).toBe(401);
 });
@@ -363,7 +475,9 @@ test('it answers 429 to sign-ins past the burst', async () => {
   const statuses: number[] = [];
 
   for (let index = 0; index < 12; index += 1) {
-    const response = await fetch(`${ctx.origin}/oauth/authorize?${query.toString()}`);
+    const response = await fetch(`${ctx.origin}/oauth2/authorize?${query.toString()}`, {
+      redirect: 'manual',
+    });
 
     statuses.push(response.status);
   }
