@@ -199,6 +199,15 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
   });
 
+  const refresher = createOAuthRefresher({
+    db,
+    files,
+    log,
+    resolveUpstream,
+    ...(deps.oauthFetch !== undefined && { fetch: deps.oauthFetch }),
+    ...(deps.now !== undefined && { now: deps.now }),
+  });
+
   const proxy = createBrokerProxy({
     config,
     db,
@@ -212,6 +221,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     dialTunnel: deps.dialTunnel,
     ipv6: deps.ipv6,
     afterRuleRead: deps.afterRuleRead,
+    refreshAfterRejection: refresher.refreshAfterRejection,
   });
 
   const requireImp = async (name: string): Promise<ImpRecord> => {
@@ -223,15 +233,6 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
     return imp;
   };
-
-  const refresher = createOAuthRefresher({
-    db,
-    files,
-    log,
-    resolveUpstream,
-    ...(deps.oauthFetch !== undefined && { fetch: deps.oauthFetch }),
-    ...(deps.now !== undefined && { now: deps.now }),
-  });
 
   if (deps.runOAuthTimer !== false) {
     refresher.start();

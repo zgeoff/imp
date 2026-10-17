@@ -10,6 +10,7 @@ test('it builds a default credential', () => {
     value: expect.stringMatching(/^Bearer [A-Za-z0-9]{24}$/u) as unknown,
     upstream: null,
     filter: null,
+    oauth: null,
   });
 });
 
@@ -18,6 +19,7 @@ test('it applies overrides on top of the defaults', () => {
     secretName: 'op',
     upstream: 'http://172.17.0.1:18081',
     filter: { methods: ['GET'] },
+    oauth: { refreshedAt: 1000 },
   });
 
   expect(credential).toStrictEqual({
@@ -26,5 +28,6 @@ test('it applies overrides on top of the defaults', () => {
     value: expect.stringMatching(/^Bearer /u) as unknown,
     upstream: 'http://172.17.0.1:18081',
     filter: { methods: ['GET'] },
+    oauth: { refreshedAt: 1000 },
   });
 });

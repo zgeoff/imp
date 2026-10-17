@@ -43,6 +43,11 @@ export interface OAuthRefresher {
   // `force` skips the backoff and the needs_login stop.
   readonly refresh: (name: string, force: boolean) => Promise<RefreshOutcome>;
 
+  // after a granted host refused the token of the refresh at `refreshedAt`:
+  // true once a newer token is in place; never rejects
+  // (docs/guides/connectors.md#refresh-after-a-401)
+  readonly refreshAfterRejection: (name: string, refreshedAt: number | null) => Promise<boolean>;
+
   // runs `work` after every earlier lock holder of the secret has ended
   readonly withLock: <T>(name: string, work: () => Promise<T>) => Promise<T>;
 
@@ -74,6 +79,10 @@ const MIN_LEAD_MS = 3 * 60_000;
 const BACKOFF_BASE_MS = 60_000;
 const BACKOFF_CAP_MS = 30 * 60_000;
 
+// the youngest token a 401 refreshes: at most one such refresh per secret
+// in this time, whatever a guest sends
+const REJECTION_FLOOR_MS = 5 * 60_000;
+
 // error codes that mean the refresh token is dead
 const PERMANENT_CODES = new Set([
   'invalid_grant',
@@ -101,6 +110,10 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
   const log = deps.log;
   const locks = createKeyedMutex();
   const inflight = createSingleFlight<RefreshOutcome>();
+
+  // apart from `inflight`, so a forced refresh never joins one that the
+  // floor turned down
+  const rejections = createSingleFlight<boolean>();
 
   const backoff = new Map<string, { failures: number; nextAt: number }>();
 
@@ -366,6 +379,62 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
     return inflight.run(name, () => withLock(name, () => runRefresh(name, force)));
   };
 
+  // under the lock, so it sees the result of any refresh before it
+  const runRejectedRefresh = async (name: string, refreshedAt: number | null): Promise<boolean> => {
+    const secret = await findSecret(deps.db, name);
+
+    if (secret?.kind !== 'oauth' || secret.oauth === null) {
+      return false;
+    }
+
+    const state = loadState(name, secret);
+
+    if (state === null) {
+      return false;
+    }
+
+    // a refresh since the rejected token was sent already replaced it
+    if (state.refreshedAt !== refreshedAt) {
+      return state.status === 'ready';
+    }
+
+    const at = now();
+    const wait = backoff.get(name);
+
+    if (
+      state.status !== 'ready' ||
+      (wait !== undefined && wait.nextAt > at) ||
+      (state.refreshedAt !== null && at - state.refreshedAt < REJECTION_FLOOR_MS)
+    ) {
+      return false;
+    }
+
+    log(`impd: broker: oauth secret ${name}: a granted host refused its access token; refreshing`);
+
+    const outcome = await runRefresh(name, false);
+
+    return outcome.kind === 'refreshed';
+  };
+
+  const refreshAfterRejection = async (
+    name: string,
+    refreshedAt: number | null,
+  ): Promise<boolean> => {
+    if (lifecycle.stopping) {
+      return false;
+    }
+
+    try {
+      return await rejections.run(name, () =>
+        withLock(name, () => runRejectedRefresh(name, refreshedAt)),
+      );
+    } catch (error) {
+      log(`impd: broker: oauth secret ${name}: ${readErrorMessage(error)}`);
+
+      return false;
+    }
+  };
+
   // Writes a result an earlier write failed on. The secret's row is read
   // again under the lock: a result for a secret since deleted or replaced is
   // dropped, never written.
@@ -457,6 +526,7 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
 
   return {
     refresh: startRefresh,
+    refreshAfterRejection,
     withLock,
     tick: runDueRefreshes,
     start: () => {
@@ -479,6 +549,7 @@ export function createOAuthRefresher(deps: OAuthRefresherDeps): OAuthRefresher {
 
       // a refresh under way ends, its write included, before stop answers
       await inflight.waitForAll();
+      await rejections.waitForAll();
 
       // one last try at each result still unsaved, for a restart to find
       await Promise.allSettled([...unsaved.keys()].map((name) => writeUnsaved(name)));

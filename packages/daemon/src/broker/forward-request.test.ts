@@ -2,6 +2,7 @@ import { expect, mock, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildStubAnswerQueue } from '@impz/test-utils/build-stub-answer-queue';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
 import invariant from 'tiny-invariant';
@@ -1235,4 +1236,310 @@ test('it sends a method-override header on a grant with no filter', async () => 
   );
 
   expect(received).toHaveBeenCalledExactlyOnceWith('PATCH');
+});
+
+test('it sends a request without a body again with the new oauth token after a 401', async () => {
+  const received = mock<(authorization: string | null) => void>();
+  const statuses = buildStubAnswerQueue([401, 200]);
+
+  const credentials = buildStubAnswerQueue([
+    buildMockCredential({
+      secretName: 'codex',
+      value: 'Bearer old',
+      oauth: { refreshedAt: 1000 },
+    }),
+    buildMockCredential({
+      secretName: 'codex',
+      value: 'Bearer new',
+      oauth: { refreshedAt: 2000 },
+    }),
+  ]);
+
+  server.use(
+    http.get('https://chatgpt.com/backend-api/codex/models', (info) => {
+      received(info.request.headers.get('authorization'));
+
+      return HttpResponse.text('models', { status: statuses.next() });
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () => Promise.resolve(credentials.next()),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection: () => Promise.resolve(true),
+  });
+
+  const response = await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(received.mock.calls).toStrictEqual([['Bearer old'], ['Bearer new']]);
+});
+
+test('it asks for a refresh of the rejected token by its secret and refresh time', async () => {
+  const refreshAfterRejection = mock(() => Promise.resolve(false));
+
+  server.use(
+    http.get('https://chatgpt.com/backend-api/codex/models', () =>
+      HttpResponse.text('expired', { status: 401 }),
+    ),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () =>
+      Promise.resolve(buildMockCredential({ secretName: 'codex', oauth: { refreshedAt: 1000 } })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection,
+  });
+
+  await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  expect(refreshAfterRejection).toHaveBeenCalledExactlyOnceWith('codex', 1000);
+});
+
+test('it records an audit row for the rejected send and one for the send again', async () => {
+  const audits: NewAuditEntry[] = [];
+  const statuses = buildStubAnswerQueue([401, 200]);
+
+  const credentials = buildStubAnswerQueue([
+    buildMockCredential({ secretName: 'codex', oauth: { refreshedAt: 1000 } }),
+    buildMockCredential({ secretName: 'codex', oauth: { refreshedAt: 2000 } }),
+  ]);
+
+  server.use(
+    http.get('https://chatgpt.com/backend-api/codex/models', () =>
+      HttpResponse.text('models', { status: statuses.next() }),
+    ),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () => Promise.resolve(credentials.next()),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: (entry) => {
+      audits.push(entry);
+    },
+    refreshAfterRejection: () => Promise.resolve(true),
+  });
+
+  const response = await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  await response.text();
+
+  expect(audits).toIncludeAllPartialMembers([
+    { secretName: 'codex', path: '/backend-api/codex/models', status: 401 },
+    { secretName: 'codex', path: '/backend-api/codex/models', status: 200 },
+  ]);
+
+  expect(audits).toHaveLength(2);
+});
+
+test('it answers the 401 of a request with a body and still asks for a refresh', async () => {
+  const received = mock<(body: string) => void>();
+  const refreshAfterRejection = mock(() => Promise.resolve(true));
+
+  server.use(
+    http.post('https://chatgpt.com/backend-api/codex/responses', async (info) => {
+      const body = await info.request.text();
+
+      received(body);
+
+      return HttpResponse.text('expired', { status: 401 });
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () =>
+      Promise.resolve(buildMockCredential({ secretName: 'codex', oauth: { refreshedAt: 1000 } })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection,
+  });
+
+  const response = await forward(
+    new Request('https://chatgpt.com/backend-api/codex/responses', {
+      method: 'POST',
+      headers: { host: 'chatgpt.com' },
+      body: 'payload',
+    }),
+  );
+
+  expect(response.status).toBe(401);
+  expect(received).toHaveBeenCalledExactlyOnceWith('payload');
+  expect(refreshAfterRejection).toHaveBeenCalledOnce();
+});
+
+test('it answers the 401 when no new oauth token is in place', async () => {
+  const received = mock<(authorization: string | null) => void>();
+
+  server.use(
+    http.get('https://chatgpt.com/backend-api/codex/models', (info) => {
+      received(info.request.headers.get('authorization'));
+
+      return HttpResponse.text('expired', { status: 401 });
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () =>
+      Promise.resolve(buildMockCredential({ value: 'Bearer old', oauth: { refreshedAt: 1000 } })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection: () => Promise.resolve(false),
+  });
+
+  const response = await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  expect(response.status).toBe(401);
+  expect(received).toHaveBeenCalledExactlyOnceWith('Bearer old');
+});
+
+test('it answers the 401 when the grant is gone after the refresh', async () => {
+  const received = mock<(authorization: string | null) => void>();
+
+  const credentials = buildStubAnswerQueue([
+    buildMockCredential({ value: 'Bearer old', oauth: { refreshedAt: 1000 } }),
+    null,
+  ]);
+
+  server.use(
+    http.get('https://chatgpt.com/backend-api/codex/models', (info) => {
+      received(info.request.headers.get('authorization'));
+
+      return HttpResponse.text('expired', { status: 401 });
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () => Promise.resolve(credentials.next()),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection: () => Promise.resolve(true),
+  });
+
+  const response = await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  expect(response.status).toBe(401);
+  expect(received).toHaveBeenCalledExactlyOnceWith('Bearer old');
+});
+
+test('it answers the 401 when the new grant filter does not cover the request', async () => {
+  const received = mock<(authorization: string | null) => void>();
+
+  const credentials = buildStubAnswerQueue([
+    buildMockCredential({ value: 'Bearer old', oauth: { refreshedAt: 1000 } }),
+    buildMockCredential({
+      value: 'Bearer new',
+      oauth: { refreshedAt: 2000 },
+      filter: { methods: ['POST'] },
+    }),
+  ]);
+
+  server.use(
+    http.get('https://chatgpt.com/backend-api/codex/models', (info) => {
+      received(info.request.headers.get('authorization'));
+
+      return HttpResponse.text('expired', { status: 401 });
+    }),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () => Promise.resolve(credentials.next()),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection: () => Promise.resolve(true),
+  });
+
+  const response = await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  expect(response.status).toBe(401);
+  expect(received).toHaveBeenCalledExactlyOnceWith('Bearer old');
+});
+
+test('it asks for no refresh after a 401 to a credential that is not oauth', async () => {
+  const refreshAfterRejection = mock(() => Promise.resolve(true));
+
+  server.use(
+    http.get('https://api.github.com/user', () => HttpResponse.text('bad', { status: 401 })),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'api.github.com',
+    findCredential: () => Promise.resolve(buildMockCredential({ oauth: null })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection,
+  });
+
+  await forward(
+    new Request('https://api.github.com/user', { headers: { host: 'api.github.com' } }),
+  );
+
+  expect(refreshAfterRejection).not.toHaveBeenCalled();
+});
+
+test.each([[403], [429]])('it asks for no refresh after a %d to an oauth token', async (status) => {
+  const refreshAfterRejection = mock(() => Promise.resolve(true));
+
+  server.use(
+    http.get('https://chatgpt.com/backend-api/codex/models', () =>
+      HttpResponse.text('no', { status }),
+    ),
+  );
+
+  const forward = createForwarder({
+    impId: 'imp-1',
+    host: 'chatgpt.com',
+    findCredential: () => Promise.resolve(buildMockCredential({ oauth: { refreshedAt: 1000 } })),
+    resolveUpstream: (host) => ({ origin: `https://${host}`, ca: null }),
+    recordAudit: () => {},
+    refreshAfterRejection,
+  });
+
+  await forward(
+    new Request('https://chatgpt.com/backend-api/codex/models', {
+      headers: { host: 'chatgpt.com' },
+    }),
+  );
+
+  expect(refreshAfterRejection).not.toHaveBeenCalled();
 });

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { ImpContract } from '@impz/api';
 import { buildMockBrokerRule } from '@impz/api/test-utils/build-mock-broker-rule';
 import { buildMockOAuthConfig } from '@impz/api/test-utils/build-mock-oauth-config';
+import { buildStubAnswerQueue } from '@impz/test-utils/build-stub-answer-queue';
 import { server } from '@impz/test-utils/mock-server';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
@@ -146,8 +147,12 @@ async function setupTest() {
   // plain tunnels stay on loopback, and port 443 goes to the real host
   const tunnelPorts = new Map([[443, realHost.port]]);
 
+  // impd's clock, which a test moves on
+  const clock = { nowMs: Date.now() };
+
   const impd = await createImpd(config, {
     db,
+    now: () => clock.nowMs,
 
     // the bearer the test's root client sends
     rootToken: 'root-token',
@@ -238,6 +243,7 @@ async function setupTest() {
     db,
     dataDir,
     impd,
+    clock,
     client,
     seen,
     tunnelled,
@@ -1381,6 +1387,58 @@ test('it sends the new access token after a refresh that used the rotated refres
   expect(endpoint.requests.map((request) => request.refreshToken)).toStrictEqual([
     'fake-refresh-0',
     'fake-refresh-1',
+  ]);
+});
+
+test('it refreshes an access token the granted host revoked and sends the request again with the new one', async () => {
+  const ctx = await setupTest();
+
+  await writeFile(
+    ctx.upstreamsFile,
+    JSON.stringify({ ca: ctx.upstreamCaPem, upstreams: { 'api.example.com': ctx.upstreamOrigin } }),
+  );
+
+  const statuses = buildStubAnswerQueue([401, 200]);
+
+  ctx.answers.set('/v1', () => new Response('from the api', { status: statuses.next() }));
+
+  const endpoint = buildStubBrokerTokenEndpoint('https://auth.example.com/oauth/token');
+
+  server.use(endpoint.handler);
+
+  endpoint.issue('fake-refresh-0', {
+    access_token: 'fake-access-1',
+    refresh_token: 'fake-refresh-1',
+    expires_in: 240 * 3600,
+  });
+
+  endpoint.issue('fake-refresh-1', {
+    access_token: 'fake-access-2',
+    refresh_token: 'fake-refresh-2',
+    expires_in: 240 * 3600,
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.impd.broker.addSecret({
+    name: 'codex',
+    kind: 'oauth',
+    value: 'fake-refresh-0',
+    rules: [buildMockBrokerRule({ host: 'api.example.com' })],
+    oauth: buildMockOAuthConfig({ tokenUrl: 'https://auth.example.com/oauth/token' }),
+  });
+
+  await ctx.impd.broker.addGrant('dev', 'codex');
+
+  ctx.clock.nowMs += 24 * 3_600_000;
+
+  const result = await ctx.guest.curl('https://api.example.com/v1');
+
+  expect(result).toStrictEqual({ code: 0, stdout: 'from the api', stderr: '' });
+
+  expect(ctx.seen).toStrictEqual([
+    { method: 'GET', path: '/v1', authorization: 'Bearer fake-access-1', bodyBytes: 0 },
+    { method: 'GET', path: '/v1', authorization: 'Bearer fake-access-2', bodyBytes: 0 },
   ]);
 });
 

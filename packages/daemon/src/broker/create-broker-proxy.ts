@@ -26,7 +26,7 @@ import { startBrokerFront } from './broker-front';
 import type { BrokerFront } from './broker-front';
 import { renderCredential } from './connector-kinds';
 import { createForwarder } from './forward-request';
-import type { Credential, UpstreamFetch } from './forward-request';
+import type { Credential, ForwardDeps, UpstreamFetch } from './forward-request';
 import { parseOAuthState } from './oauth-state';
 import { createRefusalBudget } from './refusal-budget';
 import type { SecretFiles } from './secret-files';
@@ -71,6 +71,9 @@ interface BrokerProxyDeps {
   readonly dialTunnel?: ((address: string, port: number) => Socket) | undefined;
   readonly ipv6?: Ipv6Plan | null | undefined;
   readonly afterRuleRead?: (() => Promise<void>) | undefined;
+
+  // the refresh after a granted host answered 401 to an oauth access token
+  readonly refreshAfterRejection?: ForwardDeps['refreshAfterRejection'] | undefined;
 }
 
 // how long the container's own prefixes stay read
@@ -187,10 +190,8 @@ export function createBrokerProxy(deps: BrokerProxyDeps): BrokerProxy {
     const stored = granted === undefined ? null : files.read(granted.valueFile);
 
     // an oauth secret's file is its state; the credential is the access token
-    const value =
-      granted?.kind === 'oauth' && stored !== null
-        ? (parseOAuthState(stored)?.accessToken ?? null)
-        : stored;
+    const oauth = granted?.kind === 'oauth' && stored !== null ? parseOAuthState(stored) : null;
+    const value = granted?.kind === 'oauth' ? (oauth?.accessToken ?? null) : stored;
 
     if (granted === undefined || value === null) {
       return null;
@@ -202,6 +203,7 @@ export function createBrokerProxy(deps: BrokerProxyDeps): BrokerProxy {
       value: renderCredential(granted.rule, value),
       upstream: granted.rule.upstream ?? null,
       filter: granted.filter,
+      oauth: oauth === null ? null : { refreshedAt: oauth.refreshedAt },
     };
   };
 
@@ -236,6 +238,9 @@ export function createBrokerProxy(deps: BrokerProxyDeps): BrokerProxy {
         resolveUpstream: deps.resolveUpstream,
         recordAudit: writeBudgetedAudit,
         ...(deps.fetch !== undefined && { fetch: deps.fetch }),
+        ...(deps.refreshAfterRejection !== undefined && {
+          refreshAfterRejection: deps.refreshAfterRejection,
+        }),
       }),
   });
 
