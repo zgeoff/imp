@@ -1,4 +1,5 @@
-import type { ImpEvent } from '@impz/api';
+import type { ImpEvent } from '@impz/client';
+import { watchEvents } from '@impz/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { isUnauthorized } from './build-query-client';
@@ -38,53 +39,29 @@ export function useImpdEvents(): void {
       await queryClient.invalidateQueries({ queryKey: impd.query.system.key() });
     };
 
-    const readEvents = async (): Promise<void> => {
-      for (let attempt = 0; !signal.aborted; attempt += 1) {
-        try {
-          const events = await impd.client.events.stream(undefined, { signal });
-
-          // what this browser missed while it was away
-          if (attempt > 0) {
-            await queryClient.invalidateQueries();
-          }
-
-          for await (const event of events) {
-            await applyEvent(event);
-          }
-        } catch (error) {
-          if (signal.aborted || isUnauthorized(error)) {
-            return;
-          }
-        }
-
-        await waitUnlessAborted(RECONNECT_MS, signal);
+    // a 401 ends the watch; any other end opens a fresh stream
+    const watchUntilUnmounted = async (): Promise<void> => {
+      try {
+        await watchEvents(impd.client, {
+          signal,
+          reconnect: { delayMs: RECONNECT_MS, shouldRetry: (error) => !isUnauthorized(error) },
+          onOpen: async (attempt) => {
+            // what this browser missed while it was away
+            if (attempt > 1) {
+              await queryClient.invalidateQueries();
+            }
+          },
+          onEvent: applyEvent,
+        });
+      } catch {
+        // the queries' own 401 sends the browser to the login page
       }
     };
 
-    void readEvents();
+    void watchUntilUnmounted();
 
     return () => {
       controller.abort();
     };
   }, [impd, queryClient]);
-}
-
-async function waitUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
-  const waiting = Promise.withResolvers<undefined>();
-
-  const timer = setTimeout(() => {
-    waiting.resolve(undefined);
-  }, ms);
-
-  const stopWaiting = (): void => {
-    clearTimeout(timer);
-
-    waiting.resolve(undefined);
-  };
-
-  signal.addEventListener('abort', stopWaiting, { once: true });
-
-  await waiting.promise;
-
-  signal.removeEventListener('abort', stopWaiting);
 }

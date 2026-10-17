@@ -1,13 +1,14 @@
+import { openToolExec } from '@impz/client';
 import { countFileBytes, listLocalEntries, writeLocalEntries } from '@impz/local-tar';
 import { loadCliConfig } from '../cli-config';
 import type { CliConfig } from '../cli-config';
+import { openBunWebSocket } from '../open-bun-web-socket';
 import { printError } from '../run-action';
 import { UsageError } from '../usage-error';
 import { buildTarArgs } from './build-tar-args';
 import { createCopyProgress } from './copy-progress';
 import type { CopyProgress } from './copy-progress';
 import { createLocalExtractor } from './extract-local';
-import { openToolExec } from './open-tool-exec';
 import { parseCpArgs } from './parse-cp-args';
 import type { CpPlan } from './parse-cp-args';
 
@@ -41,7 +42,9 @@ async function runUpload(
   progress.setTotal(countFileBytes(entries));
 
   const exec = await openToolExec({
-    config,
+    baseUrl: config.url,
+    token: config.token,
+    connect: openBunWebSocket,
     name: plan.name,
     tool: 'tar',
     args: buildTarArgs({ op: 'extract', path: plan.guestPath, owner }),
@@ -70,7 +73,9 @@ async function runDownload(config: CliConfig, plan: CpPlan, progress: CopyProgre
   const extractor = createLocalExtractor(plan.localPath, progress, writeWarning);
 
   const exec = await openToolExec({
-    config,
+    baseUrl: config.url,
+    token: config.token,
+    connect: openBunWebSocket,
     name: plan.name,
     tool: 'tar',
     args: buildTarArgs({ op: 'create', path: plan.guestPath }),

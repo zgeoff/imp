@@ -1,6 +1,7 @@
 import { ServiceRestartSchema } from '@impz/api';
 import type { ServiceDef, ServiceLog } from '@impz/api';
 import { ORPCError } from '@impz/client';
+import { match } from 'ts-pattern';
 import { defineCommand } from '../define-command';
 import { formatOutput, formatServices } from '../format-output';
 import { formatError, runAction } from '../run-action';
@@ -320,15 +321,15 @@ export function formatLogEvent(
   name: string,
   event: Readonly<Exclude<ServiceLog, { readonly type: 'log' }>>,
 ): string {
-  if (event.type === 'sleeping') {
-    return `${name} is ${event.state}; waiting for it to run (a follow does not wake it)`;
-  }
-
-  if (event.type === 'awake') {
-    return `${name} runs again`;
-  }
-
-  return 'impd is restarting; the follow ends';
+  return match(event)
+    .with(
+      { type: 'sleeping' },
+      (sleeping) =>
+        `${name} is ${sleeping.state}; waiting for it to run (a follow does not wake it)`,
+    )
+    .with({ type: 'awake' }, () => `${name} runs again`)
+    .with({ type: 'restarting' }, () => 'impd is restarting; the follow ends')
+    .exhaustive();
 }
 
 function readLineCount(text: string | undefined): number | undefined {

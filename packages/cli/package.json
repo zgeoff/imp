@@ -15,6 +15,7 @@
     "@impz/shared": "workspace:*",
     "citty": "catalog:",
     "tar-stream": "catalog:",
+    "ts-pattern": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

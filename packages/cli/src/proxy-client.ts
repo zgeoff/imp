@@ -1,20 +1,13 @@
 import { createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
-import {
-  TUNNEL_CLOSE_LOST,
-  TUNNEL_CLOSE_NORMAL,
-  TUNNEL_CLOSE_PROTOCOL,
-  TUNNEL_CLOSE_RESTARTING,
-  TUNNEL_MAX_FRAME_BYTES,
-  TUNNEL_PATH,
-  TUNNEL_WINDOW_BYTES,
-  TunnelServerMessageSchema,
-} from '@impz/api';
-import type { TunnelClientMessage, TunnelServerMessage } from '@impz/api';
-import { buildWebSocketUrl } from './build-websocket-url';
+import { TUNNEL_CLOSE_LOST, TUNNEL_CLOSE_PROTOCOL, TUNNEL_CLOSE_RESTARTING } from '@impz/api';
+import { openForwardTunnel } from '@impz/client';
+import type { ForwardTunnelEnd, ForwardTunnelOptions } from '@impz/client';
+import { match } from 'ts-pattern';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
+import { openBunWebSocket } from './open-bun-web-socket';
 import { parseForward } from './parse-forward';
 import type { Forward } from './parse-forward';
 import { parseReverse } from './parse-reverse';
@@ -38,6 +31,9 @@ export interface ProxyIo {
   // told the bytes still waiting for impd's acks each time a connection
   // stops reading at the window; nothing by default
   readonly onWindowFull?: (unackedBytes: number) => void;
+
+  // opens each tunnel's socket; Bun's WebSocket by default
+  readonly connect?: ForwardTunnelOptions['connect'];
 }
 
 export interface Proxy {
@@ -45,9 +41,6 @@ export interface Proxy {
   readonly ports: readonly number[];
   readonly stop: () => void;
 }
-
-// a WebSocket that closed without a handshake: impd is down or unreachable
-const CLOSE_ABNORMAL = 1006;
 
 // one notice for a burst of connections that cannot reach impd: another
 // comes only after this long without a failure
@@ -69,23 +62,6 @@ const PROCESS_IO: ProxyIo = {
     console.error(`impz: ${text}`);
   },
 };
-
-// null for text that is not JSON, which the schema then refuses
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-// a text message from impd's `/tunnel`, or null for one that breaks the
-// protocol, which closes the tunnel with TUNNEL_CLOSE_PROTOCOL
-export function readTunnelServerMessage(text: string): TunnelServerMessage | null {
-  const parsed = TunnelServerMessageSchema.safeParse(parseJson(text));
-
-  return parsed.success ? parsed.data : null;
-}
 
 function readErrorCode(error: unknown): string | null {
   return error instanceof Error && 'code' in error && typeof error.code === 'string'
@@ -202,10 +178,11 @@ async function startForward(
 }
 
 interface TunnelTarget {
-  readonly url: string;
-  readonly headers: Readonly<Record<string, string>>;
+  readonly baseUrl: string;
+  readonly token: string | null;
   readonly name: string;
   readonly port: number;
+  readonly connect: ForwardTunnelOptions['connect'];
 }
 
 interface TunnelNotices {
@@ -216,144 +193,74 @@ interface TunnelNotices {
   readonly onWindowFull: (unackedBytes: number) => void;
 }
 
-// One local TCP connection over its own `/tunnel` WebSocket. The socket
-// stays paused until impd answers `opened`, and pauses again while more than
-// TUNNEL_WINDOW_BYTES of its bytes wait for an ack. Returns a stop.
+// One local TCP connection over the client's forward tunnel. The socket
+// stays paused until impd answers `opened`, and pauses again while the
+// tunnel has no room. Returns a stop.
 function openTunnel(socket: Socket, target: TunnelTarget, notices: TunnelNotices): () => void {
-  const ws = new WebSocket(target.url, { headers: { ...target.headers } });
-
   const label = `${target.name}:${String(target.port)}`;
-  const state = { opened: false, unacked: 0, reported: false, isEofHeld: false };
 
-  // frames read past the window: impd closes a tunnel more than one frame
-  // past it, so they wait for its acks
-  const held: Uint8Array[] = [];
-
-  ws.binaryType = 'arraybuffer';
-
-  const send = (message: TunnelClientMessage): void => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
-    }
+  const stopSocket = (end: ForwardTunnelEnd): void => {
+    match(end)
+      .with({ kind: 'done' }, () => {
+        socket.end();
+      })
+      .with({ kind: 'unreachable' }, () => {
+        notices.writeUnreachable();
+        socket.destroy();
+      })
+      .with({ kind: 'failed' }, (failed) => {
+        notices.writeNotice(`${label}: ${failed.code ?? 'error'}: ${failed.message}`);
+        socket.destroy();
+      })
+      .with({ kind: 'closed' }, (closed) => {
+        notices.writeNotice(`${label}: ${formatTunnelClose(closed.code)}`);
+        socket.destroy();
+      })
+      .exhaustive();
   };
 
-  // sends held frames while the window has room, then the held eof
-  const sendHeld = (): void => {
-    for (;;) {
-      const [frame] = held;
-
-      if (frame === undefined || state.unacked > TUNNEL_WINDOW_BYTES) {
-        break;
-      }
-
-      held.shift();
-      ws.send(frame);
-
-      state.unacked += frame.byteLength;
-    }
-
-    if (held.length === 0 && state.isEofHeld) {
-      state.isEofHeld = false;
-
-      send({ type: 'eof' });
-    }
-  };
-
-  const handleControl = (message: TunnelServerMessage): void => {
-    if (message.type === 'opened') {
-      state.opened = true;
-
+  const tunnel = openForwardTunnel({
+    ...target,
+    onOpened: () => {
       socket.resume();
-    } else if (message.type === 'eof') {
+    },
+    onData: (data) =>
+      new Promise<void>((resolve) => {
+        socket.write(data, () => {
+          resolve();
+        });
+      }),
+    onEof: () => {
       socket.end();
-    } else if (message.type === 'ack') {
-      state.unacked -= message.bytes;
+    },
+    onEnd: stopSocket,
+  });
 
-      sendHeld();
+  const waitAndResume = async (): Promise<void> => {
+    await tunnel.waitForRoom();
 
-      if (held.length === 0 && state.unacked <= TUNNEL_WINDOW_BYTES && state.opened) {
-        socket.resume();
-      }
-    } else if (message.type === 'error') {
-      state.reported = true;
-
-      notices.writeNotice(`${label}: ${message.code ?? 'error'}: ${message.message}`);
-      socket.destroy();
-    } else {
-      ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
-    }
+    socket.resume();
   };
-
-  const handleData = (data: Uint8Array): void => {
-    socket.write(data, () => {
-      send({ type: 'ack', bytes: data.byteLength });
-    });
-  };
-
-  ws.addEventListener('open', () => {
-    send({ type: 'open', name: target.name, port: target.port });
-  });
-
-  ws.addEventListener('message', (event) => {
-    if (event.data instanceof ArrayBuffer) {
-      handleData(new Uint8Array(event.data));
-
-      return;
-    }
-
-    const message = readTunnelServerMessage(String(event.data));
-
-    if (message === null) {
-      ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
-    } else {
-      handleControl(message);
-    }
-  });
-
-  ws.addEventListener('close', (event) => {
-    if (event.code === TUNNEL_CLOSE_NORMAL) {
-      socket.end();
-
-      return;
-    }
-
-    if (event.code === CLOSE_ABNORMAL) {
-      notices.writeUnreachable();
-    } else if (!state.reported) {
-      notices.writeNotice(`${label}: ${formatTunnelClose(event.code)}`);
-    }
-
-    socket.destroy();
-  });
 
   socket.on('data', (chunk: Buffer) => {
-    for (let offset = 0; offset < chunk.byteLength; offset += TUNNEL_MAX_FRAME_BYTES) {
-      held.push(chunk.subarray(offset, offset + TUNNEL_MAX_FRAME_BYTES));
-    }
-
-    sendHeld();
-
-    if (held.length > 0 || state.unacked > TUNNEL_WINDOW_BYTES) {
+    if (!tunnel.send(chunk)) {
       socket.pause();
-      notices.onWindowFull(state.unacked);
+      notices.onWindowFull(tunnel.countUnackedBytes());
+      void waitAndResume();
     }
   });
 
   // a TCP half-close, after every byte before it: the reply may still come
   // back
   socket.on('end', () => {
-    state.isEofHeld = true;
-
-    sendHeld();
+    tunnel.sendEof();
   });
 
   // 'close' follows an error, and ends the tunnel
   socket.on('error', () => {});
 
   socket.on('close', () => {
-    if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
-      ws.close(TUNNEL_CLOSE_NORMAL, 'local connection closed');
-    }
+    tunnel.close();
   });
 
   return () => {
@@ -395,9 +302,10 @@ export async function startProxy(
   };
 
   const target = {
-    url: buildWebSocketUrl(config.url, TUNNEL_PATH),
-    headers: config.token === null ? {} : { authorization: `Bearer ${config.token}` },
+    baseUrl: config.url,
+    token: config.token,
     name,
+    connect: io.connect ?? openBunWebSocket,
   };
 
   const handleConnection = (socket: Socket, remote: number): void => {

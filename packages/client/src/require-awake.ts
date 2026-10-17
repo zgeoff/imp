@@ -1,6 +1,7 @@
 import type { Imp, ImpContract } from '@impz/api';
 import { ORPCError } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
+import pRetry from 'p-retry';
 
 export interface RequireAwakeOptions {
   // wake also restarts an imp in the error state, which loses what it was
@@ -27,16 +28,42 @@ export async function requireAwake(
   const retry = options.retryUnavailable ?? { attempts: 0, delayMs: 0 };
   const input = { name, restartError: options.restartError === true };
 
-  for (let attempt = 0; ; attempt++) {
+  // p-retry gives up on a TypeError it does not know as a network failure,
+  // and Bun's is one of those, so each failure travels wrapped
+  const wake = async (): Promise<Imp> => {
     try {
       return await rpc.imps.wake(input, callOptions);
     } catch (error) {
-      if (!isUnavailable(error) || attempt >= retry.attempts) {
-        throw error;
-      }
-
-      await waitFor(retry.delayMs, signal);
+      throw new WakeFailureError(error);
     }
+  };
+
+  try {
+    return await pRetry(wake, {
+      retries: retry.attempts,
+      minTimeout: retry.delayMs,
+      factor: 1,
+      ...(signal !== undefined && { signal }),
+      shouldRetry: (context) =>
+        context.error instanceof WakeFailureError && isUnavailable(context.error.failure),
+    });
+  } catch (error) {
+    throw error instanceof WakeFailureError ? error.failure : error;
+  }
+}
+
+// one wake call's failure, as it came
+class WakeFailureError extends Error {
+  override name = 'WakeFailureError';
+
+  readonly failure: unknown;
+
+  constructor(failure: unknown) {
+    const message = failure instanceof Error ? failure.message : String(failure);
+
+    super(message);
+
+    this.failure = failure;
   }
 }
 
@@ -48,24 +75,4 @@ function isUnavailable(error: unknown): boolean {
   }
 
   return error instanceof TypeError;
-}
-
-function waitFor(ms: number, signal: Readonly<AbortSignal> | undefined): Promise<void> {
-  signal?.throwIfAborted();
-  const done = Promise.withResolvers<void>();
-
-  const onAbort = (): void => {
-    clearTimeout(timer);
-
-    done.reject(signal?.reason);
-  };
-
-  const timer = setTimeout(() => {
-    signal?.removeEventListener('abort', onAbort);
-    done.resolve();
-  }, ms);
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-
-  return done.promise;
 }

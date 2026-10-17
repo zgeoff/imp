@@ -1,6 +1,6 @@
+import { requireFeatures } from '@impz/client';
 import { defineCommand } from '../define-command';
 import { formatOutput } from '../format-output';
-import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
 import { jsonArg } from './common-args';
 
@@ -19,7 +19,7 @@ const copyCommand = defineCommand({
   },
   run: (context) =>
     runAction(context.host, async (client) => {
-      await requireFeature(client, 'databaseCopy', 'not know the call');
+      await requireFeatures(client, { databaseCopy: 'not know the call' });
 
       const copy = await client.system.copyDatabase({
         ...(context.args.name !== undefined && { name: context.args.name }),

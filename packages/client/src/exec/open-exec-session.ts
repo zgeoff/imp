@@ -16,9 +16,10 @@ import type {
 } from '@impz/api';
 import type { ReadonlyFields } from '@impz/shared';
 import type * as z from 'zod';
-import { resolveImpdUrl } from '../resolve-impd-url';
-import { checkExecFeature } from './check-exec-feature';
-import type { ExecFeature } from './check-exec-feature';
+import { createRpcClient } from '../create-rpc-client';
+import type { FeatureNeeds } from '../require-features';
+import { resolveImpdWebSocketUrl } from '../resolve-impd-web-socket-url';
+import { checkExecFeatures } from './check-exec-features';
 import { checkImpdAccess } from './check-impd-access';
 
 // a command to start: the start message without the tool and outer fields,
@@ -102,7 +103,8 @@ export interface ExecSessionOptions {
   // runtime that opens the socket is the caller's choice
   readonly connect: (url: string, headers: Readonly<Record<string, string>>) => ExecSocket;
 
-  // for the check that tells a rejected token from an unreachable impd
+  // for the feature check before a start, and the check that tells a
+  // rejected token from an unreachable impd
   readonly fetch?: (request: Request) => Promise<Response>;
 }
 
@@ -135,9 +137,7 @@ class BadMessageError extends Error {
 // no stdio and nothing Bun-only: the caller wires the socket, output, stdin
 // and signals, and maps the outcome to messages and an exit code.
 export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSession {
-  const url = resolveImpdUrl(options.baseUrl, EXEC_PATH);
-
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = resolveImpdWebSocketUrl(options.baseUrl, EXEC_PATH);
 
   if (options.ticket !== undefined) {
     url.searchParams.set(EXEC_TICKET_PARAM, options.ticket);
@@ -147,6 +147,14 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     options.token === null ? {} : { authorization: `Bearer ${options.token}` };
 
   const ws = options.connect(url.href, headers);
+
+  // asks impd what it can do, and why it refused an upgrade
+  const rpc = createRpcClient({
+    url: options.baseUrl,
+    token: options.token,
+    ...(options.fetch !== undefined && { fetch: options.fetch }),
+  });
+
   const outcome = Promise.withResolvers<ExecOutcome>();
   const state = { opened: false, sentOpen: false, started: false, finished: false, refused: false };
 
@@ -237,43 +245,62 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
     const message = parsed.data;
 
-    if (message.type === 'started') {
-      // a repeat would start stdin twice
-      if (state.started) {
-        return;
+    switch (message.type) {
+      case 'started': {
+        // a repeat would start stdin twice
+        if (state.started) {
+          return;
+        }
+
+        state.started = true;
+
+        options.onStarted({
+          pid: message.pid,
+          session: message.session ?? null,
+          created: message.created ?? false,
+          groupKill: message.groupKill ?? false,
+          output: message.output ?? { continuity: 'none' },
+        });
+
+        break;
+      }
+      case 'exit': {
+        resolveOutcome({
+          kind: 'exit',
+          code: message.code,
+          signal: message.signal,
+          ...(message.offset !== undefined && { offset: message.offset }),
+        });
+
+        break;
+      }
+      case 'detached': {
+        resolveOutcome({
+          kind: 'detached',
+          reason: message.reason,
+          ...(message.offset !== undefined && { offset: message.offset }),
+        });
+
+        break;
       }
 
-      state.started = true;
+      // only a tool exec gets acks (openToolExec)
+      case 'stdin_ack': {
+        break;
+      }
+      case 'error': {
+        resolveOutcome({
+          kind: 'failed',
+          code: message.code ?? null,
+          message: message.message,
+          ...(message.data !== undefined && { data: message.data }),
+        });
 
-      options.onStarted({
-        pid: message.pid,
-        session: message.session ?? null,
-        created: message.created ?? false,
-        groupKill: message.groupKill ?? false,
-        output: message.output ?? { continuity: 'none' },
-      });
-    } else if (message.type === 'exit') {
-      resolveOutcome({
-        kind: 'exit',
-        code: message.code,
-        signal: message.signal,
-        ...(message.offset !== undefined && { offset: message.offset }),
-      });
-    } else if (message.type === 'detached') {
-      resolveOutcome({
-        kind: 'detached',
-        reason: message.reason,
-        ...(message.offset !== undefined && { offset: message.offset }),
-      });
-    } else if (message.type === 'stdin_ack') {
-      // only a tool exec gets acks, and this client starts none
-    } else {
-      resolveOutcome({
-        kind: 'failed',
-        code: message.code ?? null,
-        message: message.message,
-        ...(message.data !== undefined && { data: message.data }),
-      });
+        break;
+      }
+      default: {
+        message satisfies never;
+      }
     }
   };
 
@@ -281,29 +308,23 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   // to say it reads the field
   const sendOpen = async (): Promise<void> => {
     const start = options.start;
-    const features: ExecFeature[] = [];
 
-    if ('argv' in start && start.require !== undefined && start.require.length > 0) {
-      features.push('execRequire');
-    }
+    const needs: FeatureNeeds = {
+      ...('argv' in start &&
+        start.require !== undefined &&
+        start.require.length > 0 && {
+          execRequire: 'run the command without checking its requirements',
+        }),
+      ...('argv' in start &&
+        start.dropSysAdmin === true && { execDropSysAdmin: 'run the command with CAP_SYS_ADMIN' }),
+    };
 
-    if ('argv' in start && start.dropSysAdmin === true) {
-      features.push('execDropSysAdmin');
-    }
+    const refusal = await checkExecFeatures(rpc, needs);
 
-    for (const feature of features) {
-      const refusal = await checkExecFeature(
-        feature,
-        options.baseUrl,
-        options.token,
-        options.fetch,
-      );
+    if (refusal !== null) {
+      resolveOutcome(refusal);
 
-      if (refusal !== null) {
-        resolveOutcome(refusal);
-
-        return;
-      }
+      return;
     }
 
     if (state.finished || ws.readyState !== WebSocket.OPEN) {
@@ -360,7 +381,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
     state.refused = true;
 
-    const access = await checkImpdAccess(options.baseUrl, options.token, options.fetch);
+    const access = await checkImpdAccess(rpc);
 
     if (access === 'unauthorized') {
       resolveOutcome({ kind: 'unauthorized' });

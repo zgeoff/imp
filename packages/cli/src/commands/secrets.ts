@@ -5,6 +5,7 @@ import {
   SecretKindSchema,
 } from '@impz/api';
 import type { BrokerRule, GrantFilter, OAuthConfig, Secret, SecretKind } from '@impz/api';
+import { requireFeatures } from '@impz/client';
 import { defineCommand } from '../define-command';
 import {
   formatApiCalls,
@@ -15,7 +16,6 @@ import {
   formatSecrets,
 } from '../format-output';
 import { readToken } from '../read-token';
-import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
@@ -215,25 +215,18 @@ const addCommand = defineCommand({
         throw new UsageError('--rebind needs --replace');
       }
 
-      // an older impd would take another binding and keep every grant
-      if (context.args.replace === true) {
-        await requireFeature(
-          client,
-          'secretRebind',
-          'let --replace change the hosts and keep every grant',
-        );
-      }
-
-      // an older impd would drop the upstream unread and send the credential
-      // to the host
-      if (context.args.upstream !== undefined) {
-        await requireFeature(client, 'secretUpstream', 'send the credential to the host itself');
-      }
-
-      // an older impd would refuse the kind, or drop the config unread
-      if (kind === 'oauth') {
-        await requireFeature(client, 'oauthSecrets', 'refuse the oauth kind');
-      }
+      // an older impd would take another binding and keep every grant; drop
+      // the upstream unread and send the credential to the host; or refuse
+      // the oauth kind, or drop its config unread
+      await requireFeatures(client, {
+        ...(context.args.replace === true && {
+          secretRebind: 'let --replace change the hosts and keep every grant',
+        }),
+        ...(context.args.upstream !== undefined && {
+          secretUpstream: 'send the credential to the host itself',
+        }),
+        ...(kind === 'oauth' && { oauthSecrets: 'refuse the oauth kind' }),
+      });
 
       const prompt = kind === 'oauth' ? 'refresh token' : 'value';
 
@@ -277,7 +270,7 @@ const refreshCommand = defineCommand({
   args: { name: secretArg, json: jsonArg },
   run: (context) =>
     runAction(context.host, async (client) => {
-      await requireFeature(client, 'oauthSecrets', 'not know the command');
+      await requireFeatures(client, { oauthSecrets: 'not know the command' });
 
       const secret = await client.secrets.refresh({ name: context.args.name });
 
@@ -341,7 +334,7 @@ export const grantCommand = defineCommand({
 
       // an older impd drops the filter unread and would grant the whole host
       if (filter !== undefined) {
-        await requireFeature(client, 'grantFilters', 'grant the whole host');
+        await requireFeatures(client, { grantFilters: 'grant the whole host' });
       }
 
       await client.grants.add({
@@ -397,7 +390,7 @@ export const grantsCommand = defineCommand({
   run: (context) =>
     runAction(context.host, async (client) => {
       if (context.args.filters === true) {
-        await requireFeature(client, 'grantFilters', 'not know the call');
+        await requireFeatures(client, { grantFilters: 'not know the call' });
 
         const grants = await client.grants.details({ name: context.args.name });
 
@@ -456,7 +449,7 @@ export const auditCommand = defineCommand({
       }
 
       if (kind === 'refused') {
-        await requireFeature(client, 'brokerRefusals', 'not know the call');
+        await requireFeatures(client, { brokerRefusals: 'not know the call' });
 
         const refused = await client.audit.refused(input);
 

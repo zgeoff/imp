@@ -1,29 +1,32 @@
 import { expect, mock, test } from 'bun:test';
 import { buildStubOlderImpdFetch } from './build-stub-older-impd-fetch';
 
-test('it takes the named feature flags out of system.info and keeps the rest', async () => {
-  const older = buildStubOlderImpdFetch(
-    () =>
-      Promise.resolve(
-        Response.json({
-          json: { version: '0.40.1', features: { grantableTokens: true, sessionLog: true } },
-          meta: [],
-        }),
-      ),
-    { withoutFeatures: ['grantableTokens'] },
-  );
+test.each([['system/features'], ['system/info']])(
+  'it takes the named feature flags out of %s and keeps the rest',
+  async (procedure) => {
+    const older = buildStubOlderImpdFetch(
+      () =>
+        Promise.resolve(
+          Response.json({
+            json: { version: '0.40.1', features: { grantableTokens: true, sessionLog: true } },
+            meta: [],
+          }),
+        ),
+      { withoutFeatures: ['grantableTokens'] },
+    );
 
-  const response = await older.fetch(
-    new Request('http://impd.test/rpc/system/info', { method: 'POST' }),
-  );
+    const response = await older.fetch(
+      new Request(`http://impd.test/rpc/${procedure}`, { method: 'POST' }),
+    );
 
-  const body: unknown = await response.json();
+    const body: unknown = await response.json();
 
-  expect(body).toStrictEqual({
-    json: { version: '0.40.1', features: { sessionLog: true } },
-    meta: [],
-  });
-});
+    expect(body).toStrictEqual({
+      json: { version: '0.40.1', features: { sessionLog: true } },
+      meta: [],
+    });
+  },
+);
 
 test('it takes the whole features object out of system.info for a release before it', async () => {
   const older = buildStubOlderImpdFetch(

@@ -176,7 +176,7 @@ test('#runImageAdd makes a template from an imp through the stream of a current 
     sizeBytes: expect.any(Number) as unknown,
   });
 
-  expect(ctx.calls).toStrictEqual(['imps/create', 'system/info', 'images/addStream']);
+  expect(ctx.calls).toStrictEqual(['imps/create', 'system/features', 'images/addStream']);
 });
 
 test.skipIf(!checkDockerBuildx())(
@@ -204,7 +204,7 @@ test.skipIf(!checkDockerBuildx())(
       sizeBytes: expect.any(Number) as unknown,
     });
 
-    expect(ctx.calls).toStrictEqual(['system/info', 'images/buildStream']);
+    expect(ctx.calls).toStrictEqual(['system/features', 'images/buildStream']);
   },
   120_000,
 );
@@ -254,7 +254,7 @@ test('#runImageAdd adds through the call that answers at the end on an impd from
     sizeBytes: expect.any(Number) as unknown,
   });
 
-  expect(older.calls).toStrictEqual(['system/info', 'images/add']);
+  expect(older.calls).toStrictEqual(['system/features', 'images/add']);
 });
 
 test.skipIf(!checkDockerBuildx())(
@@ -289,7 +289,7 @@ test.skipIf(!checkDockerBuildx())(
       sizeBytes: expect.any(Number) as unknown,
     });
 
-    expect(older.calls).toStrictEqual(['system/info', 'images/build']);
+    expect(older.calls).toStrictEqual(['system/features', 'images/build']);
   },
   120_000,
 );

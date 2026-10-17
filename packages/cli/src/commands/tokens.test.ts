@@ -338,7 +338,7 @@ test.each([
       code: 1,
     });
 
-    expect(older.calls).toStrictEqual(['system/info']);
+    expect(older.calls).toStrictEqual(['system/features']);
   },
 );
 
@@ -353,7 +353,7 @@ test('it creates no token on an impd from before SystemInfo.features', async () 
   });
 
   expect(result.code).toBe(1);
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });
 
 test('it creates no token when the feature check’s connection drops', async () => {
@@ -375,7 +375,7 @@ test('it creates no token when the feature check’s connection drops', async ()
     code: 1,
   });
 
-  expect(impd.calls).toStrictEqual(['system/info']);
+  expect(impd.calls).toStrictEqual(['system/features']);
   expect(tokens.map((token) => token.name)).not.toContain('agent');
 });
 

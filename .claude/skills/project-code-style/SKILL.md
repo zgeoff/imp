@@ -15,7 +15,8 @@ same PR, because `check-project-verbs.sh` fails when the lists differ.
 ## Project verbs
 
 imp's verbs name the lifecycle an imp moves through, its disk, which only grows, and its elastic
-memory, which also shrinks.
+memory, which also shrinks. `watch` follows impd's event stream and calls back on each change until
+a signal ends it, opening the stream again when it drops.
 
 - `allocate`
 - `list`
@@ -25,6 +26,7 @@ memory, which also shrinks.
 - `hold`
 - `grow`
 - `shrink`
+- `watch`
 
 ## Exempt names
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildWebSocketUrl } from './build-websocket-url';
+import { resolveImpdWebSocketUrl } from './resolve-impd-web-socket-url';
 
 test.each([
   ['http://127.0.0.1:7070', 'ws://127.0.0.1:7070/tunnel'],
@@ -7,5 +7,5 @@ test.each([
   ['https://imp.example.com/base', 'wss://imp.example.com/base/tunnel'],
   ['https://imp.example.com/base//', 'wss://imp.example.com/base/tunnel'],
 ])('it joins %s and the endpoint as %s', (base, expected) => {
-  expect(buildWebSocketUrl(base, '/tunnel')).toBe(expected);
+  expect(resolveImpdWebSocketUrl(base, '/tunnel').href).toBe(expected);
 });

@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { faker } from '@faker-js/faker';
 import { EXEC_MAX_STDIN_FRAME_BYTES, EXEC_STDIN_WINDOW_BYTES } from '@impz/api';
-import { createImpClient } from '@impz/client';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -33,6 +32,7 @@ import { listLocalEntries, writeLocalEntries } from '@impz/local-tar';
 import { waitFor } from '@impz/test-utils/wait-for';
 import tar from 'tar-stream';
 import invariant from 'tiny-invariant';
+import { createImpClient } from '../create-imp-client';
 import { buildStubExecPeer } from '../test-utils/build-stub-exec-peer';
 import { openToolExec } from './open-tool-exec';
 
@@ -157,7 +157,8 @@ async function setupTest() {
   return {
     dataDir,
     client: createImpClient({ url, token: rootToken }),
-    config: { url, token: rootToken, host: null },
+    baseUrl: url,
+    token: rootToken,
   };
 }
 
@@ -215,7 +216,9 @@ test('it sends an archive whole through impd to the imp’s tool and returns its
   const entries = await listLocalEntries(join(dir, 'proj'));
 
   const exec = await openToolExec({
-    config: ctx.config,
+    baseUrl: ctx.baseUrl,
+    token: ctx.token,
+    connect: (url, headers) => new WebSocket(url, { headers: { ...headers } }),
     name: 'box',
     tool: 'tar',
     args: ['extract', '/srv/proj'],
@@ -258,7 +261,9 @@ test('it rejects with impd’s code and message when impd refuses the exec', asy
 
   // the stub VMM records an agent from before impz cp
   const opening = openToolExec({
-    config: ctx.config,
+    baseUrl: ctx.baseUrl,
+    token: ctx.token,
+    connect: (url, headers) => new WebSocket(url, { headers: { ...headers } }),
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
@@ -282,7 +287,8 @@ test('it holds stdin at the window when impd withholds its acks', async () => {
   });
 
   const exec = await openToolExec({
-    config: { url: 'http://impd.test', token: 'root-token', host: null },
+    baseUrl: 'http://impd.test',
+    token: 'root-token',
     name: 'box',
     tool: 'tar',
     args: ['extract', '/srv/proj'],
@@ -326,7 +332,8 @@ test('it holds its stdout ack while the caller is still writing the output', asy
   const writing = Promise.withResolvers<void>();
 
   const exec = await openToolExec({
-    config: { url: 'http://impd.test', token: 'root-token', host: null },
+    baseUrl: 'http://impd.test',
+    token: 'root-token',
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
@@ -382,7 +389,9 @@ test('it acks a tool’s stdout to impd so a download past the window completes'
   const chunks: Uint8Array[] = [];
 
   const exec = await openToolExec({
-    config: ctx.config,
+    baseUrl: ctx.baseUrl,
+    token: ctx.token,
+    connect: (url, headers) => new WebSocket(url, { headers: { ...headers } }),
     name: 'box',
     tool: 'tar',
     args: ['create', '/srv/proj'],
@@ -408,7 +417,8 @@ test('it rejects and closes the socket when impd faults with a message the proto
   });
 
   const opening = openToolExec({
-    config: { url: 'http://impd.test', token: 'root-token', host: null },
+    baseUrl: 'http://impd.test',
+    token: 'root-token',
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
@@ -417,7 +427,7 @@ test('it rejects and closes the socket when impd faults with a message the proto
     connect: peer.connect,
   });
 
-  expect(opening).rejects.toThrowWithMessage(Error, 'impd sent a message the CLI does not know');
+  expect(opening).rejects.toThrowWithMessage(Error, 'impd sent a message the client does not know');
 
   await expect(peer.closed).toResolve();
 });
@@ -428,7 +438,8 @@ test('it rejects and names impd when impd faults by closing the connection unans
   });
 
   const opening = openToolExec({
-    config: { url: 'http://impd.test', token: 'root-token', host: null },
+    baseUrl: 'http://impd.test',
+    token: 'root-token',
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
@@ -464,7 +475,9 @@ test('it rejects with impd’s message when the imp’s agent drops the exec aft
   });
 
   const exec = await openToolExec({
-    config: ctx.config,
+    baseUrl: ctx.baseUrl,
+    token: ctx.token,
+    connect: (url, headers) => new WebSocket(url, { headers: { ...headers } }),
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],

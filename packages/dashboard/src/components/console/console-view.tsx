@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
+import { P, match } from 'ts-pattern';
 import { Button } from '../button';
 import styles from './console-view.module.css';
 import { pickFailureOutcome } from './pick-failure-outcome';
@@ -121,19 +122,20 @@ export function ConsoleView(props: ConsoleViewProps) {
 }
 
 function formatStatus(status: Status): string {
-  if (status.kind === 'connecting') {
-    return 'connecting…';
-  }
-
-  if (status.kind === 'open') {
-    return 'connected';
-  }
-
-  const end = status.end;
-
-  if (end.kind === 'error') {
-    return `disconnected: ${end.message}`;
-  }
-
-  return end.signal === null ? `exited with code ${String(end.code)}` : `ended by ${end.signal}`;
+  return match(status)
+    .with({ kind: 'connecting' }, () => 'connecting…')
+    .with({ kind: 'open' }, () => 'connected')
+    .with(
+      { kind: 'ended', end: { kind: 'error' } },
+      (ended) => `disconnected: ${ended.end.message}`,
+    )
+    .with(
+      { kind: 'ended', end: { kind: 'exit', signal: null } },
+      (ended) => `exited with code ${String(ended.end.code)}`,
+    )
+    .with(
+      { kind: 'ended', end: { kind: 'exit', signal: P.string } },
+      (ended) => `ended by ${ended.end.signal}`,
+    )
+    .exhaustive();
 }

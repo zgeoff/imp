@@ -23,7 +23,7 @@ import { server } from '@impz/test-utils/mock-server';
 import { http } from 'msw';
 import { createImpClient } from '../create-imp-client';
 import { buildStubExecAgent } from '../test-utils/build-stub-exec-agent';
-import { buildStubImpdBeforeExecRequire } from '../test-utils/build-stub-impd-before-exec-require';
+import { buildStubImpdWithoutFeature } from '../test-utils/build-stub-impd-without-feature';
 import { createStubUndiciWebSocket } from '../test-utils/create-stub-undici-web-socket';
 import { startStubImpdSocket } from '../test-utils/start-stub-impd-socket';
 import { openExecSession } from './open-exec-session';
@@ -239,7 +239,11 @@ test('it asks impd before it sends a start that requires anything', async () => 
   const ctx = await setupTest();
 
   const calls = mock<(path: string) => void>();
-  const older = buildStubImpdBeforeExecRequire((request) => ctx.impd.api.app.handle(request));
+
+  const older = buildStubImpdWithoutFeature(
+    (request) => ctx.impd.api.app.handle(request),
+    'execRequire',
+  );
 
   server.use(
     http.all('http://impd.test/*', (info) => {
@@ -270,7 +274,7 @@ test('it asks impd before it sends a start that requires anything', async () => 
     data: { reason: 'impd_outdated', detail: expect.toBeString() },
   });
 
-  expect(calls).toHaveBeenCalledExactlyOnceWith('/rpc/system/info');
+  expect(calls).toHaveBeenCalledExactlyOnceWith('/rpc/system/features');
   expect(ctx.agent.requests).toStrictEqual([]);
 });
 
@@ -284,7 +288,7 @@ test('it sends a resize made while the start waits on impd after the start', asy
 
   // the resize lands after the socket opened, while impd answers the check
   server.use(
-    http.post('http://impd.test/rpc/system/info', (info) => {
+    http.post('http://impd.test/rpc/system/features', (info) => {
       const request = info.request;
 
       held.session?.resize(100, 40);
@@ -326,7 +330,7 @@ test('it counts stdin held while the start waits on impd toward backpressure', a
 
   // more than the high-water mark lands while impd answers the check
   server.use(
-    http.post('http://impd.test/rpc/system/info', async (info) => {
+    http.post('http://impd.test/rpc/system/features', async (info) => {
       const request = info.request;
       const session = held.session;
 

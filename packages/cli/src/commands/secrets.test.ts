@@ -370,7 +370,7 @@ test.each([
       code: 1,
     });
 
-    expect(older.calls).toStrictEqual(['system/info']);
+    expect(older.calls).toStrictEqual(['system/features']);
   },
 );
 
@@ -386,7 +386,7 @@ test('it replaces no secret on an impd from before SystemInfo.features', async (
   });
 
   expect(result.code).toBe(1);
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });
 
 test('it replaces no secret when the feature check’s connection drops', async () => {
@@ -409,7 +409,7 @@ test('it replaces no secret when the feature check’s connection drops', async 
     code: 1,
   });
 
-  expect(impd.calls).toStrictEqual(['system/info']);
+  expect(impd.calls).toStrictEqual(['system/features']);
 });
 
 test('it replaces a secret on an impd with the feature', async () => {
@@ -750,7 +750,7 @@ test('it lists no refused broker requests from an impd without them', async () =
     code: 1,
   });
 
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });
 
 test('it grants a secret for the methods and paths given', async () => {
@@ -835,7 +835,7 @@ test('it makes no filtered grant on an impd from before grant filters', async ()
     code: 1,
   });
 
-  expect(older.calls).toStrictEqual(['system/info']);
+  expect(older.calls).toStrictEqual(['system/features']);
 });
 
 test('it lists each grant with the methods and paths it covers', async () => {

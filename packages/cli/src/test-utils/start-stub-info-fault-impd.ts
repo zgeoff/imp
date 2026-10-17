@@ -1,5 +1,5 @@
-// impd on loopback for a CLI child, its system.info connection dropping
-// before any answer; every other call reaches the app behind `fetch`. It
+// impd on loopback for a CLI child, its feature reads (system.features and
+// system.info) dropping the connection before any answer; every other call reaches the app behind `fetch`. It
 // records each call's procedure, and its stop goes into `stack`.
 export function startStubInfoFaultImpd(
   stack: Readonly<AsyncDisposableStack>,
@@ -15,7 +15,7 @@ export function startStubInfoFaultImpd(
 
       calls.push(path.slice(path.indexOf('/rpc/') + '/rpc/'.length));
 
-      if (path.endsWith('/rpc/system/info')) {
+      if (path.endsWith('/rpc/system/features') || path.endsWith('/rpc/system/info')) {
         // a body that fails before its first byte resets the connection
         return new Response(
           new ReadableStream({

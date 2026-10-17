@@ -8,7 +8,8 @@ const InfoJsonSchema = z.looseObject({ features: z.record(z.string(), z.unknown(
 const EventDataSchema = z.looseObject({ json: z.looseObject({ type: z.string() }) });
 
 export interface StubOlderImpdOptions {
-  // the feature flags a release before them did not report in system.info
+  // the feature flags a release before them did not report in
+  // system.features and system.info
   readonly withoutFeatures?: readonly string[];
 
   // a release from before SystemInfo.features reported no features object
@@ -23,6 +24,9 @@ export interface StubOlderImpdOptions {
   // stream's end, do
   readonly withoutEvents?: Readonly<Record<string, readonly string[]>>;
 }
+
+// the answers that carry the feature flags
+const FEATURE_PROCEDURES = new Set(['system/features', 'system/info']);
 
 // the path a procedure takes when no impd has it
 const ABSENT_PROCEDURE = 'older-impd/absent';
@@ -105,7 +109,7 @@ export function buildStubOlderImpdFetch(
 
     const types = options.withoutEvents?.[procedure];
 
-    if (procedure === 'system/info' && response.ok) {
+    if (FEATURE_PROCEDURES.has(procedure) && response.ok) {
       return removeFeatures(response);
     }
 

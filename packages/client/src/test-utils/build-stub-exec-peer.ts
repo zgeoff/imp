@@ -1,6 +1,6 @@
 import { ExecClientMessageSchema, decodeExecFrame, encodeExecFrame } from '@impz/api';
 import type { ExecClientMessage, ExecServerMessage } from '@impz/api';
-import type { ExecSocket } from '@impz/client';
+import type { ExecSocket } from '../exec/open-exec-session';
 
 // what the client sent: a control message as the protocol parses it, or a
 // stdin frame as text and its byte count

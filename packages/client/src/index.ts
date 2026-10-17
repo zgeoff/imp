@@ -35,7 +35,21 @@ export type { ImpClient, ImpClientOptions } from './create-imp-client';
 export type { BuildContext, BuildImageOptions } from './build-image';
 export type { RequireAwakeOptions } from './require-awake';
 export { openExecSession } from './exec/open-exec-session';
+export { openToolExec } from './exec/open-tool-exec';
+export type { ToolExec, ToolExecOptions } from './exec/open-tool-exec';
 export { UnknownProcedureError } from './unknown-procedure-error';
+export { resolveImpdWebSocketUrl } from './resolve-impd-web-socket-url';
+export { watchEvents } from './events/watch-events';
+export type { EventSource, WatchEventsOptions, WatchReconnect } from './events/watch-events';
+
+export {
+  MissingFeatureError,
+  findMissingFeatures,
+  readFeatures,
+  requireFeatures,
+} from './require-features';
+
+export type { FeatureNeeds, FeatureSource, ImpdFeature, ImpdFeatures } from './require-features';
 
 export type {
   ExecOutcome,
@@ -45,7 +59,15 @@ export type {
   ExecStarted,
 } from './exec/open-exec-session';
 
-export { openReverseForward } from './reverse/open-reverse-forward';
+export { openForwardTunnel } from './tunnel/open-forward-tunnel';
+
+export type {
+  ForwardTunnel,
+  ForwardTunnelEnd,
+  ForwardTunnelOptions,
+} from './tunnel/open-forward-tunnel';
+
+export { openReverseForward } from './tunnel/open-reverse-forward';
 
 export type {
   ReverseForward,
@@ -55,7 +77,7 @@ export type {
   ReverseListening,
   ReverseRelay,
   ReverseRelayHandlers,
-} from './reverse/open-reverse-forward';
+} from './tunnel/open-reverse-forward';
 
 export { ExecError } from './exec/exec-error';
 export type { ExecClientErrorCode } from './exec/exec-error';

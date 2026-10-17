@@ -1,6 +1,5 @@
-import type { ImpEvent } from '@impz/api';
-import { ORPCError, UnknownProcedureError } from '@impz/client';
-import type { ServerCheck } from '@impz/client';
+import { ORPCError, UnknownProcedureError, watchEvents } from '@impz/client';
+import type { EventSource as ClientEventSource, ServerCheck } from '@impz/client';
 import { defineCommand } from '../define-command';
 import { runAction } from '../run-action';
 
@@ -14,8 +13,7 @@ const MAX_BACKOFF_MS = 15_000;
 
 // what printEvents needs of the client and the clock, so a test can script
 // the stream
-export interface EventSource {
-  readonly openStream: () => Promise<AsyncIterable<ImpEvent>>;
+export interface EventSource extends ClientEventSource {
   readonly checkServer: () => Promise<ServerCheck>;
   readonly now: () => number;
   readonly wait: (ms: number) => Promise<void>;
@@ -65,13 +63,12 @@ async function readStream(
   print: (line: string) => void,
 ): Promise<string> {
   try {
-    const stream = await source.openStream();
-
-    for await (const event of stream) {
-      if (name === null || readImpName(event) === name) {
+    await watchEvents(source, {
+      ...(name !== null && { name }),
+      onEvent: (event) => {
         print(JSON.stringify(event));
-      }
-    }
+      },
+    });
 
     return 'impd closed it';
   } catch (error) {
@@ -102,14 +99,6 @@ function isMissingStream(error: unknown): boolean {
   );
 }
 
-function readImpName(event: Readonly<ImpEvent>): string {
-  if (event.ev === 'ImpAdded' || event.ev === 'ImpChanged' || event.ev === 'ImpRemoved') {
-    return event.imp.name;
-  }
-
-  return event.name;
-}
-
 export const eventsCommand = defineCommand({
   meta: {
     name: 'events',
@@ -122,7 +111,7 @@ export const eventsCommand = defineCommand({
     runAction(context.host, (client) =>
       printEvents(
         {
-          openStream: () => client.events.stream(),
+          events: client.events,
           checkServer: () => client.checkServer(),
           now: Date.now,
           wait: (ms) => Bun.sleep(ms),

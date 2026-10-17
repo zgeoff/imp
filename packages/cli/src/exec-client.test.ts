@@ -6,6 +6,7 @@ import { PassThrough } from 'node:stream';
 import { faker } from '@faker-js/faker';
 import { EXEC_CHANNELS } from '@impz/api';
 import { createImpClient } from '@impz/client';
+import { buildStubExecPeer } from '@impz/client/test-utils/build-stub-exec-peer';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -35,7 +36,6 @@ import * as z from 'zod';
 import { runExec } from './exec-client';
 import type { ExecIo } from './exec-client';
 import { buildStubCongestedSocket } from './test-utils/build-stub-congested-socket';
-import { buildStubExecPeer } from './test-utils/build-stub-exec-peer';
 import { buildStubTerminal } from './test-utils/build-stub-terminal';
 import { startCli } from './test-utils/start-cli';
 import { startStubPrefixProxy } from './test-utils/start-stub-prefix-proxy';
