@@ -14,6 +14,7 @@ import {
   renderPendingPage,
 } from './oauth-pages';
 import type { SignInErrorPage } from './oauth-pages';
+import { readBodyText } from './read-body-text';
 
 // The public route's OAuth paths (docs/guides/mcp.md#public-route): better-auth
 // runs the protocol, and impd serves the two pages it sends a browser to,
@@ -23,6 +24,9 @@ const MINUTE_MS = 60_000;
 
 // a signed-in approval waits this long for its consent
 const CONSENT_MS = 10 * MINUTE_MS;
+
+// a form a page or a client posts; any of them is a few hundred bytes
+const MAX_FORM_BYTES = 16 * 1024;
 
 // the paths that serve the protected resource metadata for `<origin>/mcp`
 const RESOURCE_METADATA_PATHS: ReadonlySet<string> = new Set([
@@ -88,8 +92,28 @@ export function makeOAuthRouter(
     return entry;
   };
 
+  // an approval whose consent never came goes once its time is up, though
+  // its session, and with it any lookup, may be gone first
+  const removeExpiredSignedIn = (): void => {
+    const now = deps.now();
+
+    for (const [sessionID, entry] of signedIn) {
+      if (entry.expiresAt <= now) {
+        signedIn.delete(sessionID);
+      }
+    }
+  };
+
   const toPublicRequest = (request: Request, url: URL): Request =>
     new Request(`${deps.origin}${url.pathname}${url.search}`, request);
+
+  // the request again for better-auth, with the body it read
+  const toPublicFormRequest = (request: Request, url: URL, body: string): Request =>
+    new Request(`${deps.origin}${url.pathname}${url.search}`, {
+      method: request.method,
+      headers: request.headers,
+      body,
+    });
 
   // The metadata advertises only what imp's clients can use: public clients
   // with no client authentication, no introspection, and Bearer tokens
@@ -252,6 +276,8 @@ export function makeOAuthRouter(
       return buildErrorPage('expired');
     }
 
+    removeExpiredSignedIn();
+
     signedIn.set(sessionID, {
       binding: buildConsentBinding(oauthQuery),
       approval,
@@ -388,7 +414,13 @@ export function makeOAuthRouter(
   // once issued, no token needs it, so every session a token holds goes,
   // with the expired ones.
   const runTokenRequest = async (request: Request, url: URL): Promise<Response> => {
-    const response = await deps.auth.handler(toPublicRequest(request, url));
+    const body = await readBodyText(request, MAX_FORM_BYTES);
+
+    if (body === null) {
+      return buildBadTokenRequest();
+    }
+
+    const response = await deps.auth.handler(toPublicFormRequest(request, url, body));
 
     if (response.ok) {
       const held = await deps.db
@@ -422,7 +454,11 @@ export function makeOAuthRouter(
   // RFC 7009 through better-auth; a token it revoked for its own client
   // takes its whole grant with it, as imp's grants always went
   const runRevoke = async (request: Request, url: URL): Promise<Response> => {
-    const body = await request.text();
+    const body = await readBodyText(request, MAX_FORM_BYTES);
+
+    if (body === null) {
+      return buildBadTokenRequest();
+    }
 
     const form = new URLSearchParams(body);
 
@@ -440,13 +476,7 @@ export function makeOAuthRouter(
       )
       .executeTakeFirst();
 
-    const response = await deps.auth.handler(
-      new Request(`${deps.origin}${url.pathname}`, {
-        method: 'POST',
-        headers: request.headers,
-        body,
-      }),
-    );
+    const response = await deps.auth.handler(toPublicFormRequest(request, url, body));
 
     // RFC 7009: a token the server does not know is answered as revoked
     if (owner === undefined && response.status === 400) {
@@ -608,7 +638,7 @@ function readErrorDescription(answer: unknown): string | null {
   return typeof description === 'string' ? description : null;
 }
 
-// a urlencoded form of at most 16 KiB; null for anything else
+// a urlencoded form of at most MAX_FORM_BYTES; null for anything else
 async function readForm(request: Request): Promise<URLSearchParams | null> {
   const type = request.headers.get('content-type') ?? '';
 
@@ -616,9 +646,18 @@ async function readForm(request: Request): Promise<URLSearchParams | null> {
     return null;
   }
 
-  const text = await request.text();
+  const text = await readBodyText(request, MAX_FORM_BYTES);
 
-  return text.length > 16 * 1024 ? null : new URLSearchParams(text);
+  return text === null ? null : new URLSearchParams(text);
+}
+
+// RFC 6749's refusal of a token or revoke request with no body, or one past
+// MAX_FORM_BYTES, which better-auth never reads
+function buildBadTokenRequest(): Response {
+  return Response.json(
+    { error: 'invalid_request', error_description: 'the request body is missing or too large' },
+    { status: 400, headers: { 'cache-control': 'no-store' } },
+  );
 }
 
 // A form a page on another origin posts never counts. A browser names the

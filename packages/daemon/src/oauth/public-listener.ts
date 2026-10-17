@@ -2,6 +2,7 @@ import { MCP_PATH } from '@impz/api';
 import type { HttpTransport } from '@impz/mcp';
 import type { McpAuth } from './create-mcp-auth';
 import type { PublicMcpConfig } from './public-mcp-config';
+import { readBodyText } from './read-body-text';
 
 // The public MCP route's listener (docs/guides/mcp.md#public-route): plain
 // HTTP behind the operator's TLS front. It reads no client address or
@@ -221,30 +222,6 @@ export function startPublicListener(
       await server.stop(true);
     },
   };
-}
-
-// the body as text, of at most `max` bytes; null for none or a larger one
-async function readBodyText(request: Request, max: number): Promise<string | null> {
-  if (request.body === null) {
-    return null;
-  }
-
-  const body: ReadableStream<Uint8Array> = request.body;
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  // leaving the loop early cancels the rest of the body
-  for await (const chunk of body) {
-    total += chunk.byteLength;
-
-    if (total > max) {
-      return null;
-    }
-
-    chunks.push(chunk);
-  }
-
-  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 // A request to /mcp that starts no work: a DELETE, or a POST of one

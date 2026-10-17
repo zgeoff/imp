@@ -642,6 +642,51 @@ test('it answers a revocation of a token it does not know with an empty 200', as
   expect(body).toBe('');
 });
 
+test('it refuses a token request whose body is past 16 KiB', async () => {
+  const ctx = await setupTest();
+  const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
+
+  const refreshToken = 'r'.repeat(16 * 1024);
+
+  const refused = await ctx.handle(
+    new Request('http://127.0.0.1:7171/oauth2/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: client.clientId,
+        refresh_token: refreshToken,
+      }),
+    }),
+  );
+
+  const body: unknown = await refused.json();
+
+  expect(refused.status).toBe(400);
+
+  expect(body).toStrictEqual({
+    error: 'invalid_request',
+    error_description: 'the request body is missing or too large',
+  });
+});
+
+test('it refuses a revocation whose body is past 16 KiB', async () => {
+  const ctx = await setupTest();
+  const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
+
+  const token = 't'.repeat(16 * 1024);
+
+  const refused = await ctx.handle(
+    new Request('http://127.0.0.1:7171/oauth2/revoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: client.clientId, token }),
+    }),
+  );
+
+  expect(refused.status).toBe(400);
+});
+
 test('it shows a sign-in for a client it does not know a page that says so', async () => {
   const ctx = await setupTest();
 
