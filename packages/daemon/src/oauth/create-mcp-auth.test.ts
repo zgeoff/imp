@@ -314,6 +314,56 @@ test('it refreshes a grant’s tokens and refuses its spent refresh token', asyn
   expect(second.status).toBe(400);
 });
 
+test('it keeps the grant when another client presents its spent refresh token', async () => {
+  const ctx = await setupTest();
+  const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
+  const other = await ctx.auth.addClient('other', ['https://other.example/callback']);
+  const made = await ctx.tokens.create({ name: 'laptop', scope: 'manage', imps: null });
+
+  const approver = ctx.tokens.authenticate(made.secret);
+
+  invariant(approver);
+
+  const issued = await runOAuthSignIn(
+    {
+      handle: ctx.handle,
+      origin: 'http://127.0.0.1:7171',
+      clientID: client.clientId,
+      redirectURI: 'https://client.example/callback',
+      scope: 'read',
+    },
+    (code) => {
+      ctx.auth.approve(ApprovalCodeSchema.parse(code), approver, 'read', undefined);
+    },
+  );
+
+  const sendRefresh = (clientID: string) =>
+    ctx.handle(
+      new Request('http://127.0.0.1:7171/oauth2/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: clientID,
+          refresh_token: issued.refresh_token,
+        }),
+      }),
+    );
+
+  const own = await sendRefresh(client.clientId);
+  const tokens: unknown = await own.json();
+
+  invariant(own.status === 200);
+  invariant(typeof tokens === 'object' && tokens !== null && 'access_token' in tokens);
+  invariant(typeof tokens.access_token === 'string');
+
+  const foreign = await sendRefresh(other.clientId);
+  const caller = await ctx.auth.resolveAccess(tokens.access_token);
+
+  expect(foreign.status).toBe(400);
+  expect(caller).toMatchObject({ kind: 'oauth' });
+});
+
 test('it ends the grant when two refreshes spend one refresh token at once', async () => {
   const ctx = await setupTest();
   const client = await ctx.auth.addClient('conn', ['https://client.example/callback']);
