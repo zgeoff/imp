@@ -273,7 +273,7 @@
     "@zgeoff/bun-test-extended": "0.1.0",
     "@zgeoff/bun-test-react": "0.1.0",
     "@zgeoff/format-codemod": "0.1.0",
-    "@zgeoff/oxlint-config": "0.2.4",
+    "@zgeoff/oxlint-config": "0.2.5",
     "acme-client": "5.4.0",
     "better-auth": "1.7.7",
     "citty": "0.2.2",
@@ -1123,7 +1123,7 @@
 
     "@zgeoff/format-codemod": ["@zgeoff/format-codemod@0.1.0", "", { "dependencies": { "oxc-parser": "0.137.0" }, "bin": { "format-codemod": "dist/cli.js" } }, "sha512-WVP6d3iuuaKuYrGIuHLkTxjI3W2IQzeAq6TtUiZiz+uw4f2AF2q4GgKQ6czpz/89qgZXauvhl1Pcef1/NZl4Rg=="],
 
-    "@zgeoff/oxlint-config": ["@zgeoff/oxlint-config@0.2.4", "", { "dependencies": { "@stylistic/eslint-plugin": "5.10.0" }, "peerDependencies": { "oxlint": ">=1.71.0" } }, "sha512-vVIXw6AQxVb/gISI4EXy/yK21QmTAPz1hdI/humE8a2tV7/8fdmOHmWtKi4yhmABQ939+g9jkDiwv0Bd8d0E5A=="],
+    "@zgeoff/oxlint-config": ["@zgeoff/oxlint-config@0.2.5", "", { "dependencies": { "@stylistic/eslint-plugin": "5.10.0" }, "peerDependencies": { "oxlint": ">=1.71.0" } }, "sha512-kyispUuOzb6Ycajcc2FlewaC8UdrMxEffRpfoeeeTmfh4sTdnyUkdeOq0ZouGqucctX8+qx4DpBG/dbyMuyKdA=="],
 
     "acme-client": ["acme-client@5.4.0", "", { "dependencies": { "@peculiar/x509": "^1.11.0", "asn1js": "^3.0.5", "axios": "^1.7.2", "debug": "^4.3.5", "node-forge": "^1.3.1" } }, "sha512-mORqg60S8iML6XSmVjqjGHJkINrCGLMj2QvDmFzI9vIlv1RGlyjmw3nrzaINJjkNsYXC41XhhD5pfy7CtuGcbA=="],
 
