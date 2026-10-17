@@ -215,6 +215,7 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'audit.calls': readAny,
   'events.stream': readAny,
   'system.info': readAny,
+  'system.features': readAny,
 
   // gc removes what a crash left and, with orphans, every disk no row names
   'system.gc': manageHost,

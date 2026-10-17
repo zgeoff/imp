@@ -129,7 +129,10 @@ export interface RamGovernor extends RamAdmission {
 export interface RamGovernorDeps {
   readonly budgetMib: number;
   readonly listAwake: () => Promise<AwakeImp[]>;
-  readonly readRamMib: (pid: number, apiSocket: string) => number | null;
+
+  // impd's reader is async, and reads every awake VM at once
+  // (docs/architecture/lifecycle/ram-governor.md#what-it-measures)
+  readonly readRamMib: (pid: number, apiSocket: string) => number | null | Promise<number | null>;
 
   // RAM to keep free besides the budget's use, given the awake VMs' pids: with
   // IMP_KSM, a share of what KSM saves in them, since writes split merged
@@ -232,8 +235,10 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
     let usedMib = 0;
     let effectiveMib = 0;
 
-    for (const imp of awake) {
-      const measured = deps.readRamMib(imp.pid, imp.apiSocket) ?? 0;
+    const readings = await Promise.all(awake.map((imp) => deps.readRamMib(imp.pid, imp.apiSocket)));
+
+    for (const [index, imp] of awake.entries()) {
+      const measured = readings[index] ?? 0;
       const effective = Math.max(measured, readReservation(imp.id));
 
       byImp.set(imp.id, effective);

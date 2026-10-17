@@ -22,6 +22,12 @@ client's fetch timeout, such as an image add or a build, has a streamed twin tha
 events. Procedures take POST only, because a GET is what a link or an image on any page can make a
 browser send.
 
+A client finds out what an impd can do from `system.features`, which returns impd's version and
+feature flags and reads nothing else. `system.info` returns the same flags inside a full status
+report, which measures the memory of every awake VM, so a client that only checks a feature calls
+`system.features`. An impd older than `system.features` answers it with `NOT_FOUND`, and the client
+then reads the flags from `system.info`.
+
 The router checks the caller's access before it validates the input or runs the handler, and a
 procedure missing from the access map is refused ([auth](./auth.md#scopes)). Handlers that list
 filter by the caller's imps.

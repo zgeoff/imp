@@ -12552,6 +12552,99 @@
       },
       "stream": false
     },
+    "system.features": {
+      "input": {},
+      "output": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "sessionOffsets": {
+                "type": "boolean"
+              },
+              "leases": {
+                "type": "boolean"
+              },
+              "grantableTokens": {
+                "type": "boolean"
+              },
+              "secretRebind": {
+                "type": "boolean"
+              },
+              "tokenUpdate": {
+                "type": "boolean"
+              },
+              "tokenImageAdd": {
+                "type": "boolean"
+              },
+              "databaseCopy": {
+                "type": "boolean"
+              },
+              "imageBuildStream": {
+                "type": "boolean"
+              },
+              "imageOpStream": {
+                "type": "boolean"
+              },
+              "imageBuilds": {
+                "type": "boolean"
+              },
+              "execRequire": {
+                "type": "boolean"
+              },
+              "oauthGrants": {
+                "type": "boolean"
+              },
+              "secretFilesGc": {
+                "type": "boolean"
+              },
+              "sessionLog": {
+                "type": "boolean"
+              },
+              "publicEgress": {
+                "type": "boolean"
+              },
+              "oauthSecrets": {
+                "type": "boolean"
+              },
+              "secretUpstream": {
+                "type": "boolean"
+              },
+              "backupOptOut": {
+                "type": "boolean"
+              },
+              "brokerRefusals": {
+                "type": "boolean"
+              },
+              "grantFilters": {
+                "type": "boolean"
+              },
+              "readOnlyFiles": {
+                "type": "boolean"
+              },
+              "execDropSysAdmin": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sessionOffsets",
+              "leases"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "version",
+          "features"
+        ],
+        "additionalProperties": false
+      },
+      "stream": false
+    },
     "system.gc": {
       "input": {
         "type": "object",

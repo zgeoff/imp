@@ -65,7 +65,7 @@ import {
 } from '../schemas/session-log-schema';
 import { SessionNameSchema, SessionSchema } from '../schemas/session-schema';
 import { DatabaseCopySchema, StorageGcSchema } from '../schemas/storage-schema';
-import { SystemInfoSchema } from '../schemas/system-info-schema';
+import { SystemFeaturesInfoSchema, SystemInfoSchema } from '../schemas/system-info-schema';
 import {
   GrantableSchema,
   GrantableUpdateSchema,
@@ -620,6 +620,10 @@ export const impContract = {
 
   system: {
     info: base.output(SystemInfoSchema),
+
+    // the version and features alone, at once: info measures every awake
+    // VM for its report, which a client that checks a feature never reads
+    features: base.output(SystemFeaturesInfoSchema),
 
     // removes the crash leftovers no row names and lists the orphans it
     // keeps, or retires them with `orphans`; PRECONDITION_FAILED while

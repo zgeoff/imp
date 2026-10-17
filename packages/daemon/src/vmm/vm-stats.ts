@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { readStatFields } from '../process/proc';
 import { isFirecrackerAlive } from './firecracker-process';
 
@@ -28,6 +29,27 @@ export function readOwnedRamMib(pid: number, apiSocket: string, procRoot = '/pro
   const fields = readVmSmaps(pid, apiSocket, procRoot);
 
   return fields === null ? null : countOwnedMib(fields);
+}
+
+// readOwnedRamMib off the event loop. The kernel walks every page the VM maps
+// to answer, tens of ms for a guest of some GiB, so the governor reads each
+// awake VM this way, all at once, rather than holding every request in turn.
+export async function readOwnedRamMibAsync(
+  pid: number,
+  apiSocket: string,
+  procRoot = '/proc',
+): Promise<number | null> {
+  if (!isFirecrackerAlive(pid, apiSocket, procRoot)) {
+    return null;
+  }
+
+  try {
+    const text = await readFile(`${procRoot}/${String(pid)}/smaps_rollup`, 'utf8');
+
+    return countOwnedMib(parseSmapsRollup(text));
+  } catch {
+    return null;
+  }
 }
 
 // Pss_Anon + Pss_Shmem in MiB: what readOwnedRamMib counts

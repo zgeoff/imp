@@ -7,6 +7,7 @@ import {
   parseSmapsRollup,
   readCpuTicks,
   readOwnedRamMib,
+  readOwnedRamMibAsync,
   readRssMib,
   readUnsharedRamMib,
   readVmMemory,
@@ -70,6 +71,48 @@ test('#readOwnedRamMib counts the anonymous and shmem Pss of a live firecracker'
   );
 
   expect(readOwnedRamMib(42, '/run/api.sock', ctx.procRoot)).toBe(250);
+});
+
+test('#readOwnedRamMibAsync counts what readOwnedRamMib counts', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
+
+  writeFileSync(
+    join(ctx.procRoot, '42', 'smaps_rollup'),
+    'Rss:              409600 kB\nPss_Anon:          204800 kB\nPss_Shmem:          51200 kB\n',
+  );
+
+  const ramMib = await readOwnedRamMibAsync(42, '/run/api.sock', ctx.procRoot);
+
+  expect(ramMib).toBe(250);
+});
+
+test('#readOwnedRamMibAsync reads nothing for a pid that serves another socket', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/other.sock\0');
+  writeFileSync(join(ctx.procRoot, '42', 'smaps_rollup'), 'Pss_Anon:          204800 kB\n');
+
+  const ramMib = await readOwnedRamMibAsync(42, '/run/api.sock', ctx.procRoot);
+
+  expect(ramMib).toBeNull();
+});
+
+test('#readOwnedRamMibAsync reads nothing for a firecracker without smaps_rollup', async () => {
+  const ctx = setupTest();
+
+  mkdirSync(join(ctx.procRoot, '42'));
+  writeFileSync(join(ctx.procRoot, '42', 'stat'), '42 (firecracker) S 1 42 42 0 -1');
+  writeFileSync(join(ctx.procRoot, '42', 'cmdline'), 'firecracker\0--api-sock\0/run/api.sock\0');
+
+  const ramMib = await readOwnedRamMibAsync(42, '/run/api.sock', ctx.procRoot);
+
+  expect(ramMib).toBeNull();
 });
 
 test('#readUnsharedRamMib counts the anonymous pages in full and the shmem Pss', () => {

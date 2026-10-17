@@ -10,11 +10,15 @@ import type { RecordsStatus } from './https/https-service';
 import { countBootStatuses } from './imps/boot-status';
 import { readKsmHostStats } from './vmm/ksm';
 
-// `system.*`: what the host runs and holds, its storage GC, and a copy of
+// `system.*`: what the host runs and holds, what impd can do, its storage GC, and a copy of
 // its database
 export function buildSystemRoutes(os: RpcImplementer, deps: RouterDeps) {
   return {
     info: os.system.info.handler(() => readSystemInfo(deps)),
+    features: os.system.features.handler(() => ({
+      version: packageJson.version,
+      features: SYSTEM_FEATURES,
+    })),
     gc: os.system.gc.handler((context) =>
       deps.gc.runGc({
         isDryRun: context.input.dryRun ?? false,
