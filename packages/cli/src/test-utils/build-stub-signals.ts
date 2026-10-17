@@ -1,4 +1,4 @@
-import type { SignalSource } from '../read-token';
+import type { SignalSource } from '../prompts/read-token';
 
 // The signals a process gets, without the process: `send` hands a signal to
 // the listeners on it, as the kernel would, and `listening` names the

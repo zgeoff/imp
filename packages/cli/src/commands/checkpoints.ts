@@ -1,9 +1,9 @@
-import { defineCommand } from '../define-command';
-import { dispatchVerb, listOperands } from '../dispatch-verb';
-import { formatCheckpoints, formatImp, formatOutput } from '../format-output';
-import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
-import { jsonArg, nameArg } from './common-args';
+import { jsonArg, nameArg } from '../args/common-args';
+import { defineCommand } from '../cli/define-command';
+import { dispatchVerb, listOperands } from '../cli/dispatch-verb';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import { formatCheckpoints, formatImp, formatOutput } from '../output/format-output';
 
 export const checkpointCommand = defineCommand({
   name: 'checkpoint',

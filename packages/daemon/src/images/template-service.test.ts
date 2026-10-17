@@ -552,7 +552,7 @@ test('it refuses an imp disk smaller than its template disk', async () => {
   const creating = ctx.impd.imps.createImp({ name: 'small', image: 'tools', diskMib: 32 });
 
   expect(creating).rejects.toMatchObject({
-    message: "a disk of 32 MiB is smaller than template tools's disk (64 MiB)",
+    message: "a disk of 32.0 MiB is smaller than template tools's disk (64.0 MiB)",
   });
 });
 

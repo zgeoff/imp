@@ -15,7 +15,6 @@
     "@impz/shared": "workspace:*",
     "gunshi": "catalog:",
     "p-retry": "catalog:",
-    "tar-stream": "catalog:",
     "ts-pattern": "catalog:",
     "zod": "catalog:"
   },

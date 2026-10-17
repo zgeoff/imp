@@ -1,6 +1,6 @@
-import { toProgressOutput } from '../command-io';
+import { toProgressOutput } from '../cli/command-io';
+import { defineCommand } from '../cli/define-command';
 import { runCp } from '../cp/run-cp';
-import { defineCommand } from '../define-command';
 
 export const cpCommand = defineCommand({
   name: 'cp',

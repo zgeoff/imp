@@ -1,8 +1,8 @@
 import { ORPCError, UnknownProcedureError, watchEvents } from '@impz/client';
 import type { EventSource as ClientEventSource, ServerCheck } from '@impz/client';
 import pRetry, { AbortError } from 'p-retry';
-import { defineCommand } from '../define-command';
-import { runAction } from '../run-action';
+import { defineCommand } from '../cli/define-command';
+import { runAction } from '../cli/run-action';
 
 // ends in a row before impz events gives up
 const MAX_FAILURES = 5;

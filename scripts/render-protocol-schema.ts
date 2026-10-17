@@ -3,7 +3,7 @@
 // a difference, as scripts/render-protocol-schema.test.ts does under `bun test`.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { buildProtocolSchema } from '../packages/api/src/protocols/build-protocol-schema';
-import { buildJsonOutputSchema } from '../packages/cli/src/build-json-output-schema';
+import { buildJsonOutputSchema } from '../packages/cli/src/output/build-json-output-schema';
 
 export const PROTOCOL_SCHEMA_FILE = 'packages/api/protocol-schema.json';
 export const JSON_OUTPUT_SCHEMA_FILE = 'packages/cli/json-output-schema.json';

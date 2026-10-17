@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker';
-import type { CliConfig } from '../cli-config';
-import type { SavedTarget } from '../fan-out';
+import type { CliConfig } from '../config/cli-config';
+import type { SavedTarget } from '../hosts/fan-out';
 
 interface SavedTargetOverrides {
   readonly host?: string;

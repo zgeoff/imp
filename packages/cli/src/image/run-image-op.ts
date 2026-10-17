@@ -1,7 +1,7 @@
 import type { Image, ImageOpEvent } from '@impz/api';
 import { readFeatures } from '@impz/client';
+import type { ImpClient } from '../config/create-imp-client';
 import type { ProgressOutput } from '../cp/copy-progress';
-import type { ImpClient } from '../create-imp-client';
 import { createBuildStatus } from './build-status';
 
 type AddInput = Parameters<ImpClient['images']['add']>[0];

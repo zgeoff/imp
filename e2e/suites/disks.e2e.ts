@@ -101,7 +101,7 @@ test('it grows a disk past its image at the first boot, at once while running, o
     exitCode: 1,
     stdout: '',
     stderr:
-      'impz: BAD_REQUEST: a disk of 65536 MiB is smaller than the disk now; a disk only grows (133120 MiB)\n',
+      'impz: BAD_REQUEST: a disk of 64.0 GiB is smaller than the disk now; a disk only grows (130 GiB)\n',
   });
 
   await runImp('stop', name);

@@ -1,8 +1,13 @@
-import { defineCommand, defineGroup } from '../define-command';
-import { formatBackupRun, formatBackupStatus, formatImps, formatOutput } from '../format-output';
-import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
-import { jsonArg } from './common-args';
+import { jsonArg } from '../args/common-args';
+import { defineCommand, defineGroup } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import {
+  formatBackupRun,
+  formatBackupStatus,
+  formatImps,
+  formatOutput,
+} from '../output/format-output';
 
 // a zone is required to be unambiguous; without one the time is UTC, never
 // this machine's zone (docs/architecture/storage/backups.md#restore)

@@ -2,13 +2,11 @@ import { expect, mock, test } from 'bun:test';
 import { createCopyProgress, formatProgress } from './copy-progress';
 
 test('#formatProgress shows the percent of a known total', () => {
-  expect(formatProgress(1_048_576 * 30, 1_048_576 * 120)).toBe(
-    'impz cp: 25% 30.0 MiB of 120.0 MiB',
-  );
+  expect(formatProgress(1_048_576 * 30, 1_048_576 * 120)).toBe('impz cp: 25% 30.0 MiB of 120 MiB');
 });
 
 test('#formatProgress shows the bytes so far when the total is unknown', () => {
-  expect(formatProgress(1_048_576 / 2, null)).toBe('impz cp: 0.5 MiB');
+  expect(formatProgress(1_048_576 / 2, null)).toBe('impz cp: 512 KiB');
 });
 
 test('#formatProgress shows the bytes so far when the total is zero', () => {

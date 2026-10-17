@@ -25,8 +25,8 @@ import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubServiceAgent } from '@impz/daemon/src/test-utils/start-stub-service-agent';
 import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
+import { UsageError } from '../cli/errors';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';
-import { UsageError } from '../usage-error';
 import { buildServiceDef, createLogPrinter, formatLogEvent } from './services';
 
 async function setupTest() {

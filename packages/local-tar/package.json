@@ -2,14 +2,15 @@
   "name": "@impz/local-tar",
   "version": "0.0.0",
   "private": true,
-  "description": "Local files as a tar: impz cp uploads and image build contexts, with .dockerignore",
+  "description": "Local files as a tar: impz cp uploads and downloads, and image build contexts, with .dockerignore",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "@balena/dockerignore": "catalog:",
-    "tar-stream": "catalog:"
+    "tar-stream": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@impz/test-utils": "workspace:*"

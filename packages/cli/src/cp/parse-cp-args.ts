@@ -1,5 +1,5 @@
 import { NameSchema } from '@impz/api';
-import { UsageError } from '../usage-error';
+import { UsageError } from '../cli/errors';
 
 // `impz cp ./dir box:/srv/dir` uploads; `impz cp box:/var/log/x .` downloads.
 // A side is in an imp when it reads NAME:PATH with a valid imp name; a local

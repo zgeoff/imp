@@ -19,10 +19,10 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
+import { UsageError } from '../cli/errors';
 import { buildStubOlderImpdFetch } from '../test-utils/build-stub-older-impd-fetch';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 import { startWarmMoveHosts } from '../test-utils/start-warm-move-hosts';
-import { UsageError } from '../usage-error';
 import { runMove } from './move';
 
 // two impds, a and b, each with the image its imps boot from
@@ -273,7 +273,7 @@ test('it draws the send’s progress on a terminal and ends the line', async () 
     (line: string) =>
       line.startsWith('\r') &&
       line.endsWith('\u001B[K') &&
-      /^impz move: \d+% \d+\.\d MiB of \d+\.\d MiB$/u.test(line.slice(1, -3)),
+      /^impz move: \d+% \d+(?:\.\d)? [KMG]?i?B of \d+(?:\.\d)? [KMG]?i?B$/u.test(line.slice(1, -3)),
   );
 });
 

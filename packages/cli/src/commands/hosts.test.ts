@@ -25,7 +25,7 @@ import { startStubExecAgent } from '@impz/daemon/src/test-utils/start-stub-exec-
 import { canUpdateReadOnly } from '@impz/test-utils/can-update-read-only';
 import { updateReadOnly } from '@impz/test-utils/update-read-only';
 import invariant from 'tiny-invariant';
-import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
+import { readHostConfig, resolveConfigPath, writeHostConfig } from '../config/host-store';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';
 
 // The CLI's home, and a real impd on a loopback port that the CLI child

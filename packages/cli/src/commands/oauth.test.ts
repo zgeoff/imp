@@ -15,8 +15,8 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { createPendingSignIn } from '@impz/daemon/src/test-utils/create-pending-sign-in';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import * as z from 'zod';
+import { UsageError } from '../cli/errors';
 import { runCLIInProcess } from '../test-utils/run-cli-in-process';
-import { UsageError } from '../usage-error';
 import { runApprove } from './oauth';
 
 async function setupTest() {

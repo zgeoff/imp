@@ -1,19 +1,20 @@
 import { watchEvents } from '@impz/client';
 import type { Imp } from '@impz/client';
-import { formatBytes } from '@impz/shared';
-import { defineCommand } from '../define-command';
+import { formatBytes, formatDuration } from '@impz/shared';
+import { jsonArg, nameArg } from '../args/common-args';
+import { cpuLimitArg, cpuWeightArg, readCpuArgs } from '../args/cpu-args';
+import { defineCommand } from '../cli/define-command';
+import { UsageError } from '../cli/errors';
+import { runAction } from '../cli/run-action';
+import { toSignalExitCode } from '../cli/to-signal-exit-code';
 import {
   formatCpuUse,
   formatDiskUse,
   formatImp,
   formatOutput,
   formatTable,
-} from '../format-output';
-import { parseCpuLimit, parseCpuWeight } from '../parse-cpu';
-import { parseCount } from '../parse-size';
-import { runAction } from '../run-action';
-import { UsageError } from '../usage-error';
-import { jsonArg, nameArg } from './common-args';
+} from '../output/format-output';
+import { parseCount } from '../parse/parse-size';
 
 // how often `impz top` asks again when no event comes
 const TOP_REFRESH_MS = 2000;
@@ -23,30 +24,8 @@ const TOP_EVENT_DEBOUNCE_MS = 200;
 const HIDE_CURSOR = '\u001B[?25l';
 const SHOW_CURSOR = '\u001B[?25h';
 
-// 128 + the signal's number, as a shell reports it
-const SIGNAL_EXIT_CODES = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
-
-export const cpuLimitArg = {
-  type: 'string',
-  description: 'cores the VM may use, such as 1.5, or none (default none)',
-} as const;
-
-export const cpuWeightArg = {
-  type: 'string',
-  description: 'share of the host under contention, 1 to 10000 (default 100)',
-} as const;
-
-interface CpuArgs {
-  readonly 'cpu-limit'?: string | undefined;
-  readonly 'cpu-weight'?: string | undefined;
-}
-
-export function readCpuArgs(args: CpuArgs) {
-  return {
-    ...(args['cpu-limit'] !== undefined && { cpuLimit: parseCpuLimit(args['cpu-limit']) }),
-    ...(args['cpu-weight'] !== undefined && { cpuWeight: parseCpuWeight(args['cpu-weight']) }),
-  };
-}
+// the signals that end top, each with its shell exit code
+const ENDING_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 
 export const setCommand = defineCommand({
   name: 'set',
@@ -112,13 +91,13 @@ export function formatTop(imps: readonly Imp[]): string {
         imp.state,
         formatCpuUse(imp),
         String(imp.cpu?.weight ?? '-'),
-        sample === undefined ? '-' : formatSeconds(sample.cpuThrottledMs),
+        sample === undefined ? '-' : formatDuration(sample.cpuThrottledMs),
         imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
         formatDiskUse(imp),
         sample === undefined ? '-' : formatBytes(sample.netRxBytes),
         sample === undefined ? '-' : formatBytes(sample.netTxBytes),
         String(imp.resources?.wakeCount ?? '-'),
-        imp.resources === undefined ? '-' : formatSeconds(imp.resources.awakeMs),
+        imp.resources === undefined ? '-' : formatDuration(imp.resources.awakeMs),
       ];
     }),
   );
@@ -145,10 +124,10 @@ export const topCommand = defineCommand({
       const refresh = { wake: (): void => {} };
 
       // the cursor comes back however top ends
-      for (const [signal, code] of Object.entries(SIGNAL_EXIT_CODES)) {
+      for (const signal of ENDING_SIGNALS) {
         process.once(signal, () => {
           process.stdout.write(`${SHOW_CURSOR}\n`);
-          process.exit(code);
+          process.exit(toSignalExitCode(signal) ?? 1);
         });
       }
 
@@ -191,15 +170,3 @@ export const topCommand = defineCommand({
       }
     }),
 });
-
-function formatSeconds(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-
-  if (seconds < 120) {
-    return `${String(seconds)}s`;
-  }
-
-  const minutes = Math.round(seconds / 60);
-
-  return minutes < 120 ? `${String(minutes)}m` : `${String(Math.round(minutes / 60))}h`;
-}

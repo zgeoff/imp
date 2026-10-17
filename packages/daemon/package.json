@@ -15,6 +15,7 @@
     "@impz/client": "workspace:*",
     "@impz/local-tar": "workspace:*",
     "@impz/mcp": "workspace:*",
+    "@impz/shared": "workspace:*",
     "@logtape/logtape": "catalog:",
     "@opentelemetry/api": "catalog:",
     "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",

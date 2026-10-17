@@ -1,7 +1,7 @@
 import type { Identity, SystemInfo } from '@impz/api';
 import { buildMockIdentity } from '@impz/api/test-utils/build-mock-identity';
 import { buildMockSystemInfo } from '@impz/api/test-utils/build-mock-system-info';
-import type { HostProbe } from '../place-imp';
+import type { HostProbe } from '../hosts/place-imp';
 
 // the parts of the info an older impd leaves out
 type OptionalInfoKey = {
