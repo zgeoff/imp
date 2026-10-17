@@ -24,39 +24,38 @@ imp is one Bun workspace for its TypeScript, plus a Go module for the guest agen
 takes the name `@impz/<folder>`, and another package imports a library as TypeScript source, with no
 build step.
 
-- [`agent/`](agent/): the guest agent, in Go, with imp-agent, imp-agentctl and ksm-exec under
-  [`cmd/`](agent/cmd/)
-- [`packages/`](packages/):
-  - [`api/`](packages/api/): the oRPC contract, schemas and exec stream framing of the control API
-  - [`cli/`](packages/cli/): impz, the command-line client
-  - [`client/`](packages/client/): the typed client for impd
-  - [`daemon/`](packages/daemon/): impd, the host daemon
-  - [`dashboard/`](packages/dashboard/): the web dashboard that impd serves at `/ui/`
-  - [`local-tar/`](packages/local-tar/): local files as a tar, for `impz cp` and image build
-    contexts
-  - [`mcp/`](packages/mcp/): the MCP server, with imps, exec, files and checkpoints as tools
-  - [`shared/`](packages/shared/): pure helpers that know nothing about imp
-  - [`test-utils/`](packages/test-utils/): the test preload and the utils every package's tests
-    share
-- [`proto/`](proto/): the agent protocol, from which `bun run gen:proto` generates the Go, the
-  TypeScript and [`docs/reference/agent-protocol.md`](docs/reference/agent-protocol.md)
-- [`host/`](host/): the host container image that runs impd
-- [`images/`](images/): the guest images that ship with imp
-- [`kernel/`](kernel/): the guest kernel build
-- [`deploy/`](deploy/): the Compose recipe, the systemd units, bootstrap and the NixOS module
-- [`e2e/`](e2e/): the end-to-end harness and its suites
-- [`scripts/`](scripts/): the ci, dev, release and render scripts
-- [`patches/`](patches/): bun patches for third-party packages
-- [`docs/`](docs/):
-  - [`architecture/`](docs/architecture/): how imp is built
-  - [`guides/`](docs/guides/): steps a user does
-  - [`reference/`](docs/reference/): generated reference
-  - [`runbooks/`](docs/runbooks/): operator and contributor procedures
+```text
+agent/             the guest agent, in Go: imp-agent, imp-agentctl and ksm-exec under cmd/
+packages/
+  api/             the oRPC contract, schemas and exec stream framing of the control API
+  cli/             impz, the command-line client
+  client/          the typed client for impd
+  daemon/          impd, the host daemon
+  dashboard/       the web dashboard that impd serves at /ui/
+  local-tar/       local files as a tar, for impz cp and image build contexts
+  mcp/             the MCP server: imps, exec, files and checkpoints as tools
+  shared/          pure helpers that know nothing about imp
+  test-utils/      the test preload and the utils every package's tests share
+proto/             the agent protocol; bun run gen:proto generates the Go, TypeScript and
+                   docs/reference/agent-protocol.md from it
+host/              the host container image that runs impd
+images/            the guest images that ship with imp
+kernel/            the guest kernel build
+deploy/            the Compose recipe, the systemd units, bootstrap and the NixOS module
+e2e/               the end-to-end harness and its suites
+scripts/           the ci, dev, release and render scripts
+patches/           bun patches for third-party packages
+docs/
+  architecture/    how imp is built
+  guides/          steps a user does
+  reference/       generated reference
+  runbooks/        operator and contributor procedures
+```
 
 ## Packages
 
-- Pin exact versions, with no `^` or `~` ranges. `bun add` saves exact versions, so the rule covers
-  hand-written edits.
+- Pin exact versions, with no `^` or `~` ranges. `bun add` saves exact versions through the `exact`
+  setting in [`bunfig.toml`](bunfig.toml), so the rule covers hand-written edits.
 - The `no-restricted-imports` blocks in [`.oxlintrc.json`](.oxlintrc.json) hold the package
   boundaries, and each pattern's message holds the fix.
 
