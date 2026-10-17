@@ -38,7 +38,10 @@ function formatArgError(error: Readonly<ArgsValidationError>): string {
       return `${flag} must be a whole number, not ${String(values['actual'])}`;
     }
     case 'err:arg:custom-parse': {
-      return formatParseFailure(flag, String(values['reason'] ?? error.message));
+      const reason = values['reason'];
+      const why = typeof reason === 'string' ? reason : error.message;
+
+      return formatParseFailure(flag, why);
     }
     case 'err:arg:conflict': {
       const other = readDisplayName(values['conflictDisplayName'], values['conflictName']);

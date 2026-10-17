@@ -1,4 +1,5 @@
 import type { ArgSchema, LazyCommand, SubCommandable } from 'gunshi';
+import { listEntries } from './list-entries';
 
 export const SHELLS = ['bash', 'zsh', 'fish'] as const;
 
@@ -90,7 +91,7 @@ function listSubCommands(command: SubCommandable): [string, CommandEntry][] {
   const subCommands: Readonly<Record<string, CommandEntry>> | ReadonlyMap<string, CommandEntry> =
     command.subCommands ?? {};
 
-  return subCommands instanceof Map ? [...subCommands] : Object.entries(subCommands);
+  return listEntries(subCommands);
 }
 
 // the node and every node under it, depth first

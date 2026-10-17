@@ -1,4 +1,5 @@
 import type { ArgSchema, CommandContext, SubCommandable } from 'gunshi';
+import { listEntries } from './list-entries';
 
 // The `--help` of a command as impz has always printed it. A command shows
 // its parent's name beside its own, and the root and its direct commands
@@ -126,7 +127,7 @@ function listOwnSubCommands(command: SubCommandable | undefined): [string, SubCo
     | Readonly<Record<string, SubCommandable>>
     | ReadonlyMap<string, SubCommandable> = command?.subCommands ?? {};
 
-  return subCommands instanceof Map ? [...subCommands] : Object.entries(subCommands);
+  return listEntries(subCommands);
 }
 
 // `=<name>` after a flag that takes a value, its name in snake case
