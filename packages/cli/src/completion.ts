@@ -17,7 +17,6 @@ export interface CompletionNode {
 // flags main handles itself, outside any citty command
 const ROOT_FLAGS = ['--host', '--version', '--help'];
 
-/* oxlint-disable prefer-readonly-parameter-types -- citty's CommandDef is mutable all the way down */
 export async function buildCompletionTree<T extends ArgsDef>(
   command: CommandDef<T>,
 ): Promise<CompletionNode> {
@@ -76,8 +75,6 @@ async function buildNode<T extends ArgsDef>(
     children,
   };
 }
-
-/* oxlint-enable prefer-readonly-parameter-types */
 
 const RENDERERS: Readonly<Record<Shell, (nodes: readonly CompletionNode[]) => string>> = {
   bash: renderBash,

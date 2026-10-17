@@ -12,7 +12,6 @@ import { readKsmHostStats } from './vmm/ksm';
 
 // `system.*`: what the host runs and holds, its storage GC, and a copy of
 // its database
-// oxlint-disable-next-line prefer-readonly-parameter-types -- an oRPC implementer, a builder with no readonly form
 export function buildSystemRoutes(os: RpcImplementer, deps: RouterDeps) {
   return {
     info: os.system.info.handler(() => readSystemInfo(deps)),

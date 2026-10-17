@@ -10,14 +10,12 @@ type ImpCommandContext<T extends ArgsDef> = CommandContext<T> & {
 type ImpCommandDef<T extends ArgsDef> = Omit<CommandDef<T>, 'run'> & {
   args?: T;
 
-  // oxlint-disable-next-line prefer-readonly-parameter-types -- citty's context is mutable
   run?: (context: ImpCommandContext<T>) => unknown;
 };
 
 // citty's defineCommand, but a flag the command does not declare is an
 // error: citty keeps it (`--checkpoint cp1` parses to `checkpoint: true`) and
 // the command would run as if it were not there.
-// oxlint-disable-next-line prefer-readonly-parameter-types -- citty's CommandDef is mutable all the way down
 export function defineCommand<T extends ArgsDef>(def: ImpCommandDef<T>): CommandDef<T> {
   const { run, ...rest } = def;
 
@@ -52,7 +50,6 @@ export function defineCommand<T extends ArgsDef>(def: ImpCommandDef<T>): Command
 
 // the keys citty can parse for these arguments: each name in its camelCase
 // and kebab-case spellings, and its aliases
-// oxlint-disable-next-line prefer-readonly-parameter-types -- citty's ArgsDef
 function listKnownKeys(args: ArgsDef): Set<string> {
   const known = new Set(['_', 'help', 'h']);
 

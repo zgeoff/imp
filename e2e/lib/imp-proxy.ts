@@ -30,7 +30,6 @@ interface OutputSink {
   text: string;
 }
 
-// oxlint-disable-next-line prefer-readonly-parameter-types -- the sink collects
 async function collectOutput(stream: ReadableStream<Uint8Array>, sink: OutputSink): Promise<void> {
   for await (const chunk of stream) {
     sink.text += decoder.decode(chunk);

@@ -106,7 +106,6 @@ export function createInProcessSocket(
       stopSocket(CLOSE_NORMAL, '');
     },
 
-    // oxlint-disable-next-line prefer-readonly-parameter-types -- the DOM's listener type
     addEventListener: (type: string, listener: Parameters<EventTarget['addEventListener']>[1]) => {
       events.addEventListener(type, listener);
     },

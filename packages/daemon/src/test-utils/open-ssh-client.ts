@@ -4,7 +4,6 @@ import type { ConnectConfig } from 'ssh2';
 
 // A real ssh2 client logged in with `config`, ended when the test finishes;
 // rejects with the client's error when the server refuses the login.
-// oxlint-disable-next-line prefer-readonly-parameter-types -- ssh2's config holds mutable keys
 export function openSshClient(config: ConnectConfig): Promise<Client> {
   const client = new Client();
 

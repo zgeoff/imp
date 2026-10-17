@@ -217,7 +217,6 @@ async function removeQuietly(path: string): Promise<void> {
   }
 }
 
-// oxlint-disable-next-line prefer-readonly-parameter-types -- a live file handle
 async function stopQuietly(file: FileHandle): Promise<void> {
   try {
     await file.close();

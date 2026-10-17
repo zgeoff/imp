@@ -6,9 +6,6 @@
     "es2024": true
   },
   "rules": {
-    // every file that tripped this needed an exemption rather than a change,
-    // so the count was never the thing worth holding down
-    "import/max-dependencies": "off",
     "zgeoff/function-verb": [
       "error",
       {
@@ -33,179 +30,12 @@
         ]
       }
     ],
-    "typescript/prefer-readonly-parameter-types": [
-      "error",
-      {
-        "ignoreInferredTypes": true,
-        "allow": [
-          // wraps a live db connection; not meaningfully freezable
-          { "from": "package", "name": "Database", "package": "bun:sqlite" },
-          // a zod schema: its methods build new schemas and never change it
-          { "from": "package", "name": "ZodType", "package": "zod" },
-          // query builders bound to a live connection; not meaningfully
-          // freezable
-          { "from": "package", "name": ["Kysely", "Transaction"], "package": "kysely" },
-          // every field is already readonly; the type itself has no
-          // readonly form to wrap it in
-          { "from": "package", "name": "CompiledQuery", "package": "kysely" },
-          // a kysely connection bound to a live driver; not meaningfully freezable
-          { "from": "package", "name": "DatabaseConnection", "package": "kysely" },
-          // kysely-codegen's introspection of the migrated database, which the
-          // schema render reads to build a copy
-          {
-            "from": "package",
-            "name": ["DatabaseMetadata", "TableMetadata", "ColumnMetadata", "EnumCollection"],
-            "package": "kysely-codegen"
-          },
-          // a migrator result read once for its error field, never mutated
-          { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
-          // the Kysely handle above under its schema-bound aliases
-          { "from": "file", "name": ["ImpDatabase", "ImpQueries"] },
-          // protobuf-es descriptors, JSON values and messages, which its API
-          // types as mutable; the agent client only reads them
-          {
-            "from": "package",
-            "name": [
-              "DescMessage",
-              "DescFile",
-              "DescField",
-              "JsonObject",
-              "JsonValue",
-              "Message",
-              "MessageInit",
-              "MessageInitShape"
-            ],
-            "package": "@bufbuild/protobuf"
-          },
-          // the agent protocol's generated messages, mutable for the same reason
-          {
-            "from": "file",
-            "name": [
-              "Activity",
-              "ErrorData",
-              "InnerStatus",
-              "LogCursor",
-              "Ping",
-              "Previous",
-              "Request",
-              "Resume",
-              "ResumeFrom",
-              "ServiceDef",
-              "ServiceStatus",
-              "ServicesList",
-              "SessionInfo",
-              "Started"
-            ],
-            "path": "packages/daemon/src/agent-client/gen/imp/agent/v1/agent_pb.ts"
-          },
-          // a request to the agent, and a session impd saw: generated messages
-          // under the names impd gives them
-          {
-            "from": "file",
-            "name": "AgentRequest",
-            "path": "packages/daemon/src/agent-client/agent-requests.ts"
-          },
-          {
-            "from": "file",
-            "name": "SeenSession",
-            "path": "packages/daemon/src/sessions/session-cache.ts"
-          },
-          // tar-stream's live pack and extract streams, which `impz cp` drives
-          { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },
-          // a live socket or listener; reading and writing it is the point
-          { "from": "package", "name": ["Socket", "Server"], "package": "node:net" },
-          // dns-packet's records carry Buffers; the resolver only reads them
-          // or builds new ones
-          { "from": "package", "name": ["Answer", "DecodedPacket"], "package": "dns-packet" },
-          // the SSH gateway's live connections, channels and login requests,
-          // ssh2's record of a client, which the gateway only reads, and the
-          // client side its tests drive
-          {
-            "from": "package",
-            "name": [
-              "Connection",
-              "Session",
-              "ServerChannel",
-              "AuthContext",
-              "ClientInfo",
-              "Client",
-              "ClientChannel"
-            ],
-            "package": "ssh2"
-          },
-          // the MCP SDK's live server, transports and per-request context,
-          // and the request and auth records it hands a handler to read
-          {
-            "from": "package",
-            "name": [
-              "Server",
-              "Transport",
-              "WebStandardStreamableHTTPServerTransport",
-              "ServerContext",
-              "CallToolRequest",
-              "AuthInfo"
-            ],
-            "package": "@modelcontextprotocol/server"
-          },
-          // live streams the SSH gateway relays between
-          { "from": "package", "name": ["Readable", "Writable"], "package": "node:stream" },
-          { "from": "package", "name": "Buffer", "package": "@types/node" },
-          // live servers, sockets and streams the proxy relays between
-          { "from": "file", "name": "ProxyServer" },
-          {
-            "from": "package",
-            "name": [
-              "WebSocket",
-              "ServerWebSocket",
-              "MessageEvent",
-              "ReadableStream",
-              "Headers",
-              "Request",
-              "Response",
-              "Blob"
-            ],
-            "package": "bun-types"
-          },
-          { "from": "lib", "name": ["WebSocket", "MessageEvent", "ReadableStream", "Headers"] },
-          // an Error: its stack and message are the runtime's to set
-          { "from": "file", "name": "ExecError", "path": "packages/client/src/exec/exec-error.ts" },
-          // dependency bags that carry the live db handle
-          { "from": "file", "name": ["RouterDeps", "AppDeps"] },
-          // the dashboard's provider props carry the live SDK client
-          { "from": "file", "name": "ImpdProviderProps" },
-          // the dashboard's stub impd and the router's history hold live state
-          { "from": "file", "name": "StubImpd" },
-          { "from": "package", "name": "RouterHistory", "package": "@tanstack/history" },
-          // already the readonly form, or a value type with no readonly form,
-          // that the rule doesn't recognize as such
-          {
-            "from": "lib",
-            "name": ["ReadonlySet", "ReadonlyMap", "Uint8Array", "Request", "Date", "Promise"]
-          },
-          // the abort signal under its Node declaration, which Bun's globals use
-          { "from": "package", "name": "AbortSignal", "package": "@types/node" },
-          // DOM values the dashboard reads and never changes: a form's
-          // fields, an abort signal, an error, a stream reader
-          {
-            "from": "lib",
-            "name": ["FormData", "AbortSignal", "Error", "ReadableStreamDefaultReader"]
-          },
-          // React's own prop types, which have no readonly form
-          { "from": "package", "name": ["ReactNode", "ButtonHTMLAttributes"], "package": "react" }
-        ]
-      }
-    ],
     // zod's documented import form is `import * as z from 'zod'`
     "import/no-namespace": "off",
-    "max-statements": "off",
-    "max-lines-per-function": "off",
+    // off until GEO-1198 splits the files over 500 lines
     "max-lines": "off",
+    // off until GEO-1199 trims the functions that take more than 4 parameters
     "max-params": "off",
-    "no-inline-comments": "off",
-    "no-continue": "off",
-    "init-declarations": "off",
-    "no-await-in-loop": "off",
-    "promise/avoid-new": "off",
     "require-unicode-regexp": "off"
   },
   "overrides": [

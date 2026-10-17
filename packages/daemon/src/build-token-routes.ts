@@ -2,7 +2,6 @@ import { toIdentity } from './auth/caller';
 import type { RouterDeps, RpcImplementer } from './build-router';
 
 // `tokens.*`: the API tokens, their lists and their SSH keys
-// oxlint-disable-next-line prefer-readonly-parameter-types -- an oRPC implementer, a builder with no readonly form
 export function buildTokenRoutes(os: RpcImplementer, deps: RouterDeps) {
   return {
     list: os.tokens.list.handler(() => deps.tokens.list()),
