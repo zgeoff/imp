@@ -187,7 +187,12 @@ export type {
 export type { Session } from './schemas/session-schema';
 export { SESSION_LOG_READ_MAX_BYTES } from './schemas/session-log-schema';
 export type { SessionLog, SessionLogRead } from './schemas/session-log-schema';
-export { SYSTEM_FEATURES, SystemInfoSchema } from './schemas/system-info-schema';
+
+export {
+  SYSTEM_FEATURES,
+  SystemFeaturesInfoSchema,
+  SystemInfoSchema,
+} from './schemas/system-info-schema';
 
 export {
   ImageRefPrefixSchema,
@@ -200,5 +205,5 @@ export {
 export type { Identity, Scope, SshKey, Token } from './schemas/token-schema';
 export { ApprovalCodeSchema, GrantPatternSchema, RedirectUriSchema } from './schemas/oauth-schema';
 export type { OAuthApproval, OAuthClient, OAuthGrant } from './schemas/oauth-schema';
-export type { SystemInfo } from './schemas/system-info-schema';
+export type { SystemFeaturesInfo, SystemInfo } from './schemas/system-info-schema';
 export { hasScope } from './rules/has-scope';

@@ -33,24 +33,28 @@ test('it lists a held imp with a hold that never expires', async () => {
   expect(awake[0]?.holdUntil).toBe(Number.MAX_SAFE_INTEGER);
 });
 
-test('it measures an awake imp', () => {
+test('it measures an awake imp', async () => {
   const host = buildStubGovernedHost({
     budgetMib: 1000,
     ids: ['a', 'b'],
     awake: [{ id: 'a', rssMib: 100 }],
   });
 
-  expect(host.deps.readRamMib(1, 'a')).toBe(100);
+  const ramMib = await host.deps.readRamMib(1, 'a');
+
+  expect(ramMib).toBe(100);
 });
 
-test('it measures nothing for an asleep imp', () => {
+test('it measures nothing for an asleep imp', async () => {
   const host = buildStubGovernedHost({
     budgetMib: 1000,
     ids: ['a', 'b'],
     awake: [{ id: 'a', rssMib: 100 }],
   });
 
-  expect(host.deps.readRamMib(2, 'b')).toBeNull();
+  const ramMib = await host.deps.readRamMib(2, 'b');
+
+  expect(ramMib).toBeNull();
 });
 
 test('it sleeps an awake imp the governor asks for', async () => {

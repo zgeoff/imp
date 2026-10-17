@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { ImpEvent } from '@impz/api';
+import { waitFor } from '@impz/test-utils/wait-for';
 import fc from 'fast-check';
 import { createEventBus } from '../events/event-bus';
 import { buildStubGovernedHost } from '../test-utils/build-stub-governed-host';
@@ -481,6 +482,49 @@ test('it reports no headroom while KSM saves nothing', async () => {
   const usage = await governor.readUsage();
 
   expect(usage).toStrictEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
+});
+
+test('it measures every awake imp at once, each read started before any ends', async () => {
+  const host = buildStubGovernedHost({
+    budgetMib: 1000,
+    ids: ['a', 'b', 'c'],
+    awake: [
+      { id: 'a', rssMib: 100 },
+      { id: 'b', rssMib: 200 },
+      { id: 'c', rssMib: 300 },
+    ],
+  });
+
+  const pending = new Map<string, PromiseWithResolvers<number | null>>();
+
+  // each read waits for the test; the usage resolves only once all three ran
+  const governor = createRamGovernor({
+    ...host.deps,
+    readRamMib: (_pid, id) => {
+      const read = Promise.withResolvers<number | null>();
+
+      pending.set(id, read);
+
+      return read.promise;
+    },
+    log: () => {},
+  });
+
+  const usage = governor.readUsage();
+
+  await waitFor(() => {
+    expect([...pending.keys()]).toStrictEqual(['a', 'b', 'c']);
+  });
+
+  for (const [id, read] of pending) {
+    const ramMib = await host.deps.readRamMib(0, id);
+
+    read.resolve(ramMib);
+  }
+
+  const measured = await usage;
+
+  expect(measured).toStrictEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
 });
 
 test('it reports the KSM headroom in the usage', async () => {

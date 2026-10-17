@@ -9,7 +9,7 @@ import { printLog } from '../process/print-log';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { readKsmProfitMib } from '../vmm/ksm';
-import { readOwnedRamMib } from '../vmm/vm-stats';
+import { readOwnedRamMib, readOwnedRamMibAsync } from '../vmm/vm-stats';
 import { createRamGovernor } from './ram-governor';
 import type { RamAdmission, RamGovernor } from './ram-governor';
 
@@ -116,7 +116,10 @@ export function createGovernedImps(deps: GovernedDeps): {
           : [],
       );
     },
-    readRamMib,
+    readRamMib:
+      deps.readRamMib === undefined
+        ? readOwnedRamMibAsync
+        : (pid, apiSocket) => Promise.resolve(readRamMib(pid, apiSocket)),
     readHeadroomMib,
 
     isBusy,

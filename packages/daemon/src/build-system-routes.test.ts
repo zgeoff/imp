@@ -4,6 +4,7 @@ import { statSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SYSTEM_FEATURES } from '@impz/api';
 import { createImpClient } from '@impz/client';
 import { waitFor } from '@impz/test-utils/wait-for';
 import invariant from 'tiny-invariant';
@@ -21,7 +22,8 @@ import { buildStubCpuCgroups } from './test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from './test-utils/build-stub-vmm';
 import { findFreePorts } from './test-utils/find-free-ports';
 
-// system.copyDatabase through the API (docs/guides/operations.md#database-copy-and-restore)
+// system.features, and system.copyDatabase through the API
+// (docs/guides/operations.md#database-copy-and-restore)
 
 // impd's real app on stub VMs, with its database and data dir, and a root
 // client that reaches the app in process
@@ -55,6 +57,9 @@ async function setupTest() {
   await writeFile(systemDrivePath, drive);
 
   const vmm = buildStubVmm();
+
+  // the pids each RAM reading measured
+  const ramReads: number[] = [];
 
   const impd = await createImpd(config, {
     db,
@@ -115,7 +120,11 @@ async function setupTest() {
       readUplinks: () => Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
     },
     imps: {
-      readRamMib: (pid) => (vmm.alive.has(pid) ? 300 : null),
+      readRamMib: (pid) => {
+        ramReads.push(pid);
+
+        return vmm.alive.has(pid) ? 300 : null;
+      },
       readRssMib: (pid) => (vmm.alive.has(pid) ? 340 : null),
       growFilesystem: () => Promise.resolve(false),
       hostCpus: 8,
@@ -143,9 +152,47 @@ async function setupTest() {
     db,
     dataDir,
     sendToImpd,
+    ramReads,
     client: createImpClient({ url: 'http://impd.test', token: 'root-token', fetch: sendToImpd }),
   };
 }
+
+test('it answers the features with the impd version and every feature on', async () => {
+  const ctx = await setupTest();
+  const answer = await ctx.client.system.features();
+
+  expect(answer).toStrictEqual({
+    version: packageJson.version,
+    features: SYSTEM_FEATURES,
+  });
+});
+
+test('it answers the features without measuring an awake imp', async () => {
+  const ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  ctx.ramReads.length = 0;
+
+  await ctx.client.system.features();
+
+  expect(ctx.ramReads).toStrictEqual([]);
+});
+
+test('it answers the features to a read-only token', async () => {
+  const ctx = await setupTest();
+  const made = await ctx.client.tokens.create({ name: 'watcher', scope: 'read' });
+
+  const reader = createImpClient({
+    url: 'http://impd.test',
+    token: made.secret,
+    fetch: ctx.sendToImpd,
+  });
+
+  const answer = await reader.system.features();
+
+  expect(answer.features).toStrictEqual(SYSTEM_FEATURES);
+});
 
 test('it answers a copy with its fields in the order a restore script reads them', async () => {
   const ctx = await setupTest();

@@ -231,6 +231,16 @@ export const SystemInfoSchema = z.object({
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;
 
+// system.features: system.info's version and features without its report,
+// which measures every awake VM; absent from an impd older than it, which
+// answers NOT_FOUND
+export const SystemFeaturesInfoSchema = z.object({
+  version: z.string(),
+  features: SystemFeaturesSchema,
+});
+
+export type SystemFeaturesInfo = z.infer<typeof SystemFeaturesInfoSchema>;
+
 // every feature SystemFeaturesSchema names, each on: what the current impd
 // says it can do, so adding a feature means editing only the schema
 export const SYSTEM_FEATURES = SystemFeaturesSchema.required().parse(
