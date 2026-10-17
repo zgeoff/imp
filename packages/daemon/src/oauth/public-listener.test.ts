@@ -759,7 +759,6 @@ test('it signs an MCP client in through its OAuth provider and lists the tools i
 
   // the operator's front: a request for the route's origin goes to the
   // listener's own port, with the origin's host
-  // oxlint-disable-next-line prefer-readonly-parameter-types -- the MCP SDK's fetch signature
   const sendThroughFront = (url: string | URL, init?: RequestInit): Promise<Response> => {
     const target = new URL(url);
 
