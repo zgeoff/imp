@@ -104,6 +104,8 @@ content=$(
     echo "IMP_HOST_ADDRESSES=$addresses"
   } | awk -v container_keys="${IMP_CONTAINER_KEYS:-}" '
     BEGIN { n = split(container_keys, keys, " "); for (i = 1; i <= n; i++) dropped[keys[i]] = 1 }
+    # docker and host/entrypoint drop leading space, so a key matches here as there
+    { sub(/^[[:space:]]+/, "") }
     /^[A-Za-z_][A-Za-z0-9_]*=/ { key = substr($0, 1, index($0, "=") - 1); last[key] = NR }
     { line[NR] = $0 }
     END {

@@ -371,7 +371,7 @@ test('it copies the secrets file in, where a later line replaces an earlier one'
   );
 });
 
-test('it leaves out the keys docker run sets with -e, whichever file sets them', () => {
+test('it leaves out the keys docker run sets with -e, indented or not, whichever file sets them', () => {
   const ctx = setupTest();
   const ip = createStubBin(ctx.dir, 'ip');
 
@@ -380,7 +380,7 @@ test('it leaves out the keys docker run sets with -e, whichever file sets them',
 
   writeFileSync(
     join(ctx.dir, 'secrets'),
-    'AWS_SECRET_ACCESS_KEY=fake-secret\nDOCKER_HOST=unix:///nowhere.sock\n',
+    'AWS_SECRET_ACCESS_KEY=fake-secret\n  DOCKER_HOST=unix:///nowhere.sock\n',
   );
 
   const result = Bun.spawnSync(
