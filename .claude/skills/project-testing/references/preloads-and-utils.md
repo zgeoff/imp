@@ -20,8 +20,7 @@ The end-to-end suites run under a preload of their own, with no MSW server, beca
 talks to a real dev instance over the network.
 
 The shared test utils hold the condition wait
-[`waitFor`](../../../../packages/test-utils/src/wait-for.ts), the narrowing helper
-[`invariant`](../../../../packages/test-utils/src/invariant.ts), and the scripted answer queue
+[`waitFor`](../../../../packages/test-utils/src/wait-for.ts) and the scripted answer queue
 [`buildStubAnswerQueue`](../../../../packages/test-utils/src/build-stub-answer-queue.ts). The queue
 hands out a dependency's answers in order and throws on a call past the last one, so a test that
 expects three calls fails on a fourth.

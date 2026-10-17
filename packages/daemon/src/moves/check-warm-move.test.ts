@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { create } from '@bufbuild/protobuf';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { ServicesListSchema } from '../agent-client/agent-protocol';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';

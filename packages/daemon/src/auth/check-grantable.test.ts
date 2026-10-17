@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ImpSchema } from '@impz/api';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { utils } from 'ssh2';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import type { ImpdDeps } from '../create-impd';
@@ -588,7 +588,7 @@ test('it lets the token’s dashboard session grant a listed secret on its imps'
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
@@ -636,7 +636,7 @@ test.each([
 
     const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-    invariant(cookie);
+    invariant(cookie !== undefined);
 
     const browser: ContractRouterClient<ImpContract> = createORPCClient(
       new RPCLink({
@@ -677,7 +677,7 @@ test('it refuses the token’s dashboard session a fork', async () => {
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
@@ -716,7 +716,7 @@ test('it names the token’s list to its dashboard session', async () => {
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
@@ -961,7 +961,7 @@ test('it refuses the dashboard session a grant of a listed secret deleted and ma
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   await ctx.client.secrets.delete({ name: 'gh' });
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126-0' });
@@ -1794,7 +1794,7 @@ test('it refuses a move prepare to the dashboard session of a token whose entrie
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({
@@ -1837,7 +1837,7 @@ test('it refuses a fork to the dashboard session of a token whose entries are al
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
     new RPCLink({

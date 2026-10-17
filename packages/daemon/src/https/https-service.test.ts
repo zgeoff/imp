@@ -3,10 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildStubAnswerQueue } from '@impz/test-utils/build-stub-answer-queue';
-import { invariant } from '@impz/test-utils/invariant';
 import { server } from '@impz/test-utils/mock-server';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { HttpResponse, http } from 'msw';
+import invariant from 'tiny-invariant';
 import { buildMockCertificate } from '../test-utils/build-mock-certificate';
 import { buildMockPublicImp } from '../test-utils/build-mock-public-imp';
 import { buildStubCloudflareApi } from '../test-utils/build-stub-cloudflare-api';
@@ -530,8 +530,8 @@ test('it serves nothing on any port without a DNS token file', async () => {
 
   // the renewal and address passes have both failed
   await waitFor(() => {
-    invariant(ctx.logs.find((line) => line.includes('no certificate for imp.test')));
-    invariant(ctx.logs.find((line) => line.includes('cannot point')));
+    invariant(ctx.logs.some((line) => line.includes('no certificate for imp.test')));
+    invariant(ctx.logs.some((line) => line.includes('cannot point')));
   });
 
   const knocks = await Promise.allSettled(
@@ -1043,7 +1043,7 @@ test('it serves the public listener on its own port', async () => {
 
   const ports = service.readPorts();
 
-  invariant(ports.public?.https);
+  invariant(typeof ports.public?.https === 'number');
 
   const response = await fetch(`https://127.0.0.1:${String(ports.public.https)}/`, {
     headers: { host: 'web.imp.test' },
@@ -1531,7 +1531,7 @@ test('it asks for a certificate again on each renewal tick', async () => {
 
   // the first pass runs at start, before any tick
   await waitFor(() => {
-    invariant(asked[0], 'no first renewal yet');
+    invariant(asked[0] !== undefined, 'no first renewal yet');
   });
 
   // past any backoff the failed first pass set: the longest is a day

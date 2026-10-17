@@ -3,13 +3,13 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { server } from '@impz/test-utils/mock-server';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { HttpResponse, http } from 'msw';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
@@ -768,7 +768,7 @@ test('it shows an imp’s service URL once its name is live', async () => {
 
   const oauthFile = ctx.config.tailnetNames?.oauthFile;
 
-  invariant(oauthFile);
+  invariant(oauthFile !== undefined);
 
   await mkdir(dirname(oauthFile), { recursive: true });
 
@@ -799,7 +799,7 @@ test('it shows no service URL before the name is live', async () => {
   const failure = await waitFor(() => {
     const line = ctx.impdLogs.find((each) => each.startsWith('impd: tailnet names: box: '));
 
-    invariant(line);
+    invariant(line !== undefined);
 
     return line;
   });

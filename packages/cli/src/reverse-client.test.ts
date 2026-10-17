@@ -22,8 +22,8 @@ import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { createImpClient } from './create-imp-client';
 import { parseReverse } from './parse-reverse';
 import { startReverseForward } from './reverse-client';

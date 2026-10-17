@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ApiCall, ImpEvent, Scope } from '@impz/api';
 import { createImpClient } from '@impz/client';
-import { invariant } from '@impz/test-utils/invariant';
 import { readImpEnv } from '@impz/test-utils/read-imp-env';
 import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { buildApiListenOptions } from '../api-listen-options';
 import { loadConfig } from '../config';
@@ -858,7 +858,7 @@ test('it closes at once a socket that opens after its token is revoked', async (
 
   const tokenId = /^imp_(?<id>[^.]+)\./v.exec(made.secret)?.groups?.['id'];
 
-  invariant(tokenId);
+  invariant(tokenId !== undefined);
 
   ctx.impd.revocations.revoke(tokenId);
 

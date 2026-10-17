@@ -5,8 +5,8 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createImpClient } from '@impz/client';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import packageJson from '../package.json' with { type: 'json' };
 import { loadConfig } from './config';
 import { createImpd } from './create-impd';
@@ -170,7 +170,7 @@ test('it answers a copy with its path, size, schema version, impd version and ti
   // the schema version is the newest migration this impd holds
   const lastMigration = Object.keys(MIGRATIONS).toSorted().at(-1);
 
-  invariant(lastMigration);
+  invariant(lastMigration !== undefined);
 
   expect(copy).toStrictEqual({
     path,

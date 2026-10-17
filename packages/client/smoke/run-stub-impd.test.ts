@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { createImpClient } from '../src/create-imp-client';
 
@@ -41,7 +41,7 @@ async function setupTest() {
       const [first, afterFirst] = text.split('\n');
 
       // no text after a first newline: the line is not complete yet
-      invariant(afterFirst, 'run-stub-impd is not ready yet');
+      invariant(afterFirst !== undefined, 'run-stub-impd is not ready yet');
 
       return first ?? '';
     },

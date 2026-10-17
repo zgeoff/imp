@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpEvent } from '@impz/api';
 import { createImpClient } from '@impz/client';
-import { invariant } from '@impz/test-utils/invariant';
 import { readImpEnv } from '@impz/test-utils/read-imp-env';
 import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { createImage } from '../db/images';
@@ -187,7 +187,7 @@ test('it answers an acquire with the lease’s owner and end', async () => {
 
   const principal = ctx.impd.tokens.authenticate(made.secret)?.principal;
 
-  invariant(principal);
+  invariant(typeof principal === 'string');
 
   expect(leased).toStrictEqual({
     name: 'dev',

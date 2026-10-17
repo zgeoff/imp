@@ -36,8 +36,8 @@ import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
 import { startStubDialAgent } from '@impz/daemon/src/test-utils/start-stub-dial-agent';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { createImpClient } from './create-imp-client';
 import { formatTunnelClose, readTunnelServerMessage, startProxy } from './proxy-client';
 import { sendLocalRequest } from './test-utils/send-local-request';
@@ -203,7 +203,7 @@ test('#startProxy relays a half-closed request and its reply on both loopbacks',
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const ipv4Reply = await sendLocalRequest('127.0.0.1', port, new TextEncoder().encode('hello'));
   const ipv6Reply = await sendLocalRequest('::1', port, new TextEncoder().encode('hi'));
@@ -260,7 +260,7 @@ test('#startProxy stops reading an upload at the window while the guest takes no
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   // a client whose upload the guest never lets finish
   const upload = connect({ host: '127.0.0.1', port });
@@ -338,7 +338,7 @@ test('#startProxy sends the rest of an upload once the guest takes it again', as
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const reply = sendLocalRequest('127.0.0.1', port, new Uint8Array(size));
 
@@ -500,7 +500,7 @@ test('#startProxy reports impd’s refusal of a dial and resets the local connec
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const reply = sendLocalRequest('127.0.0.1', port, new Uint8Array(1));
 
@@ -548,7 +548,7 @@ test('#startProxy ends only the tunnel that gets a message that is not JSON, and
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const broken = connect({ host: '127.0.0.1', port });
   const brokenEnd = Promise.withResolvers<boolean>();
@@ -637,7 +637,7 @@ test('#startProxy says impd restarted when impd closes an open tunnel to restart
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const reply = sendLocalRequest('127.0.0.1', port, new Uint8Array(1));
 
@@ -679,7 +679,7 @@ test('#startProxy prints one notice for a burst of connections that cannot reach
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   // impd goes away once the proxy checked the imp
   await ctx.server.stop(true);
@@ -721,7 +721,7 @@ test('#startProxy prints the notice again once the quiet time passed without a f
 
   const [port] = proxy.ports;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   await ctx.server.stop(true);
   await Promise.allSettled([sendLocalRequest('127.0.0.1', port, new Uint8Array(1))]);

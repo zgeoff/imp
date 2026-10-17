@@ -21,7 +21,7 @@ import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-im
 import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { runCli } from '../test-utils/start-cli';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
 import { UsageError } from '../usage-error';
@@ -135,7 +135,7 @@ async function setupTest() {
 
   const port = app.server?.port;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 

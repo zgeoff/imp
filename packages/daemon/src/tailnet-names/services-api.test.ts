@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
+import invariant from 'tiny-invariant';
 import { buildStubTailscaleApi } from '../test-utils/build-stub-tailscale-api';
 import { createServicesApi } from './services-api';
 
@@ -37,7 +37,7 @@ test('it sends the token it was given as a bearer token', async () => {
 
   const [token] = stub.readIssuedTokens();
 
-  invariant(token);
+  invariant(token !== undefined);
 
   expect(stub.requests.at(-1)?.authorization).toBe(`Bearer ${token}`);
 });
@@ -372,7 +372,7 @@ test('it keeps the client secret and the token out of an API error', async () =>
     throw new Error('the write was not refused');
   }
 
-  invariant(token);
+  invariant(token !== undefined);
 
   expect(String(settled.reason)).toBe(
     'TailscaleApiError: Tailscale PUT /tailnet/-/services/svc%3Abox: 400 name already in use by a machine',

@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { waitAwakePastIdle } from '../lib/awake-past-idle';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
@@ -59,9 +59,9 @@ test('it keeps an imp awake while a proxied connection is open, wakes it on a co
 
   const [pagePort, heldPort, countPort] = proxy.ports;
 
-  invariant(pagePort);
-  invariant(heldPort);
-  invariant(countPort);
+  invariant(pagePort !== undefined);
+  invariant(heldPort !== undefined);
+  invariant(countPort !== undefined);
 
   // an open connection keeps it awake past the idle timeout, and it sleeps
   // once the connection ends

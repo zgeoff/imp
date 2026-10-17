@@ -4,10 +4,10 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import type { ImpdDeps } from '../create-impd';
@@ -181,7 +181,7 @@ test('it marks since when the agent is silent and keeps the imp running under re
 
   const created = await findImpByName(ctx.db, 'dev');
 
-  invariant(created?.pid);
+  invariant(typeof created?.pid === 'number');
 
   // the idle loop's two looks, 11 s apart, and the confirming ping fails
   impd.imps.watchdog.observe(created, false);
@@ -225,7 +225,7 @@ test('it kills the VM and boots the imp cold under restart, saying why', async (
 
   const created = await findImpByName(ctx.db, 'dev');
 
-  invariant(created?.pid);
+  invariant(typeof created?.pid === 'number');
 
   // the confirming ping fails, and so does the look under the lock
   impd.imps.watchdog.observe(created, false);
@@ -297,7 +297,7 @@ test('it writes the memory to the owner-only watchdog slot under snapshot, then 
 
   const created = await findImpByName(ctx.db, 'dev');
 
-  invariant(created?.pid);
+  invariant(typeof created?.pid === 'number');
 
   impd.imps.watchdog.observe(created, false);
   ctx.advance(11_000);
@@ -372,7 +372,7 @@ test('it boots the imp cold with no slot under snapshot when the disk has no roo
 
   const created = await findImpByName(ctx.db, 'dev');
 
-  invariant(created?.pid);
+  invariant(typeof created?.pid === 'number');
 
   // below the 5 GiB reserve
   ctx.disk.availableBytes = 4 * 1024 ** 3;
@@ -412,7 +412,7 @@ test('it keeps the VM under restart when the agent answers again under the lock'
 
   const created = await findImpByName(ctx.db, 'dev');
 
-  invariant(created?.pid);
+  invariant(typeof created?.pid === 'number');
 
   // the confirming ping fails; the look under the lock gets an answer
   impd.imps.watchdog.observe(created, false);
@@ -448,7 +448,7 @@ test('it leaves alone under restart a VM that a sleep and a wake replaced during
 
   const created = await findImpByName(ctx.db, 'dev');
 
-  invariant(created?.pid);
+  invariant(typeof created?.pid === 'number');
 
   // the watchdog saw an older pid than the record holds now
   const seen = { ...created, pid: created.pid + 1000 };

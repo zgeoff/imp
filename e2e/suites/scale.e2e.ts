@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../../packages/daemon/src/config';
 import { ENFORCE_INTERVAL_MS } from '../../packages/daemon/src/governor/ram-governor';
 import { findOvershoots } from '../lib/budget-overshoot';

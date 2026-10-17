@@ -4,13 +4,13 @@ import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { readImpEnv } from '@impz/test-utils/read-imp-env';
 import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import packageJson from '../package.json' with { type: 'json' };
 import { buildApiListenOptions } from './api-listen-options';
 import { loadConfig } from './config';
@@ -722,7 +722,7 @@ test('it keeps only a hash of an exposed imp’s credential', async () => {
     .select(['public_hash', 'public_user'])
     .executeTakeFirstOrThrow();
 
-  invariant(exposed.credential);
+  invariant(exposed.credential !== null);
 
   expect(row.public_user).toBe('imp');
   expect(row.public_hash).toBeString();

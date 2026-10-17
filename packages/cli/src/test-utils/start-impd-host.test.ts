@@ -4,7 +4,7 @@ import { createImpClient } from '@impz/client';
 import { createImage } from '@impz/daemon/src/db/images';
 import { buildImagePaths } from '@impz/daemon/src/storage/data-layout';
 import { buildMockNewImage } from '@impz/daemon/src/test-utils/build-mock-new-image';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { startImpdHost } from './start-impd-host';
 
 // the stack the host's releases go into, disposed when the test ends

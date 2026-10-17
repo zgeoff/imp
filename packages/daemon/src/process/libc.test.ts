@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { getLibc, getPidfdLibc, readErrno } from './libc';
 
 test('#getLibc opens libc once', () => {

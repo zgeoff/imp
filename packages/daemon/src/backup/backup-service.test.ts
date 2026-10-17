@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
 import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';
@@ -1723,8 +1723,8 @@ test('#restoreBackup grants a restored imp so that a token’s list entry from b
   const [entry] = caller.grantable;
   const generation = entry?.generation;
 
-  invariant(tokenId);
-  invariant(generation);
+  invariant(tokenId !== null);
+  invariant(generation !== undefined);
 
   await backups.runBackup();
 
@@ -2253,8 +2253,8 @@ test('#restoreBackup restores a token’s grantable list on a fresh host, so the
   const [entry] = caller.grantable;
   const generation = entry?.generation;
 
-  invariant(tokenId);
-  invariant(generation);
+  invariant(tokenId !== null);
+  invariant(generation !== undefined);
 
   await fresh.broker.addGrant('dev', 'gh', { tokenId, generation });
 

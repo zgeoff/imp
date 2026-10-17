@@ -4,13 +4,13 @@ import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { readImpEnv } from '@impz/test-utils/read-imp-env';
 import { updateEnv } from '@impz/test-utils/update-env';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import type { ImpdDeps } from '../create-impd';
@@ -685,7 +685,7 @@ test('it flushes no flows and drops the sets when an imp opens up', async () => 
 
   const table = ctx.nft.readTable();
 
-  invariant(table);
+  invariant(table !== null);
 
   expect(table).not.toInclude('allow0');
   expect(ctx.flushed).toStrictEqual([]);
@@ -1118,7 +1118,7 @@ test('it leaves nft and the database agreeing when a create meets a failing poli
 
   const table = ctx.nft.readTable();
 
-  invariant(table);
+  invariant(table !== null);
 
   expect(results.map((result) => result.status)).toStrictEqual([
     'rejected',
@@ -1375,7 +1375,7 @@ test('it builds the table from the rows when nft refuses a network change and th
 
   const table = ctx.nft.readTable();
 
-  invariant(table);
+  invariant(table !== null);
 
   expect(joined).toInclude('@net0');
   expect(table).not.toInclude('@net0');

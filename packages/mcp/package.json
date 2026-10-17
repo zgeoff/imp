@@ -18,6 +18,7 @@
     "@faker-js/faker": "catalog:",
     "@impz/daemon": "workspace:*",
     "@impz/test-utils": "workspace:*",
-    "@modelcontextprotocol/client": "catalog:"
+    "@modelcontextprotocol/client": "catalog:",
+    "tiny-invariant": "catalog:"
   }
 }

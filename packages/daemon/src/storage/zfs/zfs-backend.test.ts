@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { runChecked, runCommand } from '../../process/run-command';
 import type { CommandRunner } from '../../process/run-command';
 import { buildStubMoveStream } from '../../test-utils/build-stub-move-stream';
@@ -532,7 +532,7 @@ test('#restoreCheckpoint stages a clone before the halt and keeps every other ch
 
   const retired = ctx.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
 
-  invariant(retired);
+  invariant(retired !== undefined);
 
   expect(halted).toBe('halted');
   expect(atHalt.lastCommand).toBe('zfs clone tank/imp/disks/a@cp-old tank/imp/staging/restore-a');
@@ -558,7 +558,7 @@ test('#restoreCheckpoint restores a newer checkpoint that an earlier restore ret
 
   const retired = ctx.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
 
-  invariant(retired);
+  invariant(retired !== undefined);
 
   await ctx.backend.restoreCheckpoint('a', 'cp-new', () => Promise.resolve());
   await ctx.backend.waitForReclaim();
@@ -831,7 +831,7 @@ test('#createImpDisk forks a live disk from a fork snapshot marked for deferred 
 
   const forkSnapshot = ctx.fake.readOrigin('tank/imp/disks/b');
 
-  invariant(forkSnapshot);
+  invariant(forkSnapshot !== null);
 
   expect(forkSnapshot).toMatch(/^tank\/imp\/disks\/a@fork-/u);
   expect(ctx.fake.isDeferred(forkSnapshot)).toBeTrue();
@@ -1146,7 +1146,7 @@ test('#start after a lost database keeps the checkpoints a restore left in retir
 
   const retired = ctx.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
 
-  invariant(retired);
+  invariant(retired !== undefined);
 
   ctx.fake.restart(true);
   ctx.log.mockClear();
@@ -2245,7 +2245,7 @@ test('#receiveMoveSnapshots lands a restored imp as a clone of its retired check
 
   const retired = ctx.peer.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
 
-  invariant(retired);
+  invariant(retired !== undefined);
 
   expect(ctx.peer.fake.readOrigin('tank/imp/disks/a')).toBe(`${retired}@cp-moved1`);
 
@@ -2638,7 +2638,7 @@ test('#removeImpDisk logs a busy dataset once while a kernel oops holds it, not 
 
   const retired = ctx.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
 
-  invariant(retired);
+  invariant(retired !== undefined);
 
   await ctx.fake.run(['mount', '-t', 'zfs', retired, join(ctx.dataDir, 'held')]);
 
@@ -2676,7 +2676,7 @@ test('#removeImpDisk logs a busy dataset on each pass while the kernel has not o
 
   const retired = ctx.fake.listDatasets().find((name) => name.startsWith('tank/imp/retired/'));
 
-  invariant(retired);
+  invariant(retired !== undefined);
 
   await ctx.fake.run(['mount', '-t', 'zfs', retired, join(ctx.dataDir, 'held')]);
 

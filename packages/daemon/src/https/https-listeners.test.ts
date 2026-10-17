@@ -3,8 +3,8 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect } from 'node:tls';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { loadConfig } from '../config';
 import { createImpd } from '../create-impd';
 import { findPublicImp } from '../db/exposure';
@@ -659,7 +659,7 @@ test('it stops serving an address that goes away', async () => {
 
   const port = listeners.readPorts().https;
 
-  invariant(port);
+  invariant(port !== null);
 
   listeners.setAddresses([]);
 

@@ -6,9 +6,9 @@ import {
   TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_WINDOW_BYTES,
 } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { ORPCError } from '@orpc/server';
+import invariant from 'tiny-invariant';
 import { AgentError } from '../agent-client/agent-connection';
 import type { DialStream } from '../agent-client/dial-stream';
 import type { GuestListener } from '../agent-client/listener-stream';
@@ -454,7 +454,7 @@ test('it holds the ack of the client bytes until the guest has taken them', asyn
   dial.emit({ type: 'data', data: new TextEncoder().encode('reply') });
 
   const received = await waitFor(() => {
-    invariant(tunnel.binary[0], 'the guest bytes have not reached the client');
+    invariant(tunnel.binary[0] !== undefined, 'the guest bytes have not reached the client');
 
     return [...tunnel.binary];
   });
@@ -465,7 +465,7 @@ test('it holds the ack of the client bytes until the guest has taken them', asyn
   release();
 
   const sent = await waitFor(() => {
-    invariant(tunnel.sent[2], 'the second ack has not arrived');
+    invariant(tunnel.sent[2] !== undefined, 'the second ack has not arrived');
 
     return [...tunnel.sent];
   });
@@ -700,7 +700,7 @@ test('it refuses the 257th tunnel to an imp under the default limit', async () =
   lastSession.handleMessage({ type: 'open', name: 'box', port: 80 });
 
   await waitFor(() => {
-    invariant(last.closed.code, 'the 257th tunnel is still open');
+    invariant(last.closed.code !== null, 'the 257th tunnel is still open');
   });
 
   expect(open.map((tunnel) => tunnel.sent)).toSatisfyAll(

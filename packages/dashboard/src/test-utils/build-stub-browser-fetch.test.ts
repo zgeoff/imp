@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { buildStubBrowserFetch } from './build-stub-browser-fetch';
 
 test('it marks a request to the page origin as same-origin', async () => {
@@ -11,7 +11,7 @@ test('it marks a request to the page origin as same-origin', async () => {
 
   const input = sendRequest.mock.calls[0]?.[0];
 
-  invariant(input);
+  invariant(input !== undefined);
 
   const request = new Request(input);
 
@@ -28,7 +28,7 @@ test('it resolves a relative URL against the page', async () => {
 
   const input = sendRequest.mock.calls[0]?.[0];
 
-  invariant(input);
+  invariant(input !== undefined);
 
   const request = new Request(input);
 
@@ -45,7 +45,7 @@ test('it leaves a request to another origin unmarked', async () => {
 
   const input = sendRequest.mock.calls[0]?.[0];
 
-  invariant(input);
+  invariant(input !== undefined);
 
   const request = new Request(input);
 

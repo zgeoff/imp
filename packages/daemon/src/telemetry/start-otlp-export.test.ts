@@ -18,7 +18,7 @@ async function setupTest() {
     exportPath: JSON.stringify(join(import.meta.dir, 'start-otlp-export.ts')),
     apiPath: JSON.stringify(Bun.resolveSync('@opentelemetry/api', import.meta.dir)),
     updateEnvPath: JSON.stringify(Bun.resolveSync('@impz/test-utils/update-env', import.meta.dir)),
-    invariantPath: JSON.stringify(Bun.resolveSync('@impz/test-utils/invariant', import.meta.dir)),
+    invariantPath: JSON.stringify(Bun.resolveSync('tiny-invariant', import.meta.dir)),
 
     // the child runs no preload, so it registers the run's matchers itself
     matchersPath: JSON.stringify(Bun.resolveSync('@zgeoff/bun-test-extended', import.meta.dir)),
@@ -46,7 +46,7 @@ test('it sends metrics and spans to the collector at the endpoint', async () => 
 import { metrics, trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
-import { invariant } from ${ctx.invariantPath};
+import invariant from ${ctx.invariantPath};
 import ${ctx.matchersPath};
 
 test('it sends', async () => {
@@ -103,7 +103,7 @@ test('it names the service and its version in what it sends', async () => {
 import { trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
-import { invariant } from ${ctx.invariantPath};
+import invariant from ${ctx.invariantPath};
 import ${ctx.matchersPath};
 
 test('it names', async () => {
@@ -150,7 +150,7 @@ test('it rejects its stop when the collector answers with an error', async () =>
 import { trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
-import { invariant } from ${ctx.invariantPath};
+import invariant from ${ctx.invariantPath};
 import ${ctx.matchersPath};
 
 test('it rejects', async () => {
@@ -197,7 +197,7 @@ test('it rejects its stop when nothing listens at the endpoint', async () => {
 import { trace } from ${ctx.apiPath};
 import { startOtlpExport } from ${ctx.exportPath};
 import { updateEnv } from ${ctx.updateEnvPath};
-import { invariant } from ${ctx.invariantPath};
+import invariant from ${ctx.invariantPath};
 import ${ctx.matchersPath};
 
 test('it rejects', async () => {

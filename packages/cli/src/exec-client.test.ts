@@ -29,8 +29,8 @@ import { buildStubExecReplies } from '@impz/daemon/src/test-utils/build-stub-exe
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import { startStubAgent } from '@impz/daemon/src/test-utils/start-stub-agent';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import * as z from 'zod';
 import { runExec } from './exec-client';
 import type { ExecIo } from './exec-client';
@@ -155,7 +155,7 @@ async function setupTest() {
 
   const port = app.server?.port;
 
-  invariant(port);
+  invariant(port !== undefined);
 
   const url = `http://127.0.0.1:${String(port)}`;
 

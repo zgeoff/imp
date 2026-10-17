@@ -21,6 +21,7 @@
     "@faker-js/faker": "catalog:",
     "@impz/daemon": "workspace:*",
     "@impz/test-utils": "workspace:*",
-    "msw": "catalog:"
+    "msw": "catalog:",
+    "tiny-invariant": "catalog:"
   }
 }

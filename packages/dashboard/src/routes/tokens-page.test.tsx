@@ -1,9 +1,9 @@
 import { expect, mock, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
 import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http } from 'msw';
+import invariant from 'tiny-invariant';
 import { tokenCollection } from '../mocks/db/token-collection';
 import { RPC_URL } from '../mocks/handlers';
 import { server } from '../mocks/node';

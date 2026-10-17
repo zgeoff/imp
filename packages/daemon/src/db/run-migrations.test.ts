@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { sql } from 'kysely';
+import invariant from 'tiny-invariant';
 import { createSecretFiles } from '../broker/secret-files';
 import { createUnmigratedDatabase } from '../test-utils/create-unmigrated-database';
 import { findImpByName } from './imps';
@@ -69,7 +69,7 @@ test('#runMigrations refuses a database a newer impd migrated, naming both versi
 
   const last = Object.keys(MIGRATIONS).toSorted().at(-1);
 
-  invariant(last);
+  invariant(last !== undefined);
 
   expect(runMigrations(db)).rejects.toThrowWithMessage(
     Error,
@@ -88,7 +88,7 @@ test('#runMigrations runs nothing on a database file a newer impd migrated', asy
   const names = Object.keys(MIGRATIONS).toSorted();
   const older = names.at(-2);
 
-  invariant(older);
+  invariant(older !== undefined);
 
   // a newer impd's database, one migration short of this impd's last and
   // holding one this impd never had
@@ -99,7 +99,7 @@ test('#runMigrations runs nothing on a database file a newer impd migrated', asy
 
   const last = names.at(-1);
 
-  invariant(last);
+  invariant(last !== undefined);
 
   // the refusal's own message: Kysely also rejects a migration it does not
   // know, so only the message shows that impd refused before Kysely ran

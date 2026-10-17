@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { openAgentConnection } from '../agent-client/agent-connection';
 import { openExecStream } from '../agent-client/exec-stream';
 import { FRAME_TYPES, decodeJsonPayload } from '../agent-client/frame-codec';
@@ -422,7 +422,7 @@ test('it closes the guest’s stream when impd drops the connection', async () =
   stream.close();
 
   await waitFor(() => {
-    invariant(guest.closed[0]);
+    invariant(guest.closed[0] !== undefined);
   });
 
   expect(guest.closed).toStrictEqual(['sleepy']);

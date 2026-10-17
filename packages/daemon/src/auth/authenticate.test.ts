@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { invariant } from '@impz/test-utils/invariant';
+import invariant from 'tiny-invariant';
 import { createEd25519Key } from '../ssh/host-key';
 import { buildStubTailscale } from '../test-utils/build-stub-tailscale';
 import { createTestDatabase } from '../test-utils/create-test-database';

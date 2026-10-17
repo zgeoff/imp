@@ -19,9 +19,9 @@ import { buildStubBrokerTokenEndpoint } from '@impz/daemon/src/test-utils/build-
 import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
-import { invariant } from '@impz/test-utils/invariant';
 import { server } from '@impz/test-utils/mock-server';
 import { HttpResponse, http } from 'msw';
+import invariant from 'tiny-invariant';
 import { runCli } from '../test-utils/start-cli';
 import { startStubInfoFaultImpd } from '../test-utils/start-stub-info-fault-impd';
 import { startStubOlderImpd } from '../test-utils/start-stub-older-impd';
@@ -143,7 +143,7 @@ async function setupTest() {
     await app.stop(true);
   });
 
-  invariant(app.server?.port);
+  invariant(app.server?.port !== undefined);
 
   const sendRequest = (request: Request) => impd.api.app.handle(request);
 

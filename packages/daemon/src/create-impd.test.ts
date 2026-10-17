@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { IMAGE_BUILD_STREAM_TYPE } from '@impz/api';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { buildStubRepeat } from '../../mcp/src/test-utils/build-stub-repeat';
 import { loadConfig } from './config';
 import { createImpd } from './create-impd';
@@ -195,7 +195,7 @@ test('it adopts a running VM through the new runner when it boots again', async 
 
   const [before] = await listImps(ctx.db);
 
-  invariant(before?.pid);
+  invariant(typeof before?.pid === 'number');
 
   // the first impd still holds its resolver's port in this process
   const restarted = await createImpd(

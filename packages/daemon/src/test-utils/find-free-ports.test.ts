@@ -2,8 +2,8 @@ import { expect, onTestFinished, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { invariant } from '@impz/test-utils/invariant';
 import { waitFor } from '@impz/test-utils/wait-for';
+import invariant from 'tiny-invariant';
 import { findFreePorts } from './find-free-ports';
 
 test('it hands out distinct ports', () => {
@@ -77,7 +77,7 @@ test('it skips a port that a TCP listener holds', () => {
     pick: () => {
       const port = picks.shift();
 
-      invariant(port, 'the picks ran out');
+      invariant(port !== undefined, 'the picks ran out');
 
       return port;
     },
@@ -101,7 +101,7 @@ test('it skips a port that a UDP socket holds', async () => {
     pick: () => {
       const port = picks.shift();
 
-      invariant(port, 'the picks ran out');
+      invariant(port !== undefined, 'the picks ran out');
 
       return port;
     },
@@ -120,7 +120,7 @@ test('it skips a port that an earlier picker in this process claimed', () => {
     pick: () => {
       const port = earlierPicks.shift();
 
-      invariant(port, 'the earlier picks ran out');
+      invariant(port !== undefined, 'the earlier picks ran out');
 
       return port;
     },
@@ -132,7 +132,7 @@ test('it skips a port that an earlier picker in this process claimed', () => {
     pick: () => {
       const port = picks.shift();
 
-      invariant(port, 'the picks ran out');
+      invariant(port !== undefined, 'the picks ran out');
 
       return port;
     },

@@ -3,10 +3,10 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImpContract } from '@impz/api';
-import { invariant } from '@impz/test-utils/invariant';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import invariant from 'tiny-invariant';
 import { buildApiListenOptions } from './api-listen-options';
 import { loadConfig } from './config';
 import { createImpd } from './create-impd';
@@ -185,7 +185,7 @@ test('it accepts the session from its own page', async () => {
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   // what a browser on the dashboard's page sends
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
@@ -241,7 +241,7 @@ test('it accepts the __Host- session from its own page', async () => {
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   // what a browser on the dashboard's page sends
   const browser: ContractRouterClient<ImpContract> = createORPCClient(
@@ -324,7 +324,7 @@ test.each([
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const response = await ctx.sendToImpd(
     new Request('http://impd.test/rpc/imps/list?data=%7B%22json%22%3A%7B%7D%7D', {
@@ -352,7 +352,7 @@ test.each([
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const response = await ctx.sendToImpd(
     new Request('http://impd.test/rpc/imps/list?data=%7B%22json%22%3A%7B%7D%7D', {
@@ -381,7 +381,7 @@ test.each([
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const response = await ctx.sendToImpd(
     new Request('http://impd.test/rpc/imps/list?data=%7B%22json%22%3A%7B%7D%7D', {
@@ -446,7 +446,7 @@ test('it refuses an /exec socket that carries only the session', async () => {
 
   const cookie = login.headers.get('set-cookie')?.split(';')[0];
 
-  invariant(cookie);
+  invariant(cookie !== undefined);
 
   const outcome = await tryExecSocket(ctx.port, '', 'dev', {
     cookie,
