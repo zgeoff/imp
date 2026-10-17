@@ -87,7 +87,6 @@ export function createImpServer(
 
   // never throws for a failed tool call, which is an isError result; a bug
   // is an internal error
-  // oxlint-disable-next-line prefer-readonly-parameter-types -- the SDK's parsed request, which the handler only reads
   const runToolCall = async (request: CallToolRequest, ctx: ServerContext) => {
     const id = ctx.mcpReq.id;
     const tool = tools.get(request.params.name);

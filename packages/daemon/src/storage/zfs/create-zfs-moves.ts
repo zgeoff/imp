@@ -43,7 +43,7 @@ interface ZfsMoveContext {
 // A move's side of the ZFS backend: its source as streams or read-only
 // clones, and the streams it receives (docs/architecture/storage/moves.md#zfs)
 export function createZfsMoves(
-  ctx: ZfsMoveContext, // oxlint-disable-line prefer-readonly-parameter-types -- the backend's held snapshots, which a move adds to and clears
+  ctx: ZfsMoveContext,
 ): Pick<StorageBackend, 'openMoveSource' | 'receiveMoveSnapshots'> {
   // Read-only clones of each snapshot, mounted in staging, for a move to an
   // XFS host: the last is the disk, the others the checkpoints in order

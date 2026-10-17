@@ -43,8 +43,6 @@ interface Run {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/* oxlint-disable prefer-readonly-parameter-types -- each step writes to the live socket of a run */
-
 function writeText(socket: Socket, type: 8 | 9, text: string): void {
   socket.write(encodeFrame(type, encoder.encode(text)));
 }
@@ -218,8 +216,6 @@ function readInput(
     sendExit(socket, run, 128 + signal, signal);
   }
 }
-
-/* oxlint-enable prefer-readonly-parameter-types */
 
 // An imp's guest agent for exec and attach, for startStubAgent. It records
 // each request, what each command got (stdin as text, `eof`, `resize:CxR`,

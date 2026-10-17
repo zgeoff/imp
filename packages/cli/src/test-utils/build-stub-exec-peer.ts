@@ -19,7 +19,6 @@ interface StubExecLink {
   readonly close: (code: number, reason: string) => void;
 }
 
-// oxlint-disable-next-line prefer-readonly-parameter-types -- the protocol's parsed messages are mutable
 export type StubExecHandler = (link: StubExecLink, message: StubExecReceived) => void;
 
 // The `/exec` end of the protocol on literal frames, with no socket and no
