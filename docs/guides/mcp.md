@@ -196,17 +196,20 @@ An MCP client that signs in with OAuth, such as a hosted connector, cannot hold 
 reach the tailnet. impd can serve it a second `/mcp` on a public origin, behind a TLS front the
 operator runs. The route is off until `IMP_MCP_PUBLIC_URL` is set.
 
-| Path                                                | What it serves                                           |
-| --------------------------------------------------- | -------------------------------------------------------- |
-| `/mcp`                                              | the same tools and rules as [HTTP](#http)                |
-| `/.well-known/oauth-protected-resource/mcp`         | protected resource metadata (RFC 9728), also at the root |
-| `/.well-known/oauth-authorization-server`           | authorization server metadata (RFC 8414)                 |
-| `/oauth/authorize`, `/oauth/token`, `/oauth/revoke` | the sign-in, the token endpoint, revocation (RFC 7009)   |
+| Path                                                   | What it serves                                           |
+| ------------------------------------------------------ | -------------------------------------------------------- |
+| `/mcp`                                                 | the same tools and rules as [HTTP](#http)                |
+| `/.well-known/oauth-protected-resource/mcp`            | protected resource metadata (RFC 9728), also at the root |
+| `/.well-known/oauth-authorization-server`              | authorization server metadata (RFC 8414)                 |
+| `/oauth2/authorize`, `/oauth2/token`, `/oauth2/revoke` | authorization, the token endpoint, revocation (RFC 7009) |
+| `/login`, `/consent`                                   | the two sign-in pages                                    |
 
-Every other path gets the same 404, as does a request whose `Host` is not the origin's. The route
+Every other path gets the same 404, as does a request whose `Host` is not the origin's. The
+authorization server is [better-auth](https://www.better-auth.com/) with its OAuth provider and MCP
+plugins, over impd's own database, and impd serves the two pages it sends a browser to. The route
 follows the MCP authorization spec of 2026-07-28: PKCE with S256, a resource indicator (RFC 8707)
-bound to `<origin>/mcp`, and `iss` on every redirect back (RFC 9207). It has no dynamic registration
-and no client ID metadata documents: the operator adds each client.
+bound to `<origin>/mcp`, and `iss` on the redirect that carries a code (RFC 9207). It has no dynamic
+registration and no client ID metadata documents: the operator adds each client.
 
 ### Turn it on
 
@@ -232,8 +235,8 @@ route, client and grant, never per address. impd logs no code, token or query.
 
 ### Sign in
 
-1. The client opens the sign-in page. It names the client, where it returns, the scope it asks for,
-   and a code such as `ABCD-EFGH`.
+1. The client opens authorization, which sends the browser to the login page. The page names the
+   client, where it returns, the scope it asks for, and a code such as `ABCD-EFGH`.
 2. Approve the code with a named token, over your usual access to impd. The CLI shows the client,
    its redirect URI, when the sign-in started and what the grant gets, and asks before it approves.
    `--yes` skips the question; without a terminal on stdin, it is required:
@@ -242,7 +245,7 @@ route, client and grant, never per address. impd logs no code, token or query.
    impz oauth approve ABCD-EFGH --scope exec --imps 'agent-*'
    ```
 
-3. Press Continue. The page shows the final scope, imps and redirect URI; press Allow.
+3. Press Continue. The consent page shows the final scope, imps and redirect URI; press Allow.
 
 Approve only a sign-in you started: anyone can open the page for a client impd knows, and ask you to
 approve its code. The code is 8 symbols of 32 (40 bits), lasts 10 minutes, and only a named token
@@ -269,19 +272,21 @@ approve: neither can be removed on its own, so neither could end its grants.
 | code          | 10 minutes, once                                                                 |
 | sign-in       | 10 minutes; 3 wait for each client, and 16 in all                                |
 
-Tokens are opaque (`impat_…`, `imprt_…`); impd keeps only their SHA-256. A refresh answers with the
-scope the grant holds, for the same resource.
+Tokens are opaque; impd keeps only their SHA-256. Each approved sign-in is one better-auth user,
+which holds the approving token and the imps the approval gave, and the grant is that user with its
+tokens. A refresh answers with the scope the grant holds, for the same resource.
 
 A grant ends with `impz oauth grant rm <id>`, `impz token rm` of the token that approved it,
-`impz oauth client rm`, the client's own revocation, or a replay. Its sessions end, its running
-commands stop as a cancel stops them, its unused exec tickets open nothing, and its next request
-gets 401. A replay is a code exchanged again, or a spent refresh token, presented in full by its own
-client: a wrong secret, an unknown token or another client's request gets `invalid_grant` and
-revokes nothing.
+`impz oauth client rm`, or the client's own revocation of any of its tokens. Its sessions end, its
+running commands stop as a cancel stops them, its unused exec tickets open nothing, and its next
+request gets 401. A code works once: a second exchange gets `invalid_grant`.
 
-A refresh token is strictly single use, with no grace window. Two refreshes of one token at once
-count as a replay: one gets new tokens, and the other ends the grant. A client must send one refresh
-at a time. After a lost response or a reuse failure, it signs in again.
+A refresh token is strictly single use, with no grace window. A spent refresh token that comes again
+ends its grant, so two refreshes of one token at once leave the client with no working token. A
+client must send one refresh at a time. After a lost response or a reuse failure, it signs in again.
+
+The route takes bearer tokens alone. A token request that sends a DPoP proof gets a bearer token,
+because impd checks no proof on `/mcp`, and a token bound to a key is refused there.
 
 A restart ends the sign-ins in progress and their codes, not the grants.
 
@@ -294,9 +299,6 @@ A restart ends the sign-ins in progress and their codes, not the grants.
 - A new sign-in drops the oldest unapproved one of its own client's, never another client's. Past 16
   in all, a new one gets 429 until one ends.
 - 10 sign-ins per client in a burst, then one every 6 s.
-- 30 failed token requests per client, then one every 2 s; past them a failure answers `slow_down`.
-  A valid code exchange or refresh never counts. Requests that name no known client share one such
-  burst.
 - 20 approval codes that match nothing per token, then one every 3 s.
 - 16 sessions per grant.
 
@@ -304,5 +306,5 @@ Past a limit, impd answers 429 with `Retry-After`. A form is at most 16 KiB, and
 ends after 30 s, except on `/mcp`.
 
 impd sees only the front's connection, never the client's address, so it cannot limit one source.
-Client IDs are public: a flood that names a client can hold back that client's sign-ins and token
-requests, though never a valid exchange or refresh. Rate limits by address belong at the front.
+Client IDs are public: a flood that names a client can hold back that client's sign-ins, though
+never a valid exchange or refresh. Rate limits by address belong at the front.

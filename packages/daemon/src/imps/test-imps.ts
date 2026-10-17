@@ -119,7 +119,6 @@ function buildTestDeps(
     now: ctx.now,
     readTailscale: readNoTailscale,
     freezer: NO_FREEZER,
-    oauthKey: Buffer.alloc(32, 7),
   };
 }
 

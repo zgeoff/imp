@@ -1,17 +1,8 @@
 import { MCP_PATH } from '@impz/api';
 import type { HttpTransport } from '@impz/mcp';
-import {
-  AUTHORIZATION_SERVER_PATH,
-  AUTHORIZE_PATH,
-  PROTECTED_RESOURCE_PATH,
-  REVOKE_PATH,
-  TOKEN_PATH,
-  buildAuthorizationServerMetadata,
-  buildProtectedResourceMetadata,
-} from './oauth-metadata';
-import { buildPageHeaders, renderErrorPage, renderPendingPage } from './oauth-pages';
-import type { AuthorizeOutcome, OAuthService, TokenOutcome } from './oauth-service';
+import type { McpAuth } from './create-mcp-auth';
 import type { PublicMcpConfig } from './public-mcp-config';
+import { readBodyText } from './read-body-text';
 
 // The public MCP route's listener (docs/guides/mcp.md#public-route): plain
 // HTTP behind the operator's TLS front. It reads no client address or
@@ -30,9 +21,6 @@ const MAX_CONTROL_BYTES = 16 * 1024;
 // a JSON-RPC message, a file write's content included (4 MiB as text)
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
-// a token request or a page's form
-const MAX_FORM_BYTES = 16 * 1024;
-
 // seconds a request may sit idle; /mcp has none, as a tool call can run for
 // minutes
 const IDLE_TIMEOUT_S = 30;
@@ -40,7 +28,7 @@ const NOT_FOUND = 'not found';
 
 export interface PublicListenerDeps {
   readonly config: PublicMcpConfig;
-  readonly oauth: OAuthService;
+  readonly oauth: McpAuth;
   readonly mcp: HttpTransport;
 }
 
@@ -54,7 +42,6 @@ export function createPublicHandler(
   deps: Readonly<PublicListenerDeps>,
 ): (request: Request, server: Pick<Bun.Server<undefined>, 'timeout'> | null) => Promise<Response> {
   const state = { open: 0, control: 0 };
-  const issuer = deps.oauth.issuer;
   const host = deps.config.host.toLowerCase();
 
   const handleRequest = async (
@@ -69,7 +56,6 @@ export function createPublicHandler(
     }
 
     const path = url.pathname;
-    const method = request.method;
 
     if (path === MCP_PATH) {
       server?.timeout(request, 0);
@@ -77,91 +63,9 @@ export function createPublicHandler(
       return deps.mcp.handle(request);
     }
 
-    if (
-      method === 'GET' &&
-      (path === PROTECTED_RESOURCE_PATH || path === `${PROTECTED_RESOURCE_PATH}/mcp`)
-    ) {
-      return buildJson(buildProtectedResourceMetadata(issuer, deps.oauth.resource));
-    }
+    const answered = await deps.oauth.handle(request);
 
-    if (method === 'GET' && path === AUTHORIZATION_SERVER_PATH) {
-      return buildJson(buildAuthorizationServerMetadata(issuer));
-    }
-
-    if (method === 'GET' && path === AUTHORIZE_PATH) {
-      const query = url.searchParams;
-
-      const outcome = await deps.oauth.authorize({
-        responseType: query.get('response_type'),
-        clientId: query.get('client_id'),
-        redirectUri: query.get('redirect_uri'),
-        codeChallenge: query.get('code_challenge'),
-        codeChallengeMethod: query.get('code_challenge_method'),
-        state: query.get('state'),
-        scope: query.get('scope'),
-        resource: query.get('resource'),
-      });
-
-      return buildAuthorizeResponse(outcome, deps.config.host);
-    }
-
-    if (method === 'POST' && path === AUTHORIZE_PATH) {
-      if (!isSameOriginForm(request, issuer)) {
-        return buildAuthorizeResponse(
-          { kind: 'error-page', error: 'bad_request' },
-          deps.config.host,
-        );
-      }
-
-      const form = await readForm(request);
-
-      const action = form?.get('action');
-
-      if (form === null || (action !== 'continue' && action !== 'allow' && action !== 'deny')) {
-        return buildAuthorizeResponse(
-          { kind: 'error-page', error: 'bad_request' },
-          deps.config.host,
-        );
-      }
-
-      const outcome = deps.oauth.finish(form.get('id') ?? '', form.get('signature') ?? '', action);
-
-      return buildAuthorizeResponse(outcome, deps.config.host);
-    }
-
-    if (method === 'POST' && path === TOKEN_PATH) {
-      const form = await readForm(request);
-
-      if (form === null) {
-        return buildTokenReply({
-          status: 400,
-          body: { error: 'invalid_request', error_description: 'send a form' },
-        });
-      }
-
-      const outcome = await deps.oauth.exchange(form);
-
-      return buildTokenReply(outcome);
-    }
-
-    if (method === 'POST' && path === REVOKE_PATH) {
-      const form = await readForm(request);
-
-      if (form === null) {
-        return buildTokenReply({
-          status: 400,
-          body: { error: 'invalid_request', error_description: 'send a form' },
-        });
-      }
-
-      const outcome = await deps.oauth.revokeToken(form);
-
-      return outcome === null
-        ? new Response(null, { status: 200, headers: { 'cache-control': 'no-store' } })
-        : buildTokenReply(outcome);
-    }
-
-    return buildNotFound();
+    return answered ?? buildNotFound();
   };
 
   // Every slot taken: only a request that starts no work gets through, on
@@ -320,88 +224,6 @@ export function startPublicListener(
   };
 }
 
-function buildAuthorizeResponse(outcome: Readonly<AuthorizeOutcome>, issuerHost: string): Response {
-  if (outcome.kind === 'page') {
-    return new Response(renderPendingPage(outcome.view, issuerHost), {
-      status: 200,
-      headers: buildPageHeaders(new URL(outcome.view.redirectUri).origin),
-    });
-  }
-
-  if (outcome.kind === 'redirect') {
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: outcome.location,
-        'cache-control': 'no-store',
-        'referrer-policy': 'no-referrer',
-      },
-    });
-  }
-
-  if (outcome.kind === 'error-page') {
-    return new Response(renderErrorPage(outcome.error), {
-      status: 400,
-      headers: buildPageHeaders(null),
-    });
-  }
-
-  const headers = buildPageHeaders(null);
-
-  headers.set('retry-after', String(outcome.retryS));
-
-  return new Response(renderErrorPage('bad_request'), { status: 429, headers });
-}
-
-function buildTokenReply(outcome: Readonly<TokenOutcome>): Response {
-  return Response.json(outcome.body, {
-    status: outcome.status,
-    headers: {
-      'cache-control': 'no-store',
-      pragma: 'no-cache',
-      ...(outcome.status === 401 && { 'www-authenticate': 'Basic realm="imp"' }),
-      ...(outcome.status === 429 && { 'retry-after': '2' }),
-    },
-  });
-}
-
-// a urlencoded form of at most MAX_FORM_BYTES; null for anything else
-async function readForm(request: Request): Promise<URLSearchParams | null> {
-  const type = request.headers.get('content-type') ?? '';
-
-  if (!type.startsWith('application/x-www-form-urlencoded')) {
-    return null;
-  }
-
-  const text = await readBodyText(request, MAX_FORM_BYTES);
-
-  return text === null ? null : new URLSearchParams(text);
-}
-
-// the body as text, of at most `max` bytes; null for none or a larger one
-async function readBodyText(request: Request, max: number): Promise<string | null> {
-  if (request.body === null) {
-    return null;
-  }
-
-  const body: ReadableStream<Uint8Array> = request.body;
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  // leaving the loop early cancels the rest of the body
-  for await (const chunk of body) {
-    total += chunk.byteLength;
-
-    if (total > max) {
-      return null;
-    }
-
-    chunks.push(chunk);
-  }
-
-  return new TextDecoder().decode(Buffer.concat(chunks));
-}
-
 // A request to /mcp that starts no work: a DELETE, or a POST of one
 // JSON-RPC notification (a method and no id). Its body is read here, so the
 // request is made again for the transport; null for any other.
@@ -453,23 +275,6 @@ function isNotification(text: string): boolean {
 
 function buildTooMany(): Response {
   return new Response('too many requests', { status: 429, headers: { 'retry-after': '1' } });
-}
-
-// A form a page on another origin posts never counts. A browser names the
-// page's origin, or sends Origin null with Sec-Fetch-Site, which it sets
-// itself and no page can change.
-function isSameOriginForm(request: Request, issuer: string): boolean {
-  const origin = request.headers.get('origin');
-
-  if (origin === issuer) {
-    return true;
-  }
-
-  return origin === 'null' && request.headers.get('sec-fetch-site') === 'same-origin';
-}
-
-function buildJson(body: unknown): Response {
-  return Response.json(body, { headers: { 'cache-control': 'no-store' } });
 }
 
 function buildNotFound(): Response {

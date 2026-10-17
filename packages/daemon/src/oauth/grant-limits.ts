@@ -1,4 +1,4 @@
-import { GrantPatternSchema, hasScope } from '@impz/api';
+import { GrantPatternSchema, ScopeSchema, hasScope } from '@impz/api';
 import type { Scope } from '@impz/api';
 
 // A grant never outgrows the token that approved it
@@ -49,4 +49,12 @@ export function formatScopeList(scope: Scope): string {
   };
 
   return nested[scope];
+}
+
+// the highest of imp's scopes a list holds; read when it holds none
+export function pickGrantScope(scopes: readonly string[]): Scope {
+  return ScopeSchema.options.reduce<Scope>(
+    (highest, scope) => (scopes.includes(scope) && hasScope(scope, highest) ? scope : highest),
+    'read',
+  );
 }

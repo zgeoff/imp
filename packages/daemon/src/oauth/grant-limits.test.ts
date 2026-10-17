@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test';
-import { formatScopeList, isGrantPattern, isPatternsWithin, readLowerScope } from './grant-limits';
+import {
+  formatScopeList,
+  isGrantPattern,
+  isPatternsWithin,
+  pickGrantScope,
+  readLowerScope,
+} from './grant-limits';
 
 test.each([['*'], ['dev'], ['dev-*'], ['a1-b2']])('#isGrantPattern accepts %p', (pattern) => {
   expect(isGrantPattern(pattern)).toBeTrue();
@@ -57,4 +63,13 @@ test.each([
   ['manage', 'read exec manage'],
 ] as const)('#formatScopeList lists %s as %p', (scope, list) => {
   expect(formatScopeList(scope)).toBe(list);
+});
+
+test.each([
+  [['read', 'exec', 'offline_access'], 'exec'],
+  [['manage', 'read'], 'manage'],
+  [['offline_access'], 'read'],
+  [[], 'read'],
+] as const)('#pickGrantScope picks the highest of %p as %s', (scopes, highest) => {
+  expect(pickGrantScope(scopes)).toBe(highest);
 });

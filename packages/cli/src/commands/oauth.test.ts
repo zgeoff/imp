@@ -12,6 +12,7 @@ import { buildSystemDrivePath, buildSystemDrivesDir } from '@impz/daemon/src/sto
 import { createXfsBackend } from '@impz/daemon/src/storage/xfs-backend';
 import { buildStubCpuCgroups } from '@impz/daemon/src/test-utils/build-stub-cpu-cgroups';
 import { buildStubVmm } from '@impz/daemon/src/test-utils/build-stub-vmm';
+import { createPendingSignIn } from '@impz/daemon/src/test-utils/create-pending-sign-in';
 import { findFreePorts } from '@impz/daemon/src/test-utils/find-free-ports';
 import * as z from 'zod';
 import { runCli } from '../test-utils/start-cli';
@@ -135,8 +136,14 @@ async function setupTest() {
   return {
     rootToken,
     clock,
-    oauth: impd.oauth,
     calls,
+
+    // the public route's OAuth paths, with impd's 404 for any other
+    handleRoute: async (request: Request) => {
+      const answered = await impd.oauth.handle(request);
+
+      return answered ?? new Response('not found', { status: 404 });
+    },
 
     // a client of impd's API for the token with this secret
     connect: (token: string) =>
@@ -193,22 +200,15 @@ test('it shows the sign-in and approves nothing when the answer at a terminal is
   // the sign-in starts at a known time
   ctx.clock.nowMs = Date.UTC(2026, 0, 1);
 
-  const started = await ctx.oauth.authorize({
-    responseType: 'code',
-    clientId: added.clientId,
-    redirectUri: 'https://client.example/callback',
-    codeChallenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    codeChallengeMethod: 'S256',
-    state: 'st',
+  const started = await createPendingSignIn({
+    handle: ctx.handleRoute,
+    origin: 'http://127.0.0.1:7171',
+    clientID: added.clientId,
+    redirectURI: 'https://client.example/callback',
     scope: 'exec',
-    resource: 'http://127.0.0.1:7171/mcp',
   });
 
-  if (started.kind !== 'page') {
-    throw new Error(`the sign-in did not start: ${started.kind}`);
-  }
-
-  const code = ApprovalCodeSchema.parse(started.view.approvalCode);
+  const code = ApprovalCodeSchema.parse(started.code);
   const show = mock<(line: string) => void>();
   const confirm = mock(() => Promise.resolve(false));
   const approver = ctx.connect(made.secret);
@@ -249,22 +249,15 @@ test('it approves what it showed when the answer at a terminal is yes', async ()
 
   const made = await root.tokens.create({ name: 'approver', scope: 'manage' });
 
-  const started = await ctx.oauth.authorize({
-    responseType: 'code',
-    clientId: added.clientId,
-    redirectUri: 'https://client.example/callback',
-    codeChallenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    codeChallengeMethod: 'S256',
-    state: 'st',
+  const started = await createPendingSignIn({
+    handle: ctx.handleRoute,
+    origin: 'http://127.0.0.1:7171',
+    clientID: added.clientId,
+    redirectURI: 'https://client.example/callback',
     scope: 'exec',
-    resource: 'http://127.0.0.1:7171/mcp',
   });
 
-  if (started.kind !== 'page') {
-    throw new Error(`the sign-in did not start: ${started.kind}`);
-  }
-
-  const code = ApprovalCodeSchema.parse(started.view.approvalCode);
+  const code = ApprovalCodeSchema.parse(started.code);
   const show = mock<(line: string) => void>();
   const approver = ctx.connect(made.secret);
 
@@ -302,22 +295,15 @@ test.each([
 
   const made = await root.tokens.create({ name: 'approver', scope: 'manage' });
 
-  const started = await ctx.oauth.authorize({
-    responseType: 'code',
-    clientId: added.clientId,
-    redirectUri: 'https://client.example/callback',
-    codeChallenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    codeChallengeMethod: 'S256',
-    state: 'st',
+  const started = await createPendingSignIn({
+    handle: ctx.handleRoute,
+    origin: 'http://127.0.0.1:7171',
+    clientID: added.clientId,
+    redirectURI: 'https://client.example/callback',
     scope: 'exec',
-    resource: 'http://127.0.0.1:7171/mcp',
   });
 
-  if (started.kind !== 'page') {
-    throw new Error(`the sign-in did not start: ${started.kind}`);
-  }
-
-  const code = ApprovalCodeSchema.parse(started.view.approvalCode);
+  const code = ApprovalCodeSchema.parse(started.code);
   const confirm = mock(() => Promise.resolve(false));
   const show = mock<(line: string) => void>();
 
@@ -346,22 +332,15 @@ test('it refuses an approval of more than a read token holds', async () => {
 
   const made = await root.tokens.create({ name: 'reader', scope: 'read' });
 
-  const started = await ctx.oauth.authorize({
-    responseType: 'code',
-    clientId: added.clientId,
-    redirectUri: 'https://client.example/callback',
-    codeChallenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-    codeChallengeMethod: 'S256',
-    state: 'st',
+  const started = await createPendingSignIn({
+    handle: ctx.handleRoute,
+    origin: 'http://127.0.0.1:7171',
+    clientID: added.clientId,
+    redirectURI: 'https://client.example/callback',
     scope: 'exec',
-    resource: 'http://127.0.0.1:7171/mcp',
   });
 
-  if (started.kind !== 'page') {
-    throw new Error(`the sign-in did not start: ${started.kind}`);
-  }
-
-  const code = ApprovalCodeSchema.parse(started.view.approvalCode);
+  const code = ApprovalCodeSchema.parse(started.code);
 
   expect(
     runApprove(
