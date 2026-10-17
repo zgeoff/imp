@@ -79,6 +79,7 @@
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
         "p-retry": "catalog:",
+        "ts-pattern": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {

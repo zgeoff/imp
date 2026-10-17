@@ -7,6 +7,7 @@ import {
   TUNNEL_WINDOW_BYTES,
 } from '@impz/api';
 import type { TunnelClientMessage, TunnelListen, TunnelServerMessage } from '@impz/api';
+import { P, match } from 'ts-pattern';
 import { resolveImpdWebSocketUrl } from '../resolve-impd-web-socket-url';
 import { parseTunnelServerMessage } from './parse-tunnel-server-message';
 
@@ -140,8 +141,8 @@ function openRelay(
   };
 
   const handleControl = (message: TunnelServerMessage): void => {
-    switch (message.type) {
-      case 'opened': {
+    match(message)
+      .with({ type: 'opened' }, () => {
         state.opened = true;
 
         for (const data of pending.splice(0)) {
@@ -151,38 +152,27 @@ function openRelay(
         if (state.peerEof) {
           sendText({ type: 'eof' });
         }
-
-        break;
-      }
-      case 'eof': {
+      })
+      .with({ type: 'eof' }, () => {
         state.guestEof = true;
 
         handlers.onEof();
-        break;
-      }
-      case 'ack': {
-        state.unacked -= message.bytes;
+      })
+      .with({ type: 'ack' }, (ack) => {
+        state.unacked -= ack.bytes;
 
         if (state.unacked <= TUNNEL_WINDOW_BYTES) {
           wakeWaiters();
         }
-
-        break;
-      }
+      })
 
       // an error, or a message only the listening socket gets
-      case 'error':
-      case 'listening':
-      case 'connection': {
+      .with({ type: P.union('error', 'listening', 'connection') }, () => {
         ws.close(TUNNEL_CLOSE_NORMAL, 'relay failed');
 
         stopRelay(true);
-        break;
-      }
-      default: {
-        message satisfies never;
-      }
-    }
+      })
+      .exhaustive();
   };
 
   ws.addEventListener('open', () => {
@@ -325,33 +315,24 @@ export function openReverseForward(options: Readonly<ReverseForwardOptions>): Re
   };
 
   const handleControl = (message: TunnelServerMessage): void => {
-    switch (message.type) {
-      case 'listening': {
-        state.listener = message.listener;
+    match(message)
+      .with({ type: 'listening' }, (listen) => {
+        state.listener = listen.listener;
 
-        listening.resolve({ path: message.path, port: message.port });
-        break;
-      }
-      case 'connection': {
-        openClientRelay(message.id);
-        break;
-      }
-      case 'error': {
-        stopForward({ kind: 'failed', code: message.code ?? null, message: message.message });
-        break;
-      }
+        listening.resolve({ path: listen.path, port: listen.port });
+      })
+      .with({ type: 'connection' }, (connection) => {
+        openClientRelay(connection.id);
+      })
+      .with({ type: 'error' }, (failure) => {
+        stopForward({ kind: 'failed', code: failure.code ?? null, message: failure.message });
+      })
 
       // messages only a relay socket gets
-      case 'opened':
-      case 'eof':
-      case 'ack': {
+      .with({ type: P.union('opened', 'eof', 'ack') }, () => {
         ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
-        break;
-      }
-      default: {
-        message satisfies never;
-      }
-    }
+      })
+      .exhaustive();
   };
 
   ws.binaryType = 'arraybuffer';

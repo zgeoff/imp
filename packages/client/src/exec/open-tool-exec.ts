@@ -8,6 +8,7 @@ import {
   encodeExecFrame,
 } from '@impz/api';
 import type { ExecClientMessage, ExecServerMessage, ExecTool } from '@impz/api';
+import { match } from 'ts-pattern';
 import { resolveImpdWebSocketUrl } from '../resolve-impd-web-socket-url';
 import type { ExecSocket } from './open-exec-session';
 
@@ -97,37 +98,29 @@ export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> 
   };
 
   const handleControl = (message: ExecServerMessage): void => {
-    switch (message.type) {
-      case 'started': {
+    match(message)
+      .with({ type: 'started' }, () => {
         started.resolve();
-        break;
-      }
-      case 'stdin_ack': {
-        state.unacked -= message.bytes;
+      })
+      .with({ type: 'stdin_ack' }, (ack) => {
+        state.unacked -= ack.bytes;
         waiter.wake?.();
-        break;
-      }
-      case 'exit': {
+      })
+      .with({ type: 'exit' }, (exit) => {
         state.done = true;
 
-        exited.resolve({ code: message.code ?? 1 });
+        exited.resolve({ code: exit.code ?? 1 });
         waiter.wake?.();
-        break;
-      }
-      case 'error': {
-        stopWithError(new ToolExecError(`${message.code ?? 'error'}: ${message.message}`));
-        break;
-      }
+      })
+      .with({ type: 'error' }, (failure) => {
+        stopWithError(new ToolExecError(`${failure.code ?? 'error'}: ${failure.message}`));
+      })
 
       // only a session detaches, and a tool exec is none
-      case 'detached': {
+      .with({ type: 'detached' }, () => {
         stopWithError(new ToolExecError('impd detached a tool exec'));
-        break;
-      }
-      default: {
-        message satisfies never;
-      }
-    }
+      })
+      .exhaustive();
   };
 
   ws.addEventListener('open', () => {

@@ -15,6 +15,7 @@ import type {
   SessionOutput,
 } from '@impz/api';
 import type { ReadonlyFields } from '@impz/shared';
+import { match } from 'ts-pattern';
 import type * as z from 'zod';
 import { createRpcClient } from '../create-rpc-client';
 import type { FeatureNeeds } from '../require-features';
@@ -245,8 +246,8 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
     const message = parsed.data;
 
-    switch (message.type) {
-      case 'started': {
+    match(message)
+      .with({ type: 'started' }, (start) => {
         // a repeat would start stdin twice
         if (state.started) {
           return;
@@ -255,53 +256,40 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
         state.started = true;
 
         options.onStarted({
-          pid: message.pid,
-          session: message.session ?? null,
-          created: message.created ?? false,
-          groupKill: message.groupKill ?? false,
-          output: message.output ?? { continuity: 'none' },
+          pid: start.pid,
+          session: start.session ?? null,
+          created: start.created ?? false,
+          groupKill: start.groupKill ?? false,
+          output: start.output ?? { continuity: 'none' },
         });
-
-        break;
-      }
-      case 'exit': {
+      })
+      .with({ type: 'exit' }, (exit) => {
         resolveOutcome({
           kind: 'exit',
-          code: message.code,
-          signal: message.signal,
-          ...(message.offset !== undefined && { offset: message.offset }),
+          code: exit.code,
+          signal: exit.signal,
+          ...(exit.offset !== undefined && { offset: exit.offset }),
         });
-
-        break;
-      }
-      case 'detached': {
+      })
+      .with({ type: 'detached' }, (detached) => {
         resolveOutcome({
           kind: 'detached',
-          reason: message.reason,
-          ...(message.offset !== undefined && { offset: message.offset }),
+          reason: detached.reason,
+          ...(detached.offset !== undefined && { offset: detached.offset }),
         });
-
-        break;
-      }
+      })
 
       // only a tool exec gets acks (openToolExec)
-      case 'stdin_ack': {
-        break;
-      }
-      case 'error': {
+      .with({ type: 'stdin_ack' }, () => {})
+      .with({ type: 'error' }, (failure) => {
         resolveOutcome({
           kind: 'failed',
-          code: message.code ?? null,
-          message: message.message,
-          ...(message.data !== undefined && { data: message.data }),
+          code: failure.code ?? null,
+          message: failure.message,
+          ...(failure.data !== undefined && { data: failure.data }),
         });
-
-        break;
-      }
-      default: {
-        message satisfies never;
-      }
-    }
+      })
+      .exhaustive();
   };
 
   // a start that requires anything, or drops CAP_SYS_ADMIN, waits for impd

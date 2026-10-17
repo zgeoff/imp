@@ -2,6 +2,7 @@ import type { ImpEvent } from '@impz/api';
 import { ORPCError } from '@orpc/client';
 import pRetry, { AbortError } from 'p-retry';
 import type { RetryContext } from 'p-retry';
+import { P, match } from 'ts-pattern';
 import type { CallOptions } from '../types';
 import { UnknownProcedureError } from '../unknown-procedure-error';
 
@@ -133,22 +134,13 @@ async function runCallback(run: () => Promise<void> | void): Promise<void> {
 
 // the imp an event is about
 function readEventImpName(event: Readonly<ImpEvent>): string {
-  switch (event.ev) {
-    case 'ImpAdded':
-    case 'ImpChanged':
-    case 'ImpRemoved': {
-      return event.imp.name;
-    }
-    case 'CheckpointAdded':
-    case 'CheckpointRemoved':
-    case 'GovernorDecision':
-    case 'AgentExec': {
-      return event.name;
-    }
-    default: {
-      return event satisfies never;
-    }
-  }
+  return match(event)
+    .with({ ev: P.union('ImpAdded', 'ImpChanged', 'ImpRemoved') }, (changed) => changed.imp.name)
+    .with(
+      { ev: P.union('CheckpointAdded', 'CheckpointRemoved', 'GovernorDecision', 'AgentExec') },
+      (named) => named.name,
+    )
+    .exhaustive();
 }
 
 // impd refusing the call refuses it again; a 5xx, a dropped connection or a

@@ -6,6 +6,7 @@ import {
   TUNNEL_WINDOW_BYTES,
 } from '@impz/api';
 import type { TunnelClientMessage, TunnelServerMessage } from '@impz/api';
+import { P, match } from 'ts-pattern';
 import { resolveImpdWebSocketUrl } from '../resolve-impd-web-socket-url';
 import { parseTunnelServerMessage } from './parse-tunnel-server-message';
 
@@ -146,42 +147,33 @@ export function openForwardTunnel(options: Readonly<ForwardTunnelOptions>): Forw
   };
 
   const handleControl = (message: TunnelServerMessage): void => {
-    switch (message.type) {
-      case 'opened': {
+    match(message)
+      .with({ type: 'opened' }, () => {
         state.opened = true;
 
         options.onOpened();
 
         sendHeld();
-        break;
-      }
-      case 'eof': {
+      })
+      .with({ type: 'eof' }, () => {
         options.onEof();
-        break;
-      }
-      case 'ack': {
-        state.unacked -= message.bytes;
+      })
+      .with({ type: 'ack' }, (ack) => {
+        state.unacked -= ack.bytes;
 
         sendHeld();
-        break;
-      }
-      case 'error': {
-        stopTunnel({ kind: 'failed', code: message.code ?? null, message: message.message });
+      })
+      .with({ type: 'error' }, (failure) => {
+        stopTunnel({ kind: 'failed', code: failure.code ?? null, message: failure.message });
 
         ws.close(TUNNEL_CLOSE_NORMAL, 'tunnel failed');
-        break;
-      }
+      })
 
       // messages only a reverse forward gets
-      case 'listening':
-      case 'connection': {
+      .with({ type: P.union('listening', 'connection') }, () => {
         ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
-        break;
-      }
-      default: {
-        message satisfies never;
-      }
-    }
+      })
+      .exhaustive();
   };
 
   ws.addEventListener('open', () => {
